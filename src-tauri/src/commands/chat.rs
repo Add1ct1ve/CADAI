@@ -152,8 +152,10 @@ pub async fn send_message(
     // Read config (clone to release the lock immediately).
     let config = state.config.lock().unwrap().clone();
 
-    // Build the system prompt from default rules.
-    let system_prompt = prompts::build_default_system_prompt();
+    // Build the system prompt from the configured preset.
+    let system_prompt = prompts::build_system_prompt_for_preset(
+        config.agent_rules_preset.as_deref(),
+    );
 
     // Create the AI provider.
     let provider = create_provider(&config)?;
@@ -185,8 +187,10 @@ pub async fn auto_retry(
     // Read config.
     let config = state.config.lock().unwrap().clone();
 
-    // Build the system prompt.
-    let system_prompt = prompts::build_default_system_prompt();
+    // Build the system prompt from the configured preset.
+    let system_prompt = prompts::build_system_prompt_for_preset(
+        config.agent_rules_preset.as_deref(),
+    );
 
     // Create the AI provider.
     let provider = create_provider(&config)?;

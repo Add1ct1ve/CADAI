@@ -50,6 +50,35 @@ spatial_rules:
     - "Use .faces('>Z') to select top face for next operation"
     - "Use .faces('<Z') to select bottom face"
 
+  natural_language_to_axis:
+    - "upper / lower / top / bottom / above / below → Z axis (build direction)"
+    - "left / right → Y axis"
+    - "front / back / forward / backward → X axis"
+    - "taller / shorter → Z dimension"
+    - "wider / narrower → Y dimension"
+    - "longer / shorter (depth) → X dimension"
+
+  splitting_and_halving:
+    - "CRITICAL: 'cut in half' means bisect the object along the CENTER of the relevant axis"
+    - "'top half' / 'upper half' / 'bottom half' / 'lower half' → split on XY plane at Z midpoint"
+    - "'left half' / 'right half' → split on XZ plane at Y midpoint"
+    - "'front half' / 'back half' → split on YZ plane at X midpoint"
+    - "PREFERRED METHOD — use boolean intersection with a box:"
+    - "  Lower half: sphere.intersect(cq.Workplane('XY').box(R*3, R*3, R).translate((0,0,-R/2)))"
+    - "  Upper half: sphere.intersect(cq.Workplane('XY').box(R*3, R*3, R).translate((0,0,R/2)))"
+    - "ALTERNATIVE — use .split() (less reliable): .workplane(offset=0).split(keepBottom=True)"
+    - "COMMON MISTAKE: Do NOT split along X or Y when the user says 'top/bottom' — that produces a vertical D-shape, not a horizontal hemisphere"
+    - "For a sphere centered at origin, 'lower half' = everything with Z < 0, 'upper half' = everything with Z > 0"
+    - "For 3D printing: a bowl/hemisphere (lower half) prints well flat-side-down on the bed"
+
+  face_selectors:
+    - "'>Z' = topmost face (highest Z value, furthest from bed)"
+    - "'<Z' = bottommost face (lowest Z value, bed contact)"
+    - "'>Y' = rightmost face"
+    - "'<Y' = leftmost face"
+    - "'>X' = front face (furthest forward)"
+    - "'<X' = back face (furthest backward)"
+
 # =============================================================================
 # CADQUERY CODE REQUIREMENTS
 # =============================================================================
