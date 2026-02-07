@@ -113,6 +113,7 @@ export class ViewportEngine {
 
     const loader = new STLLoader();
     const geometry = loader.parse(data);
+    geometry.rotateX(-Math.PI / 2); // CadQuery Z-up → Three.js Y-up
 
     // Compute vertex normals for smooth shading
     geometry.computeVertexNormals();

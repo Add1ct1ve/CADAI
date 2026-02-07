@@ -56,6 +56,10 @@ pub struct CodeStyle {
     pub example: Option<String>,
 }
 
+const DEFAULT_YAML: &str = include_str!("../../../agent-rules/default.yaml");
+const PRINTING_YAML: &str = include_str!("../../../agent-rules/printing-focused.yaml");
+const CNC_YAML: &str = include_str!("../../../agent-rules/cnc-focused.yaml");
+
 impl AgentRules {
     /// Load agent rules from a YAML file.
     #[allow(dead_code)]
@@ -66,7 +70,20 @@ impl AgentRules {
         Ok(rules)
     }
 
+    /// Load agent rules from an embedded preset by name.
+    /// Valid names: "3d-printing", "cnc". Anything else (including None) loads the default preset.
+    pub fn from_preset(name: Option<&str>) -> Result<Self, AppError> {
+        let yaml_str = match name {
+            Some("3d-printing") => PRINTING_YAML,
+            Some("cnc") => CNC_YAML,
+            _ => DEFAULT_YAML,
+        };
+        serde_yaml::from_str(yaml_str)
+            .map_err(|e| AppError::ConfigError(format!("Failed to parse agent rules: {}", e)))
+    }
+
     /// Create a default (empty) set of rules.
+    #[allow(dead_code)]
     pub fn default_empty() -> Self {
         Self {
             version: Some(1),

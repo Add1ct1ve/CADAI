@@ -135,8 +135,15 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
     prompt
 }
 
-/// Build a system prompt with default rules (no YAML file loaded).
+/// Build a system prompt for a specific preset (e.g. "3d-printing", "cnc", or None for default).
+pub fn build_system_prompt_for_preset(preset_name: Option<&str>) -> String {
+    let rules = AgentRules::from_preset(preset_name)
+        .unwrap_or_else(|_| AgentRules::from_preset(None).unwrap());
+    build_system_prompt(&rules)
+}
+
+/// Build a system prompt with default rules.
+#[allow(dead_code)]
 pub fn build_default_system_prompt() -> String {
-    let default_rules = AgentRules::default_empty();
-    build_system_prompt(&default_rules)
+    build_system_prompt_for_preset(None)
 }
