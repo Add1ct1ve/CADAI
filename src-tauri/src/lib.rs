@@ -36,6 +36,7 @@ pub fn run() {
             commands::cad::execute_code,
             commands::cad::check_python,
             commands::cad::setup_python,
+            commands::settings::get_provider_registry,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::project::save_project,

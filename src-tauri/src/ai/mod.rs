@@ -1,6 +1,8 @@
 pub mod claude;
+pub mod gemini;
 pub mod message;
 pub mod ollama;
 pub mod openai;
 pub mod provider;
+pub mod registry;
 pub mod streaming;

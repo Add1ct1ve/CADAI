@@ -17,6 +17,23 @@ export interface AppConfig {
   model: string;
   python_path: string | null;
   theme: string;
+  ollama_base_url: string | null;
+  openai_base_url: string | null;
+  agent_rules_preset: string | null;
+}
+
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+}
+
+export interface ProviderInfo {
+  id: string;
+  display_name: string;
+  requires_api_key: boolean;
+  base_url: string | null;
+  models: ModelInfo[];
+  allows_custom_model: boolean;
 }
 
 export interface ViewportState {

@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -128,6 +128,18 @@ export async function setupPython(): Promise<string> {
   } catch (err) {
     console.error('setup_python failed:', err);
     throw new Error(`Setup Python failed: ${err}`);
+  }
+}
+
+/**
+ * Get the provider/model registry
+ */
+export async function getProviderRegistry(): Promise<ProviderInfo[]> {
+  try {
+    return await invoke<ProviderInfo[]>('get_provider_registry');
+  } catch (err) {
+    console.error('get_provider_registry failed:', err);
+    throw new Error(`Get provider registry failed: ${err}`);
   }
 }
 
