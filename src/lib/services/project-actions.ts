@@ -4,6 +4,7 @@
  */
 import { getProjectStore } from '$lib/stores/project.svelte';
 import { getChatStore } from '$lib/stores/chat.svelte';
+import { getViewportStore } from '$lib/stores/viewport.svelte';
 import {
   saveProject,
   loadProject,
@@ -36,6 +37,8 @@ export async function projectNew(): Promise<string> {
   }
   project.reset();
   chatStore.clear();
+  const viewportStore = getViewportStore();
+  viewportStore.setPendingClear(true);
   return 'New project created';
 }
 

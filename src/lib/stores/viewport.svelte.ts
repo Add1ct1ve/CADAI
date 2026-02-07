@@ -4,6 +4,7 @@ let isLoading = $state(false);
 let hasModel = $state(false);
 let error = $state<string | null>(null);
 let pendingStl = $state<string | null>(null);
+let pendingClear = $state(false);
 
 export function getViewportStore() {
   return {
@@ -30,6 +31,12 @@ export function getViewportStore() {
     },
     setPendingStl(base64: string | null) {
       pendingStl = base64;
+    },
+    get pendingClear() {
+      return pendingClear;
+    },
+    setPendingClear(val: boolean) {
+      pendingClear = val;
     },
     getState(): ViewportState {
       return { isLoading, hasModel, error };

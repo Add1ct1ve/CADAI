@@ -39,6 +39,15 @@
       viewportStore.setHasModel(true);
     }
   });
+
+  // Watch for clear signal (e.g. "New" project)
+  $effect(() => {
+    if (viewportStore.pendingClear && engine) {
+      engine.clearModel();
+      viewportStore.setPendingClear(false);
+      viewportStore.setHasModel(false);
+    }
+  });
 </script>
 
 <div class="viewport-container" bind:this={containerRef}>
