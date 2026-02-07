@@ -1,0 +1,246 @@
+# CAD AI Studio - 3D Printing Focused Agent Rules
+# Optimized for FDM/SLA 3D printing with strict manufacturing constraints
+
+version: 1
+
+# =============================================================================
+# COORDINATE SYSTEM
+# =============================================================================
+coordinate_system:
+  description: "Right-hand coordinate system"
+  x:
+    direction: "length / front-back"
+    positive: "forward"
+  y:
+    direction: "width / left-right"
+    positive: "right"
+  z:
+    direction: "height / up-down (build direction)"
+    positive: "up"
+  origin: "center of bottom face (print bed contact surface)"
+
+# =============================================================================
+# SPATIAL REASONING RULES
+# =============================================================================
+spatial_rules:
+  before_any_operation:
+    - "Mentally visualize the current state of the model"
+    - "Identify which faces/edges the operation targets"
+    - "Verify operation will intersect existing geometry"
+    - "Consider print orientation - Z is the build direction"
+
+  boolean_cut:
+    - "The cutting tool MUST overlap the target body"
+    - "Position cutting tool so it extends BEYOND the target surface"
+    - "Use .cut() or .cutBlind() with sufficient depth"
+
+  boolean_fuse:
+    - "Bodies MUST touch or overlap to fuse"
+    - "Verify no air gap between bodies"
+
+  extrude:
+    - "Positive height = extrude in +Z direction (away from bed)"
+    - "Negative height = extrude in -Z direction (into bed)"
+    - "Always specify direction explicitly if not along Z"
+
+  sketch_placement:
+    - "XY plane = print bed surface (Z=0)"
+    - "XZ plane = front wall (Y=0)"
+    - "YZ plane = side wall (X=0)"
+    - "Use .faces('>Z') to select top face for next operation"
+    - "Use .faces('<Z') to select bottom face"
+
+# =============================================================================
+# CADQUERY CODE REQUIREMENTS
+# =============================================================================
+code_requirements:
+  mandatory:
+    - "Always import cadquery as cq"
+    - "Final result MUST be assigned to variable named 'result'"
+    - "Use CadQuery's fluent API (method chaining)"
+    - "All dimensions in millimeters"
+
+  forbidden:
+    - "Do NOT use show_object() or display()"
+    - "Do NOT use cq.exporters directly - the runner handles export"
+    - "Do NOT use matplotlib or any GUI libraries"
+    - "Do NOT read/write files"
+
+# =============================================================================
+# 3D PRINTING MANUFACTURING CONSTRAINTS
+# =============================================================================
+manufacturing:
+  process: "3D Printing (FDM/SLA)"
+
+  wall_thickness:
+    minimum: 1.2         # mm - 3 perimeters at 0.4mm nozzle
+    recommended: 1.6     # mm - 4 perimeters for strength
+    rule: "All walls must be >= 1.2mm thick"
+    on_violation: "Warn user and suggest increasing to at least 1.2mm"
+
+  overhangs:
+    max_angle: 45         # degrees from vertical without support
+    rule: "Angles > 45 degrees from vertical require support material"
+    mitigation:
+      - "Add chamfers instead of sharp overhangs"
+      - "Use 45-degree angles where possible"
+      - "Split model if large overhangs are unavoidable"
+    on_violation: "Suggest redesign to reduce overhang angle or add support-friendly geometry"
+
+  bridging:
+    max_unsupported_span: 10  # mm - typical FDM bridging limit
+    rule: "Unsupported horizontal spans should not exceed 10mm"
+    on_violation: "Add intermediate supports or break span into shorter segments"
+
+  holes:
+    min_diameter: 2.0     # mm - smaller holes may close up
+    vertical_preferred: true
+    rule: "Holes < 2mm diameter may not print cleanly"
+    compensation: "Add 0.2mm to hole diameter to compensate for shrinkage"
+
+  layer_adhesion:
+    avoid_thin_vertical_features: true
+    min_cross_section: 2.0  # mm^2 - minimum cross-section in XY plane
+    rule: "Thin vertical features may break due to poor layer adhesion"
+
+  bed_adhesion:
+    flat_bottom_required: true
+    min_contact_area: 25.0  # mm^2
+    rule: "Ensure adequate flat contact area with print bed"
+    on_violation: "Add a brim-compatible base or redesign bottom surface"
+
+  tolerances:
+    xy_tolerance: 0.2     # mm - typical FDM XY accuracy
+    z_tolerance: 0.1      # mm - layer height dependent
+    press_fit_interference: 0.1  # mm
+    clearance_fit_gap: 0.3      # mm
+    rule: "Design with >=0.3mm clearance for moving parts"
+
+  supports:
+    auto_detect: true
+    warn_threshold: 45    # degrees
+    suggest_redesign_first: true
+    rule: "Always prefer redesigning to eliminate supports over adding them"
+
+# =============================================================================
+# VALIDATION CHECKS
+# =============================================================================
+validation:
+  pre_generation:
+    - check: "dimensions_realistic"
+      rule: "All dimensions between 0.1mm and 500mm (typical print volume)"
+      on_fail: "Warn about print bed size limitations"
+
+    - check: "wall_thickness"
+      rule: "All walls >= 1.2mm thick"
+      on_fail: "Flag thin walls and suggest minimum 1.2mm"
+
+    - check: "overhang_angles"
+      rule: "No unsupported overhangs > 45 degrees"
+      on_fail: "Suggest chamfers or orientation change"
+
+    - check: "cut_intersects"
+      rule: "All cut operations must intersect target body"
+      on_fail: "Recalculate cut position"
+
+    - check: "flat_bottom"
+      rule: "Model should have a flat surface for bed contact"
+      on_fail: "Suggest adding a flat base"
+
+  post_generation:
+    - check: "mesh_watertight"
+      rule: "Generated mesh must be manifold (watertight)"
+      on_fail: "Report error, suggest fixes"
+
+    - check: "no_self_intersection"
+      rule: "No self-intersecting geometry"
+      on_fail: "Simplify operations, rebuild step by step"
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+on_error:
+  spatial_confusion:
+    - "STOP - do not guess"
+    - "Draw ASCII diagram showing X, Y, Z axes"
+    - "List current body bounds: min/max for each axis"
+    - "Calculate exact coordinates for intended operation"
+    - "Verify calculation before generating code"
+
+  cadquery_error:
+    - "Read the Python traceback carefully"
+    - "Identify which CadQuery operation failed"
+    - "Check face/edge selectors are valid"
+    - "Verify the workplane is correct"
+    - "Fix and regenerate the complete code"
+
+  general:
+    - "Explain what went wrong in plain language"
+    - "Show the problematic code section"
+    - "Propose specific fix with reasoning"
+    - "Ask user to confirm before applying"
+
+# =============================================================================
+# CODE GENERATION STYLE
+# =============================================================================
+code_style:
+  naming:
+    - "Use descriptive variable names: 'bolt_hole_dia' not 'd1'"
+    - "Use UPPER_CASE for dimension constants"
+    - "Use lowercase for intermediate results"
+
+  comments:
+    - "Comment the INTENT, not the operation"
+    - "Include print orientation notes"
+    - "Note any areas that may need supports"
+
+  organization:
+    - "Define dimensions as named constants at top"
+    - "Group related operations"
+    - "Use intermediate variables for complex geometry"
+    - "Add wall thickness as a named constant"
+
+  example: |
+    import cadquery as cq
+
+    # Phone stand - designed for FDM 3D printing
+    # Print orientation: upright (base on print bed)
+    # No supports needed with 45-degree back angle
+
+    WALL = 2.0            # mm - wall thickness (5 perimeters)
+    BASE_W = 70.0         # mm - base width
+    BASE_D = 50.0         # mm - base depth
+    BASE_H = 5.0          # mm - base height
+    BACK_ANGLE = 45       # degrees - no supports needed
+
+    result = (
+        cq.Workplane("XY")
+        .box(BASE_W, BASE_D, BASE_H)
+        # Flat bottom for good bed adhesion
+        .faces(">Z")
+        .workplane()
+        .rect(BASE_W - 2 * WALL, BASE_D - 2 * WALL)
+        .cutBlind(-BASE_H + WALL)
+    )
+
+# =============================================================================
+# RESPONSE FORMAT
+# =============================================================================
+response_format:
+  on_success:
+    - "Brief description of what was created"
+    - "The generated CadQuery code in a ```python block"
+    - "Print orientation recommendation"
+    - "Any areas that may need supports"
+    - "Estimated print time range (if applicable)"
+
+  on_clarification_needed:
+    - "Explain what information is missing"
+    - "Provide 2-3 specific options to choose from"
+    - "Default suggestion optimized for 3D printing"
+
+  never:
+    - "Never generate code for ambiguous requests without asking"
+    - "Never assume dimensions - always ask if not specified"
+    - "Never skip printability validation"
+    - "Never create geometry with walls thinner than 1.2mm without warning"

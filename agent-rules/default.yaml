@@ -1,0 +1,193 @@
+# CAD AI Studio - Default Agent Rules
+# This file configures how the AI generates CadQuery code
+# Users can customize this to improve accuracy for their use cases
+
+version: 1
+
+# =============================================================================
+# COORDINATE SYSTEM
+# =============================================================================
+coordinate_system:
+  description: "Right-hand coordinate system"
+  x:
+    direction: "length / front-back"
+    positive: "forward"
+  y:
+    direction: "width / left-right"
+    positive: "right"
+  z:
+    direction: "height / up-down"
+    positive: "up"
+  origin: "center of bottom face (unless specified)"
+
+# =============================================================================
+# SPATIAL REASONING RULES
+# =============================================================================
+spatial_rules:
+  before_any_operation:
+    - "Mentally visualize the current state of the model"
+    - "Identify which faces/edges the operation targets"
+    - "Verify operation will intersect existing geometry"
+
+  boolean_cut:
+    - "The cutting tool MUST overlap the target body"
+    - "Position cutting tool so it extends BEYOND the target surface"
+    - "Use .cut() or .cutBlind() with sufficient depth"
+
+  boolean_fuse:
+    - "Bodies MUST touch or overlap to fuse"
+    - "Verify no air gap between bodies"
+
+  extrude:
+    - "Positive height = extrude in +Z direction"
+    - "Negative height = extrude in -Z direction"
+    - "Always specify direction explicitly if not along Z"
+
+  sketch_placement:
+    - "XY plane = floor (Z=0)"
+    - "XZ plane = front wall (Y=0)"
+    - "YZ plane = side wall (X=0)"
+    - "Use .faces('>Z') to select top face for next operation"
+    - "Use .faces('<Z') to select bottom face"
+
+# =============================================================================
+# CADQUERY CODE REQUIREMENTS
+# =============================================================================
+code_requirements:
+  mandatory:
+    - "Always import cadquery as cq"
+    - "Final result MUST be assigned to variable named 'result'"
+    - "Use CadQuery's fluent API (method chaining)"
+    - "All dimensions in millimeters"
+
+  forbidden:
+    - "Do NOT use show_object() or display()"
+    - "Do NOT use cq.exporters directly — the runner handles export"
+    - "Do NOT use matplotlib or any GUI libraries"
+    - "Do NOT read/write files"
+
+# =============================================================================
+# VALIDATION CHECKS
+# =============================================================================
+validation:
+  pre_generation:
+    - check: "dimensions_realistic"
+      rule: "All dimensions between 0.1mm and 10000mm"
+      on_fail: "Ask user to confirm unusual dimensions"
+
+    - check: "wall_thickness"
+      rule: "Minimum wall thickness >= 0.5mm for 3D printing"
+      on_fail: "Warn user about thin walls"
+
+    - check: "cut_intersects"
+      rule: "All cut operations must intersect target body"
+      on_fail: "Recalculate cut position"
+
+  post_generation:
+    - check: "mesh_watertight"
+      rule: "Generated mesh must be manifold"
+      on_fail: "Report error, suggest fixes"
+
+    - check: "no_self_intersection"
+      rule: "No self-intersecting geometry"
+      on_fail: "Simplify operations, rebuild step by step"
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+on_error:
+  spatial_confusion:
+    - "STOP - do not guess"
+    - "Draw ASCII diagram showing X, Y, Z axes"
+    - "List current body bounds: min/max for each axis"
+    - "Calculate exact coordinates for intended operation"
+    - "Verify calculation before generating code"
+
+  cadquery_error:
+    - "Read the Python traceback carefully"
+    - "Identify which CadQuery operation failed"
+    - "Check face/edge selectors are valid"
+    - "Verify the workplane is correct"
+    - "Fix and regenerate the complete code"
+
+  general:
+    - "Explain what went wrong in plain language"
+    - "Show the problematic code section"
+    - "Propose specific fix with reasoning"
+    - "Ask user to confirm before applying"
+
+# =============================================================================
+# CODE GENERATION STYLE
+# =============================================================================
+code_style:
+  naming:
+    - "Use descriptive variable names: 'bolt_hole_dia' not 'd1'"
+    - "Use UPPER_CASE for dimension constants"
+    - "Use lowercase for intermediate results"
+
+  comments:
+    - "Comment the INTENT, not the operation"
+    - "Example: '# Hole for M5 bolt' not '# Make circle'"
+
+  organization:
+    - "Define dimensions as named constants at top"
+    - "Group related operations"
+    - "Use intermediate variables for complex geometry"
+
+  example: |
+    import cadquery as cq
+
+    # Mounting bracket for sensor
+    # Designed for 3D printing in PLA/PETG
+
+    THICKNESS = 3.0      # mm - wall thickness
+    BOLT_HOLE_DIA = 5.5  # mm - clearance for M5
+    WIDTH = 40.0         # mm
+    DEPTH = 30.0         # mm
+
+    result = (
+        cq.Workplane("XY")
+        .box(WIDTH, DEPTH, THICKNESS)
+        # Mounting holes for M5 bolts
+        .faces(">Z")
+        .workplane()
+        .pushPoints([(15, 10), (15, -10)])
+        .hole(BOLT_HOLE_DIA)
+    )
+
+# =============================================================================
+# MANUFACTURING AWARENESS
+# =============================================================================
+manufacturing:
+  3d_printing:
+    min_wall: 0.8           # mm
+    min_hole_diameter: 2.0  # mm
+    max_overhang: 45        # degrees without support
+    layer_height_typical: 0.2  # mm
+
+  cnc_milling:
+    min_internal_radius: 1.5  # mm (tool radius)
+    min_pocket_depth_ratio: 3 # depth / width
+
+  laser_cutting:
+    min_slot_width: 1.0     # mm
+    kerf_typical: 0.2       # mm
+
+# =============================================================================
+# RESPONSE FORMAT
+# =============================================================================
+response_format:
+  on_success:
+    - "Brief description of what was created"
+    - "The generated CadQuery code in a ```python block"
+    - "Any warnings or suggestions"
+
+  on_clarification_needed:
+    - "Explain what information is missing"
+    - "Provide 2-3 specific options to choose from"
+    - "Default suggestion if user doesn't specify"
+
+  never:
+    - "Never generate code for ambiguous requests without asking"
+    - "Never assume dimensions - always ask if not specified"
+    - "Never skip validation steps"

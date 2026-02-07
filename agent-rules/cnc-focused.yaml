@@ -1,0 +1,279 @@
+# CAD AI Studio - CNC Machining Focused Agent Rules
+# Optimized for 3-axis CNC milling with strict manufacturability constraints
+
+version: 1
+
+# =============================================================================
+# COORDINATE SYSTEM
+# =============================================================================
+coordinate_system:
+  description: "Right-hand coordinate system (machining convention)"
+  x:
+    direction: "length / left-right on table"
+    positive: "right"
+  y:
+    direction: "depth / front-back on table"
+    positive: "toward operator"
+  z:
+    direction: "height / spindle axis"
+    positive: "up (away from table)"
+  origin: "center of top face (machining datum surface)"
+
+# =============================================================================
+# SPATIAL REASONING RULES
+# =============================================================================
+spatial_rules:
+  before_any_operation:
+    - "Mentally visualize the current state of the model"
+    - "Identify which faces/edges the operation targets"
+    - "Verify operation will intersect existing geometry"
+    - "Consider tool access - can the end mill reach this feature?"
+
+  boolean_cut:
+    - "The cutting tool MUST overlap the target body"
+    - "Position cutting tool so it extends BEYOND the target surface"
+    - "Use .cut() or .cutBlind() with sufficient depth"
+    - "Verify the cut is accessible from the spindle direction"
+
+  boolean_fuse:
+    - "Bodies MUST touch or overlap to fuse"
+    - "Verify no air gap between bodies"
+
+  extrude:
+    - "Positive height = extrude in +Z direction"
+    - "Negative height = extrude in -Z direction"
+    - "Always specify direction explicitly if not along Z"
+
+  sketch_placement:
+    - "XY plane = top face (tool approaches from +Z)"
+    - "XZ plane = front face (Y=0)"
+    - "YZ plane = side face (X=0)"
+    - "Use .faces('>Z') to select top face for next operation"
+    - "Use .faces('<Z') to select bottom face"
+
+# =============================================================================
+# CADQUERY CODE REQUIREMENTS
+# =============================================================================
+code_requirements:
+  mandatory:
+    - "Always import cadquery as cq"
+    - "Final result MUST be assigned to variable named 'result'"
+    - "Use CadQuery's fluent API (method chaining)"
+    - "All dimensions in millimeters"
+
+  forbidden:
+    - "Do NOT use show_object() or display()"
+    - "Do NOT use cq.exporters directly - the runner handles export"
+    - "Do NOT use matplotlib or any GUI libraries"
+    - "Do NOT read/write files"
+
+# =============================================================================
+# CNC MANUFACTURING CONSTRAINTS
+# =============================================================================
+manufacturing:
+  process: "CNC Milling (3-axis)"
+
+  internal_radii:
+    minimum: 1.5           # mm - typical smallest end mill radius
+    recommended: 3.0       # mm - standard 6mm end mill
+    rule: "All internal corners must have a radius >= 1.5mm (tool radius)"
+    on_violation: "Add fillet to internal corners matching tool radius"
+    note: "Internal corner radius = end mill radius. Specify which tool size."
+
+  tool_access:
+    rule: "All features must be accessible from the Z+ direction (3-axis)"
+    max_reach_depth: 50    # mm - typical tool length
+    undercuts_allowed: false
+    rule_detail: "No undercuts, enclosed cavities, or features requiring tool approach from sides"
+    on_violation: "Redesign feature to be accessible from top, or suggest multi-setup machining"
+
+  pockets:
+    min_corner_radius: 1.5      # mm - end mill radius
+    max_depth_to_width_ratio: 3  # depth / pocket width
+    min_width: 3.0              # mm - minimum pocket width (tool diameter)
+    rule: "Pocket depth should not exceed 3x the pocket width"
+    on_violation: "Suggest shallower pocket or wider opening"
+    floor_flatness: "Pocket floors should be flat (no complex bottom surfaces)"
+
+  holes:
+    min_diameter: 1.0       # mm - smallest practical drill
+    standard_sizes:         # prefer standard drill sizes
+      - 2.0
+      - 2.5
+      - 3.0
+      - 3.3
+      - 4.0
+      - 4.2
+      - 5.0
+      - 6.0
+      - 6.8
+      - 8.0
+      - 10.0
+    depth_to_diameter_ratio: 5  # max depth / diameter for drilling
+    rule: "Prefer standard drill sizes. Depth should not exceed 5x diameter."
+
+  walls:
+    min_thickness: 1.0      # mm - thin walls deflect under cutting forces
+    recommended: 2.0        # mm
+    min_height_to_thickness_ratio: 8  # tall thin walls vibrate
+    rule: "Walls must be >= 1.0mm thick. Height/thickness ratio <= 8."
+    on_violation: "Increase wall thickness or reduce height"
+
+  draft_angles:
+    vertical_walls: 0       # degrees - CNC can cut vertical walls
+    note: "Draft angles not required for CNC (unlike injection molding)"
+
+  surface_finish:
+    achievable_ra: 1.6      # micrometers Ra typical
+    step_over_scallop: true
+    rule: "Surface finish depends on step-over and tool radius"
+
+  tolerances:
+    general: 0.05           # mm - typical CNC tolerance
+    tight: 0.01             # mm - achievable with care
+    hole_position: 0.05     # mm
+    rule: "Design with +/-0.05mm general tolerance. Tighter tolerances cost more."
+
+  fixturing:
+    flat_bottom_preferred: true
+    min_clamping_surface: 100  # mm^2
+    rule: "Ensure adequate flat surface for workholding"
+    on_violation: "Add clamping tabs or redesign base for fixturing"
+
+# =============================================================================
+# VALIDATION CHECKS
+# =============================================================================
+validation:
+  pre_generation:
+    - check: "dimensions_realistic"
+      rule: "All dimensions between 0.1mm and 2000mm (typical CNC range)"
+      on_fail: "Warn about machine travel limits"
+
+    - check: "internal_radii"
+      rule: "All internal corners have radius >= 1.5mm"
+      on_fail: "Add fillets to internal corners"
+
+    - check: "tool_access"
+      rule: "All features accessible from Z+ direction"
+      on_fail: "Redesign for 3-axis accessibility"
+
+    - check: "pocket_depth"
+      rule: "No pockets deeper than 3x their width"
+      on_fail: "Suggest shallower pocket or multi-step machining"
+
+    - check: "wall_thickness"
+      rule: "All walls >= 1.0mm thick"
+      on_fail: "Increase wall thickness"
+
+    - check: "cut_intersects"
+      rule: "All cut operations must intersect target body"
+      on_fail: "Recalculate cut position"
+
+  post_generation:
+    - check: "mesh_watertight"
+      rule: "Generated mesh must be manifold"
+      on_fail: "Report error, suggest fixes"
+
+    - check: "no_self_intersection"
+      rule: "No self-intersecting geometry"
+      on_fail: "Simplify operations, rebuild step by step"
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+on_error:
+  spatial_confusion:
+    - "STOP - do not guess"
+    - "Draw ASCII diagram showing X, Y, Z axes with tool direction"
+    - "List current body bounds: min/max for each axis"
+    - "Calculate exact coordinates for intended operation"
+    - "Verify calculation before generating code"
+
+  cadquery_error:
+    - "Read the Python traceback carefully"
+    - "Identify which CadQuery operation failed"
+    - "Check face/edge selectors are valid"
+    - "Verify the workplane is correct"
+    - "Fix and regenerate the complete code"
+
+  general:
+    - "Explain what went wrong in plain language"
+    - "Show the problematic code section"
+    - "Propose specific fix with reasoning"
+    - "Ask user to confirm before applying"
+
+# =============================================================================
+# CODE GENERATION STYLE
+# =============================================================================
+code_style:
+  naming:
+    - "Use descriptive variable names: 'bolt_pocket_depth' not 'd1'"
+    - "Use UPPER_CASE for dimension constants"
+    - "Use lowercase for intermediate results"
+
+  comments:
+    - "Comment the INTENT, not the operation"
+    - "Note tool size requirements for internal features"
+    - "Indicate machining setup/orientation"
+
+  organization:
+    - "Define dimensions as named constants at top"
+    - "Group related operations"
+    - "Use intermediate variables for complex geometry"
+    - "Include tool radius as a named constant"
+
+  example: |
+    import cadquery as cq
+
+    # Mounting plate - designed for 3-axis CNC milling
+    # Material: 6061 Aluminum
+    # Setup: clamp bottom, machine from top (Z+)
+    # Tool: 6mm end mill (R3.0 internal corners)
+
+    TOOL_RADIUS = 3.0       # mm - 6mm end mill
+    PLATE_W = 80.0          # mm - plate width
+    PLATE_D = 60.0          # mm - plate depth
+    PLATE_H = 10.0          # mm - plate thickness
+    POCKET_DEPTH = 5.0      # mm - pocket depth (ratio 0.5:1)
+    BOLT_HOLE_DIA = 5.5     # mm - clearance for M5
+
+    result = (
+        cq.Workplane("XY")
+        .box(PLATE_W, PLATE_D, PLATE_H)
+        # Central pocket with tool-radius corners
+        .faces(">Z")
+        .workplane()
+        .rect(40, 30)
+        .cutBlind(-POCKET_DEPTH)
+        # Fillet internal corners to match end mill
+        .edges("|Z")
+        .fillet(TOOL_RADIUS)
+        # Mounting holes in corners
+        .faces(">Z")
+        .workplane()
+        .pushPoints([(30, 20), (-30, 20), (30, -20), (-30, -20)])
+        .hole(BOLT_HOLE_DIA)
+    )
+
+# =============================================================================
+# RESPONSE FORMAT
+# =============================================================================
+response_format:
+  on_success:
+    - "Brief description of what was created"
+    - "The generated CadQuery code in a ```python block"
+    - "Recommended material and tool sizes"
+    - "Machining setup notes (fixturing, orientation)"
+    - "Any features requiring special attention"
+
+  on_clarification_needed:
+    - "Explain what information is missing"
+    - "Provide 2-3 specific options to choose from"
+    - "Default suggestion optimized for CNC machining"
+
+  never:
+    - "Never generate code for ambiguous requests without asking"
+    - "Never assume dimensions - always ask if not specified"
+    - "Never skip machinability validation"
+    - "Never create internal corners without tool-radius fillets"
+    - "Never create undercut features without warning about 3-axis limitations"
