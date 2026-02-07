@@ -4,6 +4,7 @@ use tauri::State;
 use tokio::sync::mpsc;
 
 use crate::ai::claude::ClaudeProvider;
+use crate::ai::gemini::GeminiProvider;
 use crate::ai::message::ChatMessage;
 use crate::ai::ollama::OllamaProvider;
 use crate::ai::openai::OpenAiProvider;
@@ -42,10 +43,56 @@ fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>, AppError> 
             Ok(Box::new(OpenAiProvider::new(
                 api_key,
                 config.model.clone(),
-                None,
+                config.openai_base_url.clone(),
             )))
         }
-        "ollama" => Ok(Box::new(OllamaProvider::new(None, config.model.clone()))),
+        "deepseek" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("DeepSeek API key not set".into()))?;
+            Ok(Box::new(OpenAiProvider::new(
+                api_key,
+                config.model.clone(),
+                Some("https://api.deepseek.com/v1".to_string()),
+            )))
+        }
+        "qwen" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Qwen API key not set".into()))?;
+            Ok(Box::new(OpenAiProvider::new(
+                api_key,
+                config.model.clone(),
+                Some("https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string()),
+            )))
+        }
+        "kimi" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Kimi API key not set".into()))?;
+            Ok(Box::new(OpenAiProvider::new(
+                api_key,
+                config.model.clone(),
+                Some("https://api.moonshot.ai/v1".to_string()),
+            )))
+        }
+        "gemini" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Gemini API key not set".into()))?;
+            Ok(Box::new(GeminiProvider::new(
+                api_key,
+                config.model.clone(),
+            )))
+        }
+        "ollama" => Ok(Box::new(OllamaProvider::new(
+            config.ollama_base_url.clone(),
+            config.model.clone(),
+        ))),
         _ => {
             // Default to Claude.
             let api_key = config

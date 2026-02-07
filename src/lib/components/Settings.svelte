@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getSettingsStore } from '$lib/stores/settings.svelte';
-  import { checkPython, setupPython } from '$lib/services/tauri';
-  import type { PythonStatus } from '$lib/types';
+  import { checkPython, setupPython, getProviderRegistry } from '$lib/services/tauri';
+  import type { PythonStatus, ProviderInfo } from '$lib/types';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -13,9 +13,12 @@
 
   const settings = getSettingsStore();
 
+  // Provider registry loaded from backend
+  let registry = $state<ProviderInfo[]>([]);
+
   // Local copies of settings for editing (committed on Save)
-  let provider = $state('openai');
-  let model = $state('gpt-4');
+  let provider = $state('claude');
+  let model = $state('claude-sonnet-4-5-20250929');
   let apiKey = $state('');
   let baseUrl = $state('');
   let ollamaUrl = $state('http://localhost:11434');
@@ -27,17 +30,42 @@
   let setupMessage = $state('');
   let isSettingUp = $state(false);
 
+  // Derived: the currently selected provider info from the registry
+  let currentProvider = $derived(registry.find((p) => p.id === provider));
+
   // Sync local state from settings store whenever the modal opens
   $effect(() => {
     if (open) {
-      provider = settings.config.ai_provider || 'openai';
-      model = settings.config.model || 'gpt-4';
+      loadRegistry();
+      provider = settings.config.ai_provider || 'claude';
+      model = settings.config.model || 'claude-sonnet-4-5-20250929';
       apiKey = settings.config.api_key || '';
+      baseUrl = settings.config.openai_base_url || '';
+      ollamaUrl = settings.config.ollama_base_url || 'http://localhost:11434';
+      agentPreset = settings.config.agent_rules_preset || 'default';
       showApiKey = false;
       setupMessage = '';
       refreshPython();
     }
   });
+
+  async function loadRegistry() {
+    try {
+      registry = await getProviderRegistry();
+    } catch (err) {
+      console.error('Failed to load provider registry:', err);
+    }
+  }
+
+  function handleProviderChange() {
+    // Auto-select the first model when switching providers
+    const p = registry.find((r) => r.id === provider);
+    if (p && p.models.length > 0) {
+      model = p.models[0].id;
+    } else if (p && p.allows_custom_model) {
+      model = '';
+    }
+  }
 
   async function refreshPython() {
     try {
@@ -67,6 +95,9 @@
       ai_provider: provider,
       model,
       api_key: apiKey || null,
+      openai_base_url: baseUrl || null,
+      ollama_base_url: ollamaUrl || null,
+      agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
     });
     await settings.save();
     onClose();
@@ -106,48 +137,71 @@
             id="provider-select"
             class="form-select"
             bind:value={provider}
+            onchange={handleProviderChange}
           >
-            <option value="claude">Claude</option>
-            <option value="openai">OpenAI</option>
-            <option value="ollama">Ollama</option>
+            {#each registry as p}
+              <option value={p.id}>{p.display_name}</option>
+            {/each}
           </select>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="model-input">Model</label>
-          <input
-            id="model-input"
-            class="form-input"
-            type="text"
-            bind:value={model}
-            placeholder={provider === 'claude' ? 'claude-sonnet-4-20250514' : provider === 'ollama' ? 'llama3' : 'gpt-4'}
-          />
+          {#if currentProvider?.allows_custom_model}
+            <input
+              id="model-input"
+              class="form-input"
+              type="text"
+              bind:value={model}
+              placeholder="e.g. llama3, codellama, mistral..."
+            />
+          {:else if currentProvider && currentProvider.models.length > 0}
+            <select
+              id="model-input"
+              class="form-select"
+              bind:value={model}
+            >
+              {#each currentProvider.models as m}
+                <option value={m.id}>{m.display_name}</option>
+              {/each}
+            </select>
+          {:else}
+            <input
+              id="model-input"
+              class="form-input"
+              type="text"
+              bind:value={model}
+              placeholder="Model ID"
+            />
+          {/if}
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="api-key-input">API Key</label>
-          <div class="input-with-toggle">
-            <input
-              id="api-key-input"
-              class="form-input"
-              type={showApiKey ? 'text' : 'password'}
-              bind:value={apiKey}
-              placeholder="Enter your API key..."
-            />
-            <button
-              class="toggle-btn"
-              onclick={() => { showApiKey = !showApiKey; }}
-              type="button"
-              title={showApiKey ? 'Hide' : 'Show'}
-            >
-              {showApiKey ? 'Hide' : 'Show'}
-            </button>
+        {#if currentProvider?.requires_api_key}
+          <div class="form-group">
+            <label class="form-label" for="api-key-input">API Key</label>
+            <div class="input-with-toggle">
+              <input
+                id="api-key-input"
+                class="form-input"
+                type={showApiKey ? 'text' : 'password'}
+                bind:value={apiKey}
+                placeholder="Enter your API key..."
+              />
+              <button
+                class="toggle-btn"
+                onclick={() => { showApiKey = !showApiKey; }}
+                type="button"
+                title={showApiKey ? 'Hide' : 'Show'}
+              >
+                {showApiKey ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
-        </div>
+        {/if}
 
         {#if provider === 'openai'}
           <div class="form-group">
-            <label class="form-label" for="base-url-input">OpenAI Base URL (optional)</label>
+            <label class="form-label" for="base-url-input">Base URL (optional)</label>
             <input
               id="base-url-input"
               class="form-input"

@@ -22,7 +22,7 @@ impl Default for AppConfig {
         Self {
             ai_provider: "claude".to_string(),
             api_key: None,
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-5-20250929".to_string(),
             python_path: None,
             theme: "dark".to_string(),
             ollama_base_url: None,

@@ -2,11 +2,14 @@ import type { AppConfig } from '$lib/types';
 import { getSettings, updateSettings } from '$lib/services/tauri';
 
 const defaultConfig: AppConfig = {
-  ai_provider: 'openai',
+  ai_provider: 'claude',
   api_key: null,
-  model: 'gpt-4',
+  model: 'claude-sonnet-4-5-20250929',
   python_path: null,
   theme: 'dark',
+  ollama_base_url: null,
+  openai_base_url: null,
+  agent_rules_preset: null,
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });
