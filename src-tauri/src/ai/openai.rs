@@ -1,0 +1,233 @@
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+
+use crate::ai::message::ChatMessage;
+use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::streaming::parse_sse_events;
+use crate::error::AppError;
+
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+pub struct OpenAiProvider {
+    client: Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+}
+
+impl OpenAiProvider {
+    pub fn new(api_key: String, model: String, base_url: Option<String>) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            model,
+            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+        }
+    }
+
+    fn chat_endpoint(&self) -> String {
+        format!("{}/chat/completions", self.base_url)
+    }
+}
+
+// --- Request / Response types for the OpenAI Chat Completions API ---
+
+#[derive(Serialize)]
+struct OpenAiRequest {
+    model: String,
+    messages: Vec<OpenAiMessage>,
+    stream: bool,
+}
+
+#[derive(Serialize)]
+struct OpenAiMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct OpenAiResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct OpenAiChoice {
+    message: Option<OpenAiMessageContent>,
+    delta: Option<OpenAiDeltaContent>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct OpenAiMessageContent {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiDeltaContent {
+    content: Option<String>,
+}
+
+/// SSE chunk from the OpenAI streaming API.
+#[derive(Deserialize)]
+struct OpenAiStreamChunk {
+    choices: Vec<OpenAiStreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiStreamChoice {
+    delta: Option<OpenAiDeltaContent>,
+    finish_reason: Option<String>,
+}
+
+impl From<&ChatMessage> for OpenAiMessage {
+    fn from(msg: &ChatMessage) -> Self {
+        Self {
+            role: msg.role.clone(),
+            content: msg.content.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl AiProvider for OpenAiProvider {
+    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError> {
+        let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
+
+        let body = OpenAiRequest {
+            model: self.model.clone(),
+            messages: openai_messages,
+            stream: false,
+        };
+
+        let response = self
+            .client
+            .post(&self.chat_endpoint())
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "could not read body".into());
+            return Err(AppError::AiProviderError(format!(
+                "OpenAI API error ({}): {}",
+                status, text
+            )));
+        }
+
+        let resp: OpenAiResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProviderError(format!("Failed to parse response: {}", e)))?;
+
+        let text = resp
+            .choices
+            .first()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
+
+        Ok(text)
+    }
+
+    async fn stream(
+        &self,
+        messages: &[ChatMessage],
+        tx: mpsc::Sender<StreamDelta>,
+    ) -> Result<(), AppError> {
+        let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
+
+        let body = OpenAiRequest {
+            model: self.model.clone(),
+            messages: openai_messages,
+            stream: true,
+        };
+
+        let response = self
+            .client
+            .post(&self.chat_endpoint())
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "could not read body".into());
+            return Err(AppError::AiProviderError(format!(
+                "OpenAI API error ({}): {}",
+                status, text
+            )));
+        }
+
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = chunk_result.map_err(|e| {
+                AppError::AiProviderError(format!("Stream read error: {}", e))
+            })?;
+
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Process complete SSE events.
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                let events = parse_sse_events(&event_block);
+                for event_data in events {
+                    if let Ok(chunk) = serde_json::from_str::<OpenAiStreamChunk>(&event_data) {
+                        for choice in &chunk.choices {
+                            if let Some(delta) = &choice.delta {
+                                if let Some(ref content) = delta.content {
+                                    let _ = tx
+                                        .send(StreamDelta {
+                                            content: content.clone(),
+                                            done: false,
+                                        })
+                                        .await;
+                                }
+                            }
+                            if choice.finish_reason.is_some() {
+                                let _ = tx
+                                    .send(StreamDelta {
+                                        content: String::new(),
+                                        done: true,
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Ensure a done signal is always sent.
+        let _ = tx
+            .send(StreamDelta {
+                content: String::new(),
+                done: true,
+            })
+            .await;
+
+        Ok(())
+    }
+}

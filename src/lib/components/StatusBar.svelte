@@ -1,0 +1,87 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { getSettingsStore } from '$lib/stores/settings.svelte';
+  import { getViewportStore } from '$lib/stores/viewport.svelte';
+  import { checkPython } from '$lib/services/tauri';
+  import type { PythonStatus } from '$lib/types';
+
+  const settings = getSettingsStore();
+  const viewport = getViewportStore();
+
+  let pythonInfo = $state<PythonStatus | null>(null);
+  let pythonCheckError = $state(false);
+
+  let statusText = $derived(() => {
+    if (viewport.isLoading) return 'Loading...';
+    if (viewport.error) return 'Error';
+    return 'Ready';
+  });
+
+  let pythonStatusText = $derived(() => {
+    if (pythonCheckError) return 'Python: Check failed';
+    if (!pythonInfo) return 'Python: Checking...';
+    if (!pythonInfo.python_found) return 'Python: Not found';
+    if (!pythonInfo.venv_ready) return `Python: ${pythonInfo.python_version ?? 'found'} (no venv)`;
+    if (!pythonInfo.cadquery_installed) return `Python: ${pythonInfo.python_version} (no CadQuery)`;
+    return `Python: ${pythonInfo.python_version} + CadQuery`;
+  });
+
+  let aiProvider = $derived(() => {
+    return settings.config.ai_provider
+      ? `AI: ${settings.config.ai_provider}`
+      : 'AI: Not configured';
+  });
+
+  onMount(async () => {
+    try {
+      pythonInfo = await checkPython();
+    } catch {
+      pythonCheckError = true;
+    }
+  });
+</script>
+
+<div class="status-bar">
+  <div class="status-left">
+    <span class="status-item status-text">{statusText()}</span>
+  </div>
+  <div class="status-right">
+    <span class="status-item">{pythonStatusText()}</span>
+    <span class="status-separator">|</span>
+    <span class="status-item">{aiProvider()}</span>
+  </div>
+</div>
+
+<style>
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 24px;
+    padding: 0 12px;
+    background: var(--bg-mantle);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .status-left,
+  .status-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status-item {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .status-text {
+    color: var(--text-secondary);
+  }
+
+  .status-separator {
+    color: var(--border);
+    font-size: 11px;
+  }
+</style>
