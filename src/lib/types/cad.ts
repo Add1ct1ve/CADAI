@@ -38,6 +38,24 @@ export interface SketchArc {
 
 export type SketchEntity = SketchLine | SketchRectangle | SketchCircle | SketchArc;
 
+export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical';
+
+export interface ExtrudeParams {
+  distance: number;
+  mode: 'add' | 'cut';
+  cutTargetId?: string;
+}
+
+export interface FilletParams {
+  radius: number;
+  edges: EdgeSelector;
+}
+
+export interface ChamferParams {
+  distance: number;
+  edges: EdgeSelector;
+}
+
 export interface Sketch {
   id: SketchId;
   name: string;
@@ -45,6 +63,9 @@ export interface Sketch {
   origin: [number, number, number];
   entities: SketchEntity[];
   closed: boolean;
+  extrude?: ExtrudeParams;
+  fillet?: FilletParams;
+  chamfer?: ChamferParams;
 }
 
 export type SketchToolId = 'sketch-select' | 'sketch-line' | 'sketch-rect' | 'sketch-circle' | 'sketch-arc';
@@ -89,6 +110,8 @@ export interface SceneObject {
   color: string;
   visible: boolean;
   locked: boolean;
+  fillet?: FilletParams;
+  chamfer?: ChamferParams;
 }
 
 export type CodeMode = 'parametric' | 'manual';

@@ -1,10 +1,12 @@
 <script lang="ts">
   import { getSceneStore } from '$lib/stores/scene.svelte';
-  import { triggerPipeline } from '$lib/services/execution-pipeline';
+  import { getSketchStore } from '$lib/stores/sketch.svelte';
+  import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, CadTransform, BoxParams, CylinderParams, SphereParams, ConeParams } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, ExtrudeParams, FilletParams, ChamferParams } from '$lib/types/cad';
 
   const scene = getSceneStore();
+  const sketchStore = getSketchStore();
   const history = getHistoryStore();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -17,9 +19,28 @@
   // Scale factor state
   let scaleFactor = $state(1.0);
 
+  const edgeSelectorOptions: { value: EdgeSelector; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'top', label: 'Top' },
+    { value: 'bottom', label: 'Bottom' },
+    { value: 'vertical', label: 'Vertical' },
+  ];
+
   function debounced(fn: () => void, ms = 300) {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(fn, ms);
+  }
+
+  // Full snapshot helper for undo
+  function captureSnapshot() {
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    return {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
+    };
   }
 
   function updateName(e: Event) {
@@ -33,11 +54,15 @@
   let snapshotCaptured = false;
   function captureOnce() {
     if (!snapshotCaptured) {
-      history.pushSnapshot(scene.snapshot());
+      history.pushSnapshot(captureSnapshot());
       snapshotCaptured = true;
-      // Reset after debounce window so the next edit group captures a new snapshot
       setTimeout(() => { snapshotCaptured = false; }, 500);
     }
+  }
+
+  function triggerAndRun() {
+    triggerPipeline(100);
+    debounced(() => runPythonExecution());
   }
 
   function updateParam(key: string, value: number) {
@@ -84,7 +109,7 @@
   }
 
   function deleteObject() {
-    history.pushSnapshot(scene.snapshot());
+    history.pushSnapshot(captureSnapshot());
     scene.deleteSelected();
     triggerPipeline(100);
   }
@@ -92,7 +117,7 @@
   function applyMoveDelta() {
     const obj = scene.firstSelected;
     if (!obj) return;
-    history.pushSnapshot(scene.snapshot());
+    history.pushSnapshot(captureSnapshot());
     const pos = obj.transform.position;
     const newPos: [number, number, number] = [pos[0] + deltaX, pos[1] + deltaY, pos[2] + deltaZ];
     scene.updateTransform(obj.id, { ...obj.transform, position: newPos });
@@ -105,7 +130,7 @@
   function applyScaleFactor() {
     const obj = scene.firstSelected;
     if (!obj || scaleFactor <= 0) return;
-    history.pushSnapshot(scene.snapshot());
+    history.pushSnapshot(captureSnapshot());
     const p = obj.params;
     let newParams: PrimitiveParams;
     switch (p.type) {
@@ -130,6 +155,185 @@
   function numInput(e: Event, callback: (v: number) => void) {
     const value = parseFloat((e.target as HTMLInputElement).value);
     if (!isNaN(value)) callback(value);
+  }
+
+  // ── Object Fillet/Chamfer ──
+
+  function addObjectFillet() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setFillet(obj.id, { radius: 1, edges: 'all' });
+    triggerAndRun();
+  }
+
+  function updateObjectFillet(key: 'radius' | 'edges', value: number | EdgeSelector) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.fillet) return;
+    captureOnce();
+    scene.setFillet(obj.id, { ...obj.fillet, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeObjectFillet() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setFillet(obj.id, undefined);
+    triggerAndRun();
+  }
+
+  function addObjectChamfer() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setChamfer(obj.id, { distance: 0.5, edges: 'all' });
+    triggerAndRun();
+  }
+
+  function updateObjectChamfer(key: 'distance' | 'edges', value: number | EdgeSelector) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.chamfer) return;
+    captureOnce();
+    scene.setChamfer(obj.id, { ...obj.chamfer, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeObjectChamfer() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setChamfer(obj.id, undefined);
+    triggerAndRun();
+  }
+
+  // ── Sketch Extrude/Fillet/Chamfer ──
+
+  function addSketchExtrude() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setExtrude(sketch.id, { distance: 10, mode: 'add' });
+    triggerAndRun();
+  }
+
+  function updateSketchExtrudeDistance(value: number) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.extrude) return;
+    captureOnce();
+    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, distance: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function updateSketchExtrudeMode(mode: 'add' | 'cut') {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.extrude) return;
+    captureOnce();
+    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, mode });
+    triggerAndRun();
+  }
+
+  function updateSketchCutTarget(targetId: string) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.extrude) return;
+    captureOnce();
+    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, cutTargetId: targetId || undefined });
+    triggerAndRun();
+  }
+
+  function removeSketchExtrude() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setExtrude(sketch.id, undefined);
+    sketchStore.setSketchFillet(sketch.id, undefined);
+    sketchStore.setSketchChamfer(sketch.id, undefined);
+    triggerAndRun();
+  }
+
+  function addSketchFillet() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchFillet(sketch.id, { radius: 1, edges: 'all' });
+    triggerAndRun();
+  }
+
+  function updateSketchFillet(key: 'radius' | 'edges', value: number | EdgeSelector) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.fillet) return;
+    captureOnce();
+    sketchStore.setSketchFillet(sketch.id, { ...sketch.fillet, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeSketchFillet() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchFillet(sketch.id, undefined);
+    triggerAndRun();
+  }
+
+  function addSketchChamfer() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchChamfer(sketch.id, { distance: 0.5, edges: 'all' });
+    triggerAndRun();
+  }
+
+  function updateSketchChamfer(key: 'distance' | 'edges', value: number | EdgeSelector) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.chamfer) return;
+    captureOnce();
+    sketchStore.setSketchChamfer(sketch.id, { ...sketch.chamfer, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeSketchChamfer() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchChamfer(sketch.id, undefined);
+    triggerAndRun();
+  }
+
+  function editSketch() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    sketchStore.editSketch(sketch.id);
+  }
+
+  function deleteSketch() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    history.pushSnapshot(captureSnapshot());
+    sketchStore.removeSketch(sketch.id);
+    triggerAndRun();
+  }
+
+  // Build list of possible cut targets (other extruded sketches + visible primitives)
+  function getCutTargets() {
+    const sketch = sketchStore.selectedSketch;
+    const targets: { id: string; name: string }[] = [];
+
+    // Extruded add-mode sketches (excluding current)
+    for (const s of sketchStore.sketches) {
+      if (s.id === sketch?.id) continue;
+      if (s.extrude && s.extrude.mode === 'add' && s.entities.length > 0) {
+        targets.push({ id: s.id, name: s.name });
+      }
+    }
+
+    // Visible scene objects
+    for (const obj of scene.objects) {
+      if (obj.visible) {
+        targets.push({ id: obj.id, name: obj.name });
+      }
+    }
+
+    return targets;
   }
 </script>
 
@@ -270,6 +474,54 @@
       </div>
     </div>
 
+    <!-- Fillet (Object) -->
+    <div class="prop-section">
+      <div class="prop-section-title">Fillet</div>
+      {#if obj.fillet}
+        <div class="prop-row">
+          <label>Radius</label>
+          <input type="number" value={obj.fillet.radius} step="0.1" min="0.01"
+            oninput={(e) => numInput(e, (v) => updateObjectFillet('radius', v))} />
+        </div>
+        <div class="prop-row">
+          <label>Edges</label>
+          <select class="prop-select" value={obj.fillet.edges}
+            onchange={(e) => updateObjectFillet('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
+            {#each edgeSelectorOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <button class="remove-btn" onclick={removeObjectFillet}>Remove Fillet</button>
+      {:else}
+        <button class="apply-btn full-width" onclick={addObjectFillet}>Add Fillet</button>
+      {/if}
+    </div>
+
+    <!-- Chamfer (Object) -->
+    <div class="prop-section">
+      <div class="prop-section-title">Chamfer</div>
+      {#if obj.chamfer}
+        <div class="prop-row">
+          <label>Distance</label>
+          <input type="number" value={obj.chamfer.distance} step="0.1" min="0.01"
+            oninput={(e) => numInput(e, (v) => updateObjectChamfer('distance', v))} />
+        </div>
+        <div class="prop-row">
+          <label>Edges</label>
+          <select class="prop-select" value={obj.chamfer.edges}
+            onchange={(e) => updateObjectChamfer('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
+            {#each edgeSelectorOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <button class="remove-btn" onclick={removeObjectChamfer}>Remove Chamfer</button>
+      {:else}
+        <button class="apply-btn full-width" onclick={addObjectChamfer}>Add Chamfer</button>
+      {/if}
+    </div>
+
     <!-- Appearance -->
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
@@ -292,6 +544,124 @@
       </button>
     </div>
   </div>
+
+{:else if sketchStore.selectedSketch}
+  {@const sketch = sketchStore.selectedSketch}
+  <div class="properties-panel">
+    <div class="prop-header">
+      <span class="prop-type-badge sketch-badge">sketch</span>
+      <span class="prop-name-text">{sketch.name}</span>
+    </div>
+
+    <!-- Sketch Info -->
+    <div class="prop-section">
+      <div class="prop-section-title">Info</div>
+      <div class="prop-row">
+        <label>Plane</label>
+        <span class="prop-value">{sketch.plane}</span>
+      </div>
+      <div class="prop-row">
+        <label>Entities</label>
+        <span class="prop-value">{sketch.entities.length}</span>
+      </div>
+    </div>
+
+    <!-- Extrude -->
+    <div class="prop-section">
+      <div class="prop-section-title">Extrude</div>
+      {#if sketch.extrude}
+        <div class="prop-row">
+          <label>Distance</label>
+          <input type="number" value={sketch.extrude.distance} step="1" min="0.1"
+            oninput={(e) => numInput(e, updateSketchExtrudeDistance)} />
+        </div>
+        <div class="prop-row">
+          <label>Mode</label>
+          <select class="prop-select" value={sketch.extrude.mode}
+            onchange={(e) => updateSketchExtrudeMode((e.target as HTMLSelectElement).value as 'add' | 'cut')}>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
+          </select>
+        </div>
+        {#if sketch.extrude.mode === 'cut'}
+          <div class="prop-row">
+            <label>Target</label>
+            <select class="prop-select" value={sketch.extrude.cutTargetId ?? ''}
+              onchange={(e) => updateSketchCutTarget((e.target as HTMLSelectElement).value)}>
+              <option value="">None</option>
+              {#each getCutTargets() as target}
+                <option value={target.id}>{target.name}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        <button class="remove-btn" onclick={removeSketchExtrude}>Remove Extrude</button>
+      {:else}
+        <button class="apply-btn full-width" onclick={addSketchExtrude}>Extrude</button>
+      {/if}
+    </div>
+
+    <!-- Fillet (only when extruded) -->
+    {#if sketch.extrude}
+      <div class="prop-section">
+        <div class="prop-section-title">Fillet</div>
+        {#if sketch.fillet}
+          <div class="prop-row">
+            <label>Radius</label>
+            <input type="number" value={sketch.fillet.radius} step="0.1" min="0.01"
+              oninput={(e) => numInput(e, (v) => updateSketchFillet('radius', v))} />
+          </div>
+          <div class="prop-row">
+            <label>Edges</label>
+            <select class="prop-select" value={sketch.fillet.edges}
+              onchange={(e) => updateSketchFillet('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
+              {#each edgeSelectorOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <button class="remove-btn" onclick={removeSketchFillet}>Remove Fillet</button>
+        {:else}
+          <button class="apply-btn full-width" onclick={addSketchFillet}>Add Fillet</button>
+        {/if}
+      </div>
+
+      <!-- Chamfer (only when extruded) -->
+      <div class="prop-section">
+        <div class="prop-section-title">Chamfer</div>
+        {#if sketch.chamfer}
+          <div class="prop-row">
+            <label>Distance</label>
+            <input type="number" value={sketch.chamfer.distance} step="0.1" min="0.01"
+              oninput={(e) => numInput(e, (v) => updateSketchChamfer('distance', v))} />
+          </div>
+          <div class="prop-row">
+            <label>Edges</label>
+            <select class="prop-select" value={sketch.chamfer.edges}
+              onchange={(e) => updateSketchChamfer('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
+              {#each edgeSelectorOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <button class="remove-btn" onclick={removeSketchChamfer}>Remove Chamfer</button>
+        {:else}
+          <button class="apply-btn full-width" onclick={addSketchChamfer}>Add Chamfer</button>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Actions -->
+    <div class="prop-actions">
+      <button class="apply-btn full-width" onclick={editSketch}>
+        Edit Sketch
+      </button>
+      <button class="delete-btn" onclick={deleteSketch}>
+        Delete Sketch
+      </button>
+    </div>
+  </div>
+
 {:else}
   <div class="no-selection">
     <span class="no-selection-text">No object selected</span>
@@ -327,6 +697,11 @@
     flex-shrink: 0;
   }
 
+  .prop-type-badge.sketch-badge {
+    color: #f9e2af;
+    background: rgba(249, 226, 175, 0.12);
+  }
+
   .prop-name-input {
     flex: 1;
     background: var(--bg-base);
@@ -341,6 +716,12 @@
   .prop-name-input:focus {
     border-color: var(--accent);
     outline: none;
+  }
+
+  .prop-name-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .prop-section {
@@ -384,6 +765,28 @@
   }
 
   .prop-row input[type="number"]:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+
+  .prop-value {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+  }
+
+  .prop-select {
+    flex: 1;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+    color: var(--text-primary);
+    min-width: 0;
+  }
+
+  .prop-select:focus {
     border-color: var(--accent);
     outline: none;
   }
@@ -437,10 +840,32 @@
     margin-top: 4px;
   }
 
+  .remove-btn {
+    width: 100%;
+    background: none;
+    border: 1px solid var(--text-muted);
+    color: var(--text-muted);
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-top: 2px;
+    transition: all 0.12s ease;
+  }
+
+  .remove-btn:hover {
+    border-color: var(--error);
+    color: var(--error);
+    background: rgba(243, 139, 168, 0.1);
+  }
+
   .prop-actions {
     margin-top: auto;
     padding-top: 12px;
     border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .delete-btn {

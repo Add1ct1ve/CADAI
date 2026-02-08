@@ -7,10 +7,14 @@ import type {
   Sketch,
   SketchEntity,
   SketchToolId,
+  ExtrudeParams,
+  FilletParams,
+  ChamferParams,
 } from '$lib/types/cad';
 
 let sketches = $state<Sketch[]>([]);
 let activeSketchId = $state<SketchId | null>(null);
+let selectedSketchId = $state<SketchId | null>(null);
 let activeSketchTool = $state<SketchToolId>('sketch-line');
 let selectedEntityIds = $state<SketchEntityId[]>([]);
 let hoveredEntityId = $state<SketchEntityId | null>(null);
@@ -23,6 +27,7 @@ let sketchNameCounter = 0;
 export interface SketchSnapshot {
   sketches: Sketch[];
   activeSketchId: SketchId | null;
+  selectedSketchId: SketchId | null;
 }
 
 export function getSketchStore() {
@@ -59,6 +64,57 @@ export function getSketchStore() {
     get activeSketch(): Sketch | null {
       if (!activeSketchId) return null;
       return sketches.find((s) => s.id === activeSketchId) ?? null;
+    },
+
+    get selectedSketchId() {
+      return selectedSketchId;
+    },
+
+    get selectedSketch(): Sketch | null {
+      if (!selectedSketchId) return null;
+      return sketches.find((s) => s.id === selectedSketchId) ?? null;
+    },
+
+    selectSketch(id: SketchId | null) {
+      selectedSketchId = id;
+    },
+
+    getSketchById(id: SketchId): Sketch | null {
+      return sketches.find((s) => s.id === id) ?? null;
+    },
+
+    setExtrude(sketchId: SketchId, params: ExtrudeParams | undefined) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, extrude: params } : s,
+      );
+    },
+
+    setSketchFillet(sketchId: SketchId, params: FilletParams | undefined) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, fillet: params } : s,
+      );
+    },
+
+    setSketchChamfer(sketchId: SketchId, params: ChamferParams | undefined) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, chamfer: params } : s,
+      );
+    },
+
+    removeSketch(id: SketchId) {
+      sketches = sketches.filter((s) => s.id !== id);
+      if (selectedSketchId === id) selectedSketchId = null;
+      if (activeSketchId === id) activeSketchId = null;
+    },
+
+    editSketch(id: SketchId) {
+      activeSketchId = id;
+      selectedSketchId = null;
+      activeSketchTool = 'sketch-line';
+      selectedEntityIds = [];
+      hoveredEntityId = null;
+      drawingPoints = [];
+      previewPoint = null;
     },
 
     enterSketchMode(plane: SketchPlane) {
@@ -179,12 +235,14 @@ export function getSketchStore() {
       return {
         sketches: $state.snapshot(sketches) as Sketch[],
         activeSketchId,
+        selectedSketchId,
       };
     },
 
     restoreSnapshot(data: SketchSnapshot) {
       sketches = data.sketches;
       activeSketchId = data.activeSketchId;
+      selectedSketchId = data.selectedSketchId ?? null;
       selectedEntityIds = [];
       hoveredEntityId = null;
       drawingPoints = [];
@@ -201,6 +259,7 @@ export function getSketchStore() {
     restore(data: { sketches: Sketch[] }) {
       sketches = data.sketches;
       activeSketchId = null;
+      selectedSketchId = null;
       selectedEntityIds = [];
       hoveredEntityId = null;
       drawingPoints = [];
@@ -218,6 +277,7 @@ export function getSketchStore() {
     clearAll() {
       sketches = [];
       activeSketchId = null;
+      selectedSketchId = null;
       activeSketchTool = 'sketch-line';
       selectedEntityIds = [];
       hoveredEntityId = null;

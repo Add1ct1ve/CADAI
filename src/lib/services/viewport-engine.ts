@@ -797,6 +797,55 @@ export class ViewportEngine {
   }
 
   /**
+   * Raycast against inactive (finished) sketch line geometry to select sketches in 3D mode.
+   * Returns the SketchId of the first hit, or null.
+   */
+  raycastInactiveSketches(event: PointerEvent): SketchId | null {
+    this.updateNdc(event);
+    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+
+    const inactiveMeshes = this.sketchRenderer.getInactiveMeshes();
+    const allLines: THREE.Line[] = [];
+    const lineToSketchId = new Map<THREE.Line, SketchId>();
+
+    for (const [sketchId, group] of inactiveMeshes) {
+      group.traverse((child) => {
+        if (child instanceof THREE.Line) {
+          allLines.push(child);
+          lineToSketchId.set(child, sketchId);
+        }
+      });
+    }
+
+    if (allLines.length === 0) return null;
+
+    // Force world matrix update so raycaster has correct transforms
+    for (const line of allLines) {
+      line.updateMatrixWorld(true);
+    }
+
+    // Use a generous threshold for line raycasting
+    const oldThreshold = this.raycaster.params.Line?.threshold ?? 0.1;
+    if (!this.raycaster.params.Line) this.raycaster.params.Line = { threshold: 2.0 };
+    else this.raycaster.params.Line.threshold = 2.0;
+
+    const intersects = this.raycaster.intersectObjects(allLines, false);
+
+    this.raycaster.params.Line!.threshold = oldThreshold;
+
+    if (intersects.length === 0) return null;
+
+    return lineToSketchId.get(intersects[0].object as THREE.Line) ?? null;
+  }
+
+  /**
+   * Highlight an inactive sketch by changing its line color.
+   */
+  highlightInactiveSketch(id: SketchId | null): void {
+    this.sketchRenderer.highlightInactiveSketch(id);
+  }
+
+  /**
    * Hit-test sketch entities at the given pointer event position.
    */
   raycastSketchEntities(event: PointerEvent, sketch: Sketch, threshold = 0.5): SketchEntityId | null {

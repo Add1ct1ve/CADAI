@@ -47,6 +47,7 @@
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
     };
   }
 
@@ -56,6 +57,7 @@
       sketchStore.restoreSnapshot({
         sketches: snapshot.sketches,
         activeSketchId: snapshot.activeSketchId ?? null,
+        selectedSketchId: snapshot.selectedSketchId ?? null,
       });
     }
   }
@@ -168,6 +170,19 @@
 
     // Only allow tool shortcuts in parametric mode
     if (scene.codeMode === 'parametric') {
+      // E key: extrude selected sketch
+      if (e.key.toLowerCase() === 'e') {
+        const selectedSketch = sketchStore.selectedSketch;
+        if (selectedSketch && !selectedSketch.extrude && selectedSketch.entities.length > 0) {
+          e.preventDefault();
+          history.pushSnapshot(captureFullSnapshot());
+          sketchStore.setExtrude(selectedSketch.id, { distance: 10, mode: 'add' });
+          triggerPipeline(100);
+          runPythonExecution();
+          return;
+        }
+      }
+
       const toolMap: Record<string, ToolId> = {
         v: 'select',
         g: 'translate',

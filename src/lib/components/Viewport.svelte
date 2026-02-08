@@ -45,6 +45,7 @@
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
     };
   }
 
@@ -54,6 +55,7 @@
       sketchStore.restoreSnapshot({
         sketches: snapshot.sketches,
         activeSketchId: snapshot.activeSketchId ?? null,
+        selectedSketchId: snapshot.selectedSketchId ?? null,
       });
     }
   }
@@ -187,14 +189,12 @@
     }
   }
 
-  // ── Watch for pending STL data — only in manual mode ──
+  // ── Watch for pending STL data — works in both manual and parametric modes ──
   $effect(() => {
     const stl = viewportStore.pendingStl;
     if (stl && engine) {
-      if (scene.codeMode === 'manual') {
-        engine.loadSTLFromBase64(stl);
-        viewportStore.setHasModel(true);
-      }
+      engine.loadSTLFromBase64(stl);
+      viewportStore.setHasModel(true);
       viewportStore.setPendingStl(null);
     }
   });
@@ -402,6 +402,12 @@
     engine.syncInactiveSketches(sketchStore.sketches, sketchStore.activeSketchId);
   });
 
+  // ── Highlight selected inactive sketch ──
+  $effect(() => {
+    if (!engine) return;
+    engine.highlightInactiveSketch(sketchStore.selectedSketchId);
+  });
+
   function handlePointerMove(e: PointerEvent) {
     if (!engine) return;
 
@@ -543,8 +549,17 @@
       const hitId = engine.raycastObjects(e);
       if (hitId) {
         scene.select(hitId, e.shiftKey);
+        sketchStore.selectSketch(null); // Clear sketch selection when object selected
       } else {
-        scene.clearSelection();
+        // Try to select an inactive sketch
+        const hitSketchId = engine.raycastInactiveSketches(e);
+        if (hitSketchId) {
+          sketchStore.selectSketch(hitSketchId);
+          scene.clearSelection();
+        } else {
+          scene.clearSelection();
+          sketchStore.selectSketch(null);
+        }
       }
     }
   }

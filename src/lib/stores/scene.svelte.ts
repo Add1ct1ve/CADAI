@@ -6,6 +6,8 @@ import type {
   CadTransform,
   CodeMode,
   PrimitiveType,
+  FilletParams,
+  ChamferParams,
 } from '$lib/types/cad';
 import { getDefaultParams, getDefaultTransform } from '$lib/types/cad';
 
@@ -88,6 +90,18 @@ export function getSceneStore() {
     updateTransform(id: ObjectId, transform: CadTransform) {
       objects = objects.map((o) =>
         o.id === id ? { ...o, transform } : o,
+      );
+    },
+
+    setFillet(id: ObjectId, params: FilletParams | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, fillet: params } : o,
+      );
+    },
+
+    setChamfer(id: ObjectId, params: ChamferParams | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, chamfer: params } : o,
       );
     },
 

@@ -94,6 +94,7 @@
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
     };
     const snapshot = history.undo(current);
     if (snapshot) {
@@ -102,6 +103,7 @@
         sketchStore.restoreSnapshot({
           sketches: snapshot.sketches,
           activeSketchId: snapshot.activeSketchId ?? null,
+          selectedSketchId: snapshot.selectedSketchId ?? null,
         });
       }
       triggerPipeline(100);
@@ -115,6 +117,7 @@
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
     };
     const snapshot = history.redo(current);
     if (snapshot) {
@@ -123,6 +126,7 @@
         sketchStore.restoreSnapshot({
           sketches: snapshot.sketches,
           activeSketchId: snapshot.activeSketchId ?? null,
+          selectedSketchId: snapshot.selectedSketchId ?? null,
         });
       }
       triggerPipeline(100);

@@ -5,6 +5,7 @@ export interface SceneSnapshot {
   selectedIds: ObjectId[];
   sketches?: Sketch[];
   activeSketchId?: SketchId | null;
+  selectedSketchId?: SketchId | null;
 }
 
 const MAX_HISTORY = 50;
