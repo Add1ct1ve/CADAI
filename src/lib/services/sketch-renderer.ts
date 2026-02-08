@@ -259,6 +259,23 @@ export class SketchRenderer {
     this.inactiveMeshes.clear();
   }
 
+  // ── Inactive Sketch Selection ────────────────────
+
+  getInactiveMeshes(): Map<SketchId, THREE.Group> {
+    return this.inactiveMeshes;
+  }
+
+  highlightInactiveSketch(selectedId: SketchId | null): void {
+    for (const [id, group] of this.inactiveMeshes) {
+      const color = id === selectedId ? SELECTED_COLOR : INACTIVE_SKETCH_COLOR;
+      group.traverse((child) => {
+        if (child instanceof THREE.Line && child.material instanceof THREE.LineBasicMaterial) {
+          child.material.color.setHex(color);
+        }
+      });
+    }
+  }
+
   // ── Dispose ─────────────────────────────────────
 
   dispose(): void {

@@ -1,4 +1,4 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams } from '$lib/types/cad';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -37,6 +37,30 @@ function fmt(n: number): string {
   return parseFloat(n.toFixed(4)).toString();
 }
 
+function edgeSelectorToCadQuery(selector: EdgeSelector): string {
+  switch (selector) {
+    case 'all':
+      return '.edges()';
+    case 'top':
+      return '.edges(">Z")';
+    case 'bottom':
+      return '.edges("<Z")';
+    case 'vertical':
+      return '.edges("|Z")';
+  }
+}
+
+function generateFilletChamfer(name: string, fillet?: FilletParams, chamfer?: ChamferParams): string[] {
+  const lines: string[] = [];
+  if (fillet) {
+    lines.push(`${name} = ${name}${edgeSelectorToCadQuery(fillet.edges)}.fillet(${fmt(fillet.radius)})`);
+  }
+  if (chamfer) {
+    lines.push(`${name} = ${name}${edgeSelectorToCadQuery(chamfer.edges)}.chamfer(${fmt(chamfer.distance)})`);
+  }
+  return lines;
+}
+
 function generateSketchEntity(entity: SketchEntity): string[] {
   const lines: string[] = [];
   switch (entity.type) {
@@ -65,19 +89,30 @@ function generateSketchEntity(entity: SketchEntity): string[] {
   return lines;
 }
 
-function generateSketch(sketch: Sketch): string[] {
-  if (sketch.entities.length === 0) return [];
-
+function generateSketchBase(sketch: Sketch): string[] {
   const lines: string[] = [];
   lines.push(`# --- ${sketch.name} (${sketch.plane} plane) ---`);
-  lines.push(`${sketch.name} = (`);
+
+  const varName = sketch.extrude?.mode === 'cut' ? `${sketch.name}_cutter` : sketch.name;
+
+  lines.push(`${varName} = (`);
   lines.push(`    cq.Workplane("${sketch.plane}")`);
 
   for (const entity of sketch.entities) {
     lines.push(...generateSketchEntity(entity));
   }
 
+  if (sketch.extrude) {
+    lines.push(`    .extrude(${fmt(sketch.extrude.distance)})`);
+  }
+
   lines.push(`)`);
+
+  // Fillet/chamfer (only if extruded — 2D sketches can't have these)
+  if (sketch.extrude) {
+    lines.push(...generateFilletChamfer(varName, sketch.fillet, sketch.chamfer));
+  }
+
   lines.push('');
   return lines;
 }
@@ -93,12 +128,18 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = []): s
 
   const lines: string[] = ['import cadquery as cq', ''];
 
-  // Generate sketches
-  for (const sketch of nonEmptySketches) {
-    lines.push(...generateSketch(sketch));
+  // Separate sketches into add-mode and cut-mode
+  const addSketches = nonEmptySketches.filter((s) => !s.extrude || s.extrude.mode === 'add');
+  const cutSketches = nonEmptySketches.filter((s) => s.extrude?.mode === 'cut');
+  // Non-extruded sketches are 2D-only, excluded from assembly
+  const extrudedAddSketches = addSketches.filter((s) => s.extrude);
+
+  // Generate add-mode sketches (including non-extruded for code display)
+  for (const sketch of addSketches) {
+    lines.push(...generateSketchBase(sketch));
   }
 
-  // Generate objects
+  // Generate objects (primitives)
   const visibleObjects = objects.filter((o) => o.visible);
 
   for (const obj of visibleObjects) {
@@ -108,12 +149,34 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = []): s
     const transformLines = generateTransform(obj.name, obj.transform);
     lines.push(...transformLines);
 
+    // Fillet/chamfer on primitives
+    lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
+
     lines.push('');
   }
 
-  // Collect all named results
+  // Generate cut-mode sketches
+  for (const sketch of cutSketches) {
+    lines.push(...generateSketchBase(sketch));
+
+    // Apply cut to target
+    const targetId = sketch.extrude?.cutTargetId;
+    if (targetId) {
+      // Find target name (could be another sketch or a primitive)
+      const targetSketch = nonEmptySketches.find((s) => s.id === targetId);
+      const targetObj = visibleObjects.find((o) => o.id === targetId);
+      const targetName = targetSketch?.name ?? targetObj?.name;
+      if (targetName) {
+        lines.push(`${targetName} = ${targetName}.cut(${sketch.name}_cutter)`);
+        lines.push('');
+      }
+    }
+  }
+
+  // Collect all named results for assembly
+  // Only include extruded add-sketches and visible primitives
   const allNames: string[] = [
-    ...nonEmptySketches.map((s) => s.name),
+    ...extrudedAddSketches.map((s) => s.name),
     ...visibleObjects.map((o) => o.name),
   ];
 
