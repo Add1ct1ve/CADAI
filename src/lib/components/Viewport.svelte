@@ -21,6 +21,8 @@
 
   // Track which object is being dragged by gizmo to prevent feedback loop
   let transformDraggingId: ObjectId | null = null;
+  // Separate flag to suppress click selection right after a gizmo drag ends
+  let recentlyDragged = false;
 
   // Track previous code mode for mode-switch detection
   let prevCodeMode: string | null = null;
@@ -58,23 +60,30 @@
     });
 
     engine.onTransformEnd((id, group) => {
+      // Clear drag flag synchronously so the diff $effect rebuilds the mesh
+      transformDraggingId = null;
+      recentlyDragged = true;
+      setTimeout(() => { recentlyDragged = false; }, 50);
+
       const cadPos = threeToCadPos(group.position);
       const cadRot = threeToCadRot(group.rotation);
       const transform: CadTransform = { position: cadPos, rotation: cadRot };
       scene.updateTransform(id, transform);
       triggerPipeline(100);
-      // Delay clearing drag flag so the pointerdown handler can still check it
-      setTimeout(() => { transformDraggingId = null; }, 50);
     });
 
     engine.onScaleEnd((id, scale) => {
+      // Clear drag flag synchronously so the diff $effect rebuilds the mesh
+      transformDraggingId = null;
+      recentlyDragged = true;
+      setTimeout(() => { recentlyDragged = false; }, 50);
+
       const obj = scene.getObjectById(id);
-      if (!obj) { transformDraggingId = null; return; }
+      if (!obj) return;
 
       const newParams = applyScaleToParams(obj.params, scale);
       scene.updateParams(id, newParams);
       triggerPipeline(100);
-      setTimeout(() => { transformDraggingId = null; }, 50);
     });
 
     return () => {
@@ -248,6 +257,19 @@
     }
   });
 
+  // ── Placement ghost preview ──
+  $effect(() => {
+    if (!engine) return;
+
+    const tool = tools.activeTool;
+    if (tool.startsWith('add-')) {
+      const primitiveType = tool.replace('add-', '') as PrimitiveType;
+      engine.showPlacementGhost(primitiveType);
+    } else {
+      engine.clearGhost();
+    }
+  });
+
   // ── Mode switch ──
   $effect(() => {
     if (!engine) return;
@@ -271,6 +293,14 @@
   function handlePointerMove(e: PointerEvent) {
     if (!engine || scene.codeMode !== 'parametric') return;
 
+    // Update ghost position when placing a primitive
+    if (tools.isAddTool) {
+      const gridPos = engine.getGridIntersection(e);
+      if (gridPos) {
+        engine.updateGhostPosition(gridPos);
+      }
+    }
+
     const hitId = engine.raycastObjects(e);
     scene.setHovered(hitId);
 
@@ -291,8 +321,8 @@
     // Only handle left-click
     if (e.button !== 0) return;
 
-    // Don't select during gizmo drag
-    if (engine.isTransformDragging() || transformDraggingId) return;
+    // Don't select during or right after gizmo drag
+    if (engine.isTransformDragging() || recentlyDragged) return;
 
     const activeTool = tools.activeTool;
 
