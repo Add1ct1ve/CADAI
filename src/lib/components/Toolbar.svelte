@@ -2,9 +2,10 @@
   import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep } from '$lib/services/project-actions';
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
+  import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
-  import type { ToolId } from '$lib/types/cad';
+  import type { ToolId, SketchPlane, SketchToolId } from '$lib/types/cad';
 
   interface Props {
     onSettingsClick: () => void;
@@ -14,6 +15,7 @@
 
   const toolStore = getToolStore();
   const scene = getSceneStore();
+  const sketchStore = getSketchStore();
   const history = getHistoryStore();
 
   let isBusy = $state(false);
@@ -86,17 +88,43 @@
   }
 
   function handleUndo() {
-    const snapshot = history.undo(scene.snapshot());
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    const current = {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+    };
+    const snapshot = history.undo(current);
     if (snapshot) {
-      scene.restoreSnapshot(snapshot);
+      scene.restoreSnapshot({ objects: snapshot.objects, selectedIds: snapshot.selectedIds });
+      if (snapshot.sketches !== undefined) {
+        sketchStore.restoreSnapshot({
+          sketches: snapshot.sketches,
+          activeSketchId: snapshot.activeSketchId ?? null,
+        });
+      }
       triggerPipeline(100);
     }
   }
 
   function handleRedo() {
-    const snapshot = history.redo(scene.snapshot());
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    const current = {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+    };
+    const snapshot = history.redo(current);
     if (snapshot) {
-      scene.restoreSnapshot(snapshot);
+      scene.restoreSnapshot({ objects: snapshot.objects, selectedIds: snapshot.selectedIds });
+      if (snapshot.sketches !== undefined) {
+        sketchStore.restoreSnapshot({
+          sketches: snapshot.sketches,
+          activeSketchId: snapshot.activeSketchId ?? null,
+        });
+      }
       triggerPipeline(100);
     }
   }
@@ -107,6 +135,19 @@
 
   function toggleCodeMode() {
     scene.setCodeMode(scene.codeMode === 'parametric' ? 'manual' : 'parametric');
+  }
+
+  function enterSketch(plane: SketchPlane) {
+    sketchStore.enterSketchMode(plane);
+  }
+
+  function setSketchTool(tool: SketchToolId) {
+    sketchStore.setSketchTool(tool);
+  }
+
+  function handleFinishSketch() {
+    sketchStore.exitSketchMode();
+    triggerPipeline(100);
   }
 
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
@@ -121,6 +162,14 @@
     { id: 'add-cylinder', label: 'Cyl', shortcut: '2' },
     { id: 'add-sphere', label: 'Sphere', shortcut: '3' },
     { id: 'add-cone', label: 'Cone', shortcut: '4' },
+  ];
+
+  const sketchToolButtons: { id: SketchToolId; label: string; shortcut: string }[] = [
+    { id: 'sketch-select', label: 'Select', shortcut: 'V' },
+    { id: 'sketch-line', label: 'Line', shortcut: 'L' },
+    { id: 'sketch-rect', label: 'Rect', shortcut: 'R' },
+    { id: 'sketch-circle', label: 'Circle', shortcut: 'C' },
+    { id: 'sketch-arc', label: 'Arc', shortcut: 'A' },
   ];
 </script>
 
@@ -169,78 +218,140 @@
 
     <div class="toolbar-separator"></div>
 
-    <!-- Selection / Transform tools -->
-    {#each toolButtons as btn}
+    {#if sketchStore.isInSketchMode}
+      <!-- Sketch mode tools -->
+      <button class="toolbar-btn sketch-finish-btn" onclick={handleFinishSketch} title="Finish Sketch (Escape)">
+        Finish
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      {#each sketchToolButtons as btn}
+        <button
+          class="toolbar-btn tool-btn"
+          class:tool-active-sketch={sketchStore.activeSketchTool === btn.id}
+          onclick={() => setSketchTool(btn.id)}
+          title="{btn.label} ({btn.shortcut})"
+        >
+          {btn.label}
+        </button>
+      {/each}
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Snap toggle -->
       <button
-        class="toolbar-btn tool-btn"
-        class:tool-active={toolStore.activeTool === btn.id}
-        onclick={() => setTool(btn.id)}
-        title="{btn.label} ({btn.shortcut})"
+        class="toolbar-btn snap-btn"
+        class:snap-active={sketchStore.sketchSnap !== null}
+        onclick={() => sketchStore.setSketchSnap(sketchStore.sketchSnap ? null : 0.5)}
+        title="Toggle sketch grid snap (0.5 units)"
+      >
+        Snap: 0.5
+      </button>
+    {:else}
+      <!-- Normal 3D tools -->
+
+      <!-- Selection / Transform tools -->
+      {#each toolButtons as btn}
+        <button
+          class="toolbar-btn tool-btn"
+          class:tool-active={toolStore.activeTool === btn.id}
+          onclick={() => setTool(btn.id)}
+          title="{btn.label} ({btn.shortcut})"
+          disabled={scene.codeMode !== 'parametric'}
+        >
+          {btn.label}
+        </button>
+      {/each}
+
+      <!-- Snap controls (shown when a transform tool is active) -->
+      {#if toolStore.activeTool === 'translate'}
+        <button
+          class="toolbar-btn snap-btn"
+          class:snap-active={toolStore.translateSnap !== null}
+          onclick={() => toolStore.setTranslateSnap(toolStore.translateSnap ? null : 1)}
+          title="Toggle translation snap (1 unit)"
+        >
+          Snap: 1u
+        </button>
+      {/if}
+      {#if toolStore.activeTool === 'rotate'}
+        <button
+          class="toolbar-btn snap-btn"
+          class:snap-active={toolStore.rotationSnap !== null}
+          onclick={() => toolStore.setRotationSnap(toolStore.rotationSnap ? null : 15)}
+          title="Toggle rotation snap (15 degrees)"
+        >
+          Snap: 15°
+        </button>
+      {/if}
+      {#if toolStore.activeTool === 'scale'}
+        <button
+          class="toolbar-btn snap-btn"
+          class:snap-active={toolStore.uniformScale}
+          onclick={() => toolStore.setUniformScale(!toolStore.uniformScale)}
+          title="Toggle uniform scaling (all axes equal)"
+        >
+          Uniform
+        </button>
+      {/if}
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Primitive tools -->
+      {#each primitiveButtons as btn}
+        <button
+          class="toolbar-btn tool-btn"
+          class:tool-active={toolStore.activeTool === btn.id}
+          onclick={() => setTool(btn.id)}
+          title="{btn.label} ({btn.shortcut})"
+          disabled={scene.codeMode !== 'parametric'}
+        >
+          {btn.label}
+        </button>
+      {/each}
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Sketch plane buttons -->
+      <button
+        class="toolbar-btn sketch-btn"
+        onclick={() => enterSketch('XY')}
+        title="Start sketch on XY plane"
         disabled={scene.codeMode !== 'parametric'}
       >
-        {btn.label}
+        Sketch XY
       </button>
-    {/each}
-
-    <!-- Snap controls (shown when a transform tool is active) -->
-    {#if toolStore.activeTool === 'translate'}
       <button
-        class="toolbar-btn snap-btn"
-        class:snap-active={toolStore.translateSnap !== null}
-        onclick={() => toolStore.setTranslateSnap(toolStore.translateSnap ? null : 1)}
-        title="Toggle translation snap (1 unit)"
-      >
-        Snap: 1u
-      </button>
-    {/if}
-    {#if toolStore.activeTool === 'rotate'}
-      <button
-        class="toolbar-btn snap-btn"
-        class:snap-active={toolStore.rotationSnap !== null}
-        onclick={() => toolStore.setRotationSnap(toolStore.rotationSnap ? null : 15)}
-        title="Toggle rotation snap (15 degrees)"
-      >
-        Snap: 15°
-      </button>
-    {/if}
-    {#if toolStore.activeTool === 'scale'}
-      <button
-        class="toolbar-btn snap-btn"
-        class:snap-active={toolStore.uniformScale}
-        onclick={() => toolStore.setUniformScale(!toolStore.uniformScale)}
-        title="Toggle uniform scaling (all axes equal)"
-      >
-        Uniform
-      </button>
-    {/if}
-
-    <div class="toolbar-separator"></div>
-
-    <!-- Primitive tools -->
-    {#each primitiveButtons as btn}
-      <button
-        class="toolbar-btn tool-btn"
-        class:tool-active={toolStore.activeTool === btn.id}
-        onclick={() => setTool(btn.id)}
-        title="{btn.label} ({btn.shortcut})"
+        class="toolbar-btn sketch-btn"
+        onclick={() => enterSketch('XZ')}
+        title="Start sketch on XZ plane"
         disabled={scene.codeMode !== 'parametric'}
       >
-        {btn.label}
+        Sketch XZ
       </button>
-    {/each}
+      <button
+        class="toolbar-btn sketch-btn"
+        onclick={() => enterSketch('YZ')}
+        title="Start sketch on YZ plane"
+        disabled={scene.codeMode !== 'parametric'}
+      >
+        Sketch YZ
+      </button>
 
-    <div class="toolbar-separator"></div>
+      <div class="toolbar-separator"></div>
 
-    <!-- Code mode toggle -->
-    <button
-      class="toolbar-btn mode-btn"
-      class:mode-parametric={scene.codeMode === 'parametric'}
-      class:mode-manual={scene.codeMode === 'manual'}
-      onclick={toggleCodeMode}
-      title="Toggle between parametric and manual code mode"
-    >
-      {scene.codeMode === 'parametric' ? 'Parametric' : 'Manual'}
-    </button>
+      <!-- Code mode toggle -->
+      <button
+        class="toolbar-btn mode-btn"
+        class:mode-parametric={scene.codeMode === 'parametric'}
+        class:mode-manual={scene.codeMode === 'manual'}
+        onclick={toggleCodeMode}
+        title="Toggle between parametric and manual code mode"
+      >
+        {scene.codeMode === 'parametric' ? 'Parametric' : 'Manual'}
+      </button>
+    {/if}
 
     {#if statusMessage}
       <span class="toolbar-status">{statusMessage}</span>
@@ -329,6 +440,12 @@
     color: var(--accent);
   }
 
+  .tool-btn.tool-active-sketch {
+    background: rgba(249, 226, 175, 0.15);
+    border-color: #f9e2af;
+    color: #f9e2af;
+  }
+
   .snap-btn {
     font-size: 10px;
     padding: 2px 6px;
@@ -340,6 +457,29 @@
     color: var(--success);
     border-color: var(--success);
     background: rgba(166, 227, 161, 0.1);
+  }
+
+  .sketch-btn {
+    font-size: 11px;
+    color: #f9e2af;
+    border: 1px solid rgba(249, 226, 175, 0.3);
+  }
+
+  .sketch-btn:hover {
+    background: rgba(249, 226, 175, 0.1);
+    border-color: #f9e2af;
+  }
+
+  .sketch-finish-btn {
+    font-weight: 600;
+    font-size: 11px;
+    color: #f9e2af;
+    border: 1px solid #f9e2af;
+    background: rgba(249, 226, 175, 0.1);
+  }
+
+  .sketch-finish-btn:hover {
+    background: rgba(249, 226, 175, 0.2);
   }
 
   .mode-btn {

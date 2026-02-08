@@ -3,9 +3,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, Point2D } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
+import { SketchRenderer } from '$lib/services/sketch-renderer';
+import { getSketchPlaneInfo, threeToSketchPos, getSketchViewCamera, snapToSketchGrid } from '$lib/services/sketch-plane-utils';
 
 const DEFAULT_COLOR = 0x89b4fa;
 const SELECTED_EMISSIVE = 0x335588;
@@ -41,6 +43,9 @@ export class ViewportEngine {
 
   // Placement preview ghost
   private ghostMesh: THREE.Group | null = null;
+
+  // Sketch support
+  private sketchRenderer: SketchRenderer;
 
   // Raycaster
   private raycaster = new THREE.Raycaster();
@@ -158,6 +163,9 @@ export class ViewportEngine {
 
     const hemisphereLight = new THREE.HemisphereLight(0x89b4fa, 0x1a1a2e, 0.3);
     this.scene.add(hemisphereLight);
+
+    // Sketch renderer
+    this.sketchRenderer = new SketchRenderer(this.scene);
 
     // Resize observer
     this.resizeObserver = new ResizeObserver(() => {
@@ -724,6 +732,85 @@ export class ViewportEngine {
     this.ghostMesh = null;
   }
 
+  // ─── Public API: Sketch Mode ─────────────────────
+
+  /**
+   * Enter sketch mode: initialize renderer, animate camera to face the plane.
+   */
+  enterSketchMode(sketch: Sketch): void {
+    this.sketchRenderer.enterSketch(sketch);
+
+    // Animate camera to face the sketch plane
+    const planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
+    const { position, target } = getSketchViewCamera(planeInfo);
+    this.animateCameraTo(position, target);
+  }
+
+  /**
+   * Exit sketch mode: cleanup renderer.
+   */
+  exitSketchMode(): void {
+    this.sketchRenderer.exitSketch();
+  }
+
+  /**
+   * Sync sketch entity rendering.
+   */
+  syncSketchEntities(sketch: Sketch, selectedIds: SketchEntityId[], hoveredId: SketchEntityId | null): void {
+    this.sketchRenderer.syncEntities(sketch, selectedIds, hoveredId);
+  }
+
+  /**
+   * Update sketch preview (rubber-band).
+   */
+  updateSketchPreview(tool: SketchToolId, points: Point2D[], previewPoint: Point2D | null, sketch: Sketch): void {
+    this.sketchRenderer.updatePreview(tool, points, previewPoint, sketch);
+  }
+
+  /**
+   * Clear sketch preview.
+   */
+  clearSketchPreview(): void {
+    this.sketchRenderer.clearPreview();
+  }
+
+  /**
+   * Render all non-active sketches as static lines.
+   */
+  syncInactiveSketches(sketches: Sketch[], activeSketchId: SketchId | null): void {
+    this.sketchRenderer.syncInactiveSketches(sketches, activeSketchId);
+  }
+
+  /**
+   * Raycast to the sketch plane, returning the 2D sketch coordinate.
+   */
+  getSketchPlaneIntersection(event: PointerEvent, sketch: Sketch): Point2D | null {
+    this.updateNdc(event);
+    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+
+    const planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
+    const intersection = new THREE.Vector3();
+    const hit = this.raycaster.ray.intersectPlane(planeInfo.plane, intersection);
+    if (!hit) return null;
+
+    return threeToSketchPos(intersection, planeInfo);
+  }
+
+  /**
+   * Hit-test sketch entities at the given pointer event position.
+   */
+  raycastSketchEntities(event: PointerEvent, sketch: Sketch, threshold = 0.5): SketchEntityId | null {
+    this.updateNdc(event);
+    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+
+    const planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
+    const intersection = new THREE.Vector3();
+    const hit = this.raycaster.ray.intersectPlane(planeInfo.plane, intersection);
+    if (!hit) return null;
+
+    return this.sketchRenderer.raycastSketchEntities(intersection, sketch, threshold);
+  }
+
   // ─── Public API: Geometry Creation ───────────────
 
   private createGeometry(params: PrimitiveParams): THREE.BufferGeometry {
@@ -882,6 +969,7 @@ export class ViewportEngine {
     this.viewHelper.dispose();
     this.controls.dispose();
     this.clearGhost();
+    this.sketchRenderer.dispose();
     this.removeAllObjects();
     this.clearModel();
     this.renderer.dispose();

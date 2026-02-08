@@ -3,9 +3,12 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
+  import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { handleSketchClick } from '$lib/services/sketch-interaction';
+  import { snapToSketchGrid } from '$lib/services/sketch-plane-utils';
   import ViewControls from '$lib/components/ViewControls.svelte';
   import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams } from '$lib/types/cad';
   import type * as THREE from 'three';
@@ -16,6 +19,7 @@
   const viewportStore = getViewportStore();
   const scene = getSceneStore();
   const tools = getToolStore();
+  const sketchStore = getSketchStore();
   const history = getHistoryStore();
 
   // Tracking for diff-based preview mesh sync
@@ -28,10 +32,31 @@
   let recentlyDragged = false;
 
   // Pre-drag snapshot for undo
-  let preDragSnapshot: { objects: import('$lib/types/cad').SceneObject[]; selectedIds: import('$lib/types/cad').ObjectId[] } | null = null;
+  let preDragSnapshot: ReturnType<typeof captureFullSnapshot> | null = null;
 
   // Track previous code mode for mode-switch detection
   let prevCodeMode: string | null = null;
+
+  // ── Full snapshot helpers (scene + sketch) ──
+  function captureFullSnapshot() {
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    return {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+    };
+  }
+
+  function restoreFullSnapshot(snapshot: ReturnType<typeof captureFullSnapshot>) {
+    scene.restoreSnapshot({ objects: snapshot.objects, selectedIds: snapshot.selectedIds });
+    if (snapshot.sketches !== undefined) {
+      sketchStore.restoreSnapshot({
+        sketches: snapshot.sketches,
+        activeSketchId: snapshot.activeSketchId ?? null,
+      });
+    }
+  }
 
   onMount(() => {
     if (!containerRef) return;
@@ -60,7 +85,7 @@
     engine.onTransformChange((id, group) => {
       // Capture snapshot before the first change in this drag
       if (transformDraggingId === null) {
-        preDragSnapshot = scene.snapshot();
+        preDragSnapshot = captureFullSnapshot();
       }
       transformDraggingId = id;
       // Convert Three.js position/rotation to CadQuery coords and update scene store
@@ -179,6 +204,7 @@
     if (viewportStore.pendingClear && engine) {
       engine.clearModel();
       engine.removeAllObjects();
+      engine.exitSketchMode();
       prevObjectMap = new Map();
       viewportStore.setPendingClear(false);
       viewportStore.setHasModel(false);
@@ -331,8 +357,86 @@
     prevCodeMode = mode;
   });
 
+  // ── Sketch mode: enter/exit on engine ──
+  $effect(() => {
+    if (!engine) return;
+
+    const sketch = sketchStore.activeSketch;
+    if (sketch) {
+      engine.enterSketchMode(sketch);
+    } else {
+      engine.exitSketchMode();
+    }
+  });
+
+  // ── Sketch mode: sync entities ──
+  $effect(() => {
+    if (!engine) return;
+
+    const sketch = sketchStore.activeSketch;
+    if (sketch) {
+      engine.syncSketchEntities(sketch, sketchStore.selectedEntityIds, sketchStore.hoveredEntityId);
+    }
+  });
+
+  // ── Sketch mode: update preview ──
+  $effect(() => {
+    if (!engine) return;
+
+    const sketch = sketchStore.activeSketch;
+    if (sketch && sketchStore.isInSketchMode) {
+      engine.updateSketchPreview(
+        sketchStore.activeSketchTool,
+        sketchStore.drawingPoints,
+        sketchStore.previewPoint,
+        sketch,
+      );
+    } else {
+      engine.clearSketchPreview();
+    }
+  });
+
+  // ── Render inactive (finished) sketches ──
+  $effect(() => {
+    if (!engine) return;
+    engine.syncInactiveSketches(sketchStore.sketches, sketchStore.activeSketchId);
+  });
+
   function handlePointerMove(e: PointerEvent) {
-    if (!engine || scene.codeMode !== 'parametric') return;
+    if (!engine) return;
+
+    // ── Sketch mode pointer move ──
+    if (sketchStore.isInSketchMode) {
+      const sketch = sketchStore.activeSketch;
+      if (!sketch) return;
+
+      const rawPt = engine.getSketchPlaneIntersection(e, sketch);
+      if (!rawPt) return;
+
+      // Snap if enabled
+      const pt = sketchStore.sketchSnap ? snapToSketchGrid(rawPt, sketchStore.sketchSnap) : rawPt;
+      sketchStore.setPreviewPoint(pt);
+
+      // Hover detection for select tool
+      if (sketchStore.activeSketchTool === 'sketch-select') {
+        const hitId = engine.raycastSketchEntities(e, sketch);
+        sketchStore.setHoveredEntity(hitId);
+      }
+
+      // Set cursor
+      if (containerRef) {
+        if (sketchStore.activeSketchTool === 'sketch-select') {
+          const hitId = engine.raycastSketchEntities(e, sketch);
+          containerRef.style.cursor = hitId ? 'pointer' : '';
+        } else {
+          containerRef.style.cursor = 'crosshair';
+        }
+      }
+      return;
+    }
+
+    // ── Normal 3D mode pointer move ──
+    if (scene.codeMode !== 'parametric') return;
 
     // Update ghost position when placing a primitive
     if (tools.isAddTool) {
@@ -358,9 +462,62 @@
   }
 
   function handlePointerDown(e: PointerEvent) {
-    if (!engine || scene.codeMode !== 'parametric') return;
+    if (!engine) return;
     // Only handle left-click
     if (e.button !== 0) return;
+
+    // ── Sketch mode pointer down ──
+    if (sketchStore.isInSketchMode) {
+      const sketch = sketchStore.activeSketch;
+      if (!sketch) return;
+
+      const tool = sketchStore.activeSketchTool;
+
+      // Select tool: select sketch entities
+      if (tool === 'sketch-select') {
+        const hitId = engine.raycastSketchEntities(e, sketch);
+        sketchStore.selectEntity(hitId, e.shiftKey);
+        return;
+      }
+
+      // Drawing tools
+      const rawPt = engine.getSketchPlaneIntersection(e, sketch);
+      if (!rawPt) return;
+
+      const pt = sketchStore.sketchSnap ? snapToSketchGrid(rawPt, sketchStore.sketchSnap) : rawPt;
+
+      const action = handleSketchClick(
+        tool,
+        pt,
+        sketchStore.drawingPoints,
+        () => sketchStore.newEntityId(),
+      );
+
+      switch (action.type) {
+        case 'advance':
+          // Clear and set drawing points
+          sketchStore.clearDrawingState();
+          for (const p of action.points) {
+            sketchStore.addDrawingPoint(p);
+          }
+          break;
+        case 'create':
+          // Push snapshot for undo before adding entity
+          history.pushSnapshot(captureFullSnapshot());
+          sketchStore.addEntity(action.entity);
+          // Set chain points or clear
+          sketchStore.clearDrawingState();
+          for (const p of action.chainPoints) {
+            sketchStore.addDrawingPoint(p);
+          }
+          triggerPipeline(100);
+          break;
+      }
+      return;
+    }
+
+    // ── Normal 3D mode ──
+    if (scene.codeMode !== 'parametric') return;
 
     // Don't select during or right after gizmo drag
     if (engine.isTransformDragging() || recentlyDragged) return;
@@ -372,7 +529,7 @@
       const primitiveType = activeTool.replace('add-', '') as PrimitiveType;
       const gridPos = engine.getGridIntersection(e);
       if (gridPos) {
-        history.pushSnapshot(scene.snapshot());
+        history.pushSnapshot(captureFullSnapshot());
         const obj = scene.addObject(primitiveType, gridPos);
         scene.select(obj.id);
         tools.revertToSelect();
@@ -391,6 +548,20 @@
       }
     }
   }
+
+  function handleFinishSketch() {
+    sketchStore.exitSketchMode();
+    triggerPipeline(100);
+  }
+
+  // Sketch tool hint text
+  const sketchToolHints: Record<string, string> = {
+    'sketch-select': 'Click to select entities, Shift+click for multi-select',
+    'sketch-line': 'Click to set start point, click again to draw line. Escape to stop chaining.',
+    'sketch-rect': 'Click first corner, then opposite corner',
+    'sketch-circle': 'Click center, then drag to set radius',
+    'sketch-arc': 'Click start point, end point, then mid point of arc',
+  };
 </script>
 
 <div
@@ -413,16 +584,34 @@
   <ViewControls />
 
   <!-- Scene info overlay -->
-  {#if scene.codeMode === 'parametric' && scene.objects.length > 0}
+  {#if scene.codeMode === 'parametric' && scene.objects.length > 0 && !sketchStore.isInSketchMode}
     <div class="scene-info">
       {scene.objects.length} object{scene.objects.length !== 1 ? 's' : ''}
     </div>
   {/if}
 
-  <!-- Tool hint overlay -->
-  {#if tools.isAddTool}
+  <!-- Tool hint overlay (3D mode) -->
+  {#if tools.isAddTool && !sketchStore.isInSketchMode}
     <div class="tool-hint">
       Click on the grid to place {tools.activeTool.replace('add-', '')}
+    </div>
+  {/if}
+
+  <!-- Sketch mode overlay -->
+  {#if sketchStore.isInSketchMode}
+    <div class="sketch-overlay">
+      <div class="sketch-hint">
+        {sketchToolHints[sketchStore.activeSketchTool] ?? ''}
+      </div>
+      <button class="finish-sketch-btn" onclick={handleFinishSketch}>
+        Finish Sketch
+      </button>
+    </div>
+    <div class="scene-info sketch-info">
+      Sketch: {sketchStore.activeSketch?.name ?? ''} ({sketchStore.activeSketch?.plane})
+      {#if sketchStore.activeSketch}
+        &middot; {sketchStore.activeSketch.entities.length} entit{sketchStore.activeSketch.entities.length !== 1 ? 'ies' : 'y'}
+      {/if}
     </div>
   {/if}
 </div>
@@ -476,6 +665,11 @@
     z-index: 2;
   }
 
+  .sketch-info {
+    color: #f9e2af;
+    border: 1px solid rgba(249, 226, 175, 0.3);
+  }
+
   .tool-hint {
     position: absolute;
     top: 8px;
@@ -490,5 +684,44 @@
     border: 1px solid var(--accent);
     pointer-events: none;
     z-index: 2;
+  }
+
+  .sketch-overlay {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 3;
+  }
+
+  .sketch-hint {
+    font-size: 11px;
+    color: #f9e2af;
+    background: rgba(24, 24, 37, 0.9);
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(249, 226, 175, 0.4);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  .finish-sketch-btn {
+    background: rgba(249, 226, 175, 0.15);
+    border: 1px solid #f9e2af;
+    color: #f9e2af;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    white-space: nowrap;
+  }
+
+  .finish-sketch-btn:hover {
+    background: rgba(249, 226, 175, 0.25);
   }
 </style>

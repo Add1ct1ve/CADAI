@@ -15,9 +15,10 @@ import {
   showOpenDialog,
 } from '$lib/services/tauri';
 import { getHistoryStore } from '$lib/stores/history.svelte';
+import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { clearDraft } from '$lib/services/autosave';
 import type { RustChatMessage, ChatMessage } from '$lib/types';
-import type { SceneObject, CodeMode, CameraState } from '$lib/types/cad';
+import type { SceneObject, CodeMode, CameraState, Sketch } from '$lib/types/cad';
 
 /**
  * Convert chat messages to the Rust format for project saving.
@@ -36,6 +37,7 @@ export async function projectNew(): Promise<string> {
   const project = getProjectStore();
   const chatStore = getChatStore();
   const scene = getSceneStore();
+  const sketchStore = getSketchStore();
 
   if (project.modified) {
     const confirmed = window.confirm('You have unsaved changes. Create a new project anyway?');
@@ -44,6 +46,7 @@ export async function projectNew(): Promise<string> {
   project.reset();
   chatStore.clear();
   scene.clearAll();
+  sketchStore.clearAll();
   scene.setCodeMode('parametric');
   getHistoryStore().clear();
   const viewportStore = getViewportStore();
@@ -77,9 +80,16 @@ export async function projectOpen(): Promise<string> {
   }
 
   // Restore scene state from v2 format
+  const sketchStore = getSketchStore();
   if (file.scene) {
-    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState };
+    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[] };
     scene.restore({ objects: sceneData.objects, codeMode: sceneData.codeMode });
+    // Restore sketches if present
+    if (sceneData.sketches) {
+      sketchStore.restore({ sketches: sceneData.sketches });
+    } else {
+      sketchStore.clearAll();
+    }
     // Clear viewport first so meshes get rebuilt from restored objects
     viewportStore.setPendingClear(true);
     // Restore camera after a tick to allow viewport to process
@@ -89,6 +99,7 @@ export async function projectOpen(): Promise<string> {
   } else {
     // V1 file: just clear scene, keep manual mode
     scene.clearAll();
+    sketchStore.clearAll();
     scene.setCodeMode('manual');
     viewportStore.setPendingClear(true);
   }
@@ -114,9 +125,10 @@ export async function projectSave(): Promise<string> {
 
   // Build scene snapshot for v2 format
   const sceneData = scene.serialize();
+  const sketchData = getSketchStore().serialize();
   const camera = viewportStore.getCameraState();
   const scenePayload = camera
-    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera }
+    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches }
     : undefined;
 
   await saveProject(project.name, project.code, rustMessages, path, scenePayload);

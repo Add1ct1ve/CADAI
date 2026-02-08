@@ -1,8 +1,10 @@
-import type { SceneObject, ObjectId } from '$lib/types/cad';
+import type { SceneObject, ObjectId, Sketch, SketchId } from '$lib/types/cad';
 
 export interface SceneSnapshot {
   objects: SceneObject[];
   selectedIds: ObjectId[];
+  sketches?: Sketch[];
+  activeSketchId?: SketchId | null;
 }
 
 const MAX_HISTORY = 50;
