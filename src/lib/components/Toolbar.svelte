@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { projectNew, projectOpen, projectSave, projectExportStl } from '$lib/services/project-actions';
+  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep } from '$lib/services/project-actions';
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
+  import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { triggerPipeline } from '$lib/services/execution-pipeline';
   import type { ToolId } from '$lib/types/cad';
 
   interface Props {
@@ -12,6 +14,7 @@
 
   const toolStore = getToolStore();
   const scene = getSceneStore();
+  const history = getHistoryStore();
 
   let isBusy = $state(false);
   let statusMessage = $state('');
@@ -56,7 +59,7 @@
     }
   }
 
-  async function handleExport() {
+  async function handleExportStl() {
     try {
       isBusy = true;
       showStatus('Exporting STL...');
@@ -66,6 +69,35 @@
       showStatus(`Export failed: ${err}`);
     } finally {
       isBusy = false;
+    }
+  }
+
+  async function handleExportStep() {
+    try {
+      isBusy = true;
+      showStatus('Exporting STEP...');
+      const result = await projectExportStep();
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`Export failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  function handleUndo() {
+    const snapshot = history.undo(scene.snapshot());
+    if (snapshot) {
+      scene.restoreSnapshot(snapshot);
+      triggerPipeline(100);
+    }
+  }
+
+  function handleRedo() {
+    const snapshot = history.redo(scene.snapshot());
+    if (snapshot) {
+      scene.restoreSnapshot(snapshot);
+      triggerPipeline(100);
     }
   }
 
@@ -108,8 +140,31 @@
     <button class="toolbar-btn" onclick={handleSave} title="Save Project (Ctrl+S)" disabled={isBusy}>
       Save
     </button>
-    <button class="toolbar-btn" onclick={handleExport} title="Export STL" disabled={isBusy}>
-      Export
+    <button class="toolbar-btn" onclick={handleExportStl} title="Export STL" disabled={isBusy}>
+      STL
+    </button>
+    <button class="toolbar-btn" onclick={handleExportStep} title="Export STEP" disabled={isBusy}>
+      STEP
+    </button>
+
+    <div class="toolbar-separator"></div>
+
+    <!-- Undo / Redo -->
+    <button
+      class="toolbar-btn"
+      onclick={handleUndo}
+      title="Undo (Ctrl+Z)"
+      disabled={!history.canUndo || scene.codeMode !== 'parametric'}
+    >
+      Undo
+    </button>
+    <button
+      class="toolbar-btn"
+      onclick={handleRedo}
+      title="Redo (Ctrl+Shift+Z)"
+      disabled={!history.canRedo || scene.codeMode !== 'parametric'}
+    >
+      Redo
     </button>
 
     <div class="toolbar-separator"></div>

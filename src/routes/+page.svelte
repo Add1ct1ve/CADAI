@@ -12,6 +12,8 @@
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { projectNew, projectSave } from '$lib/services/project-actions';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
+  import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { startAutosave, stopAutosave } from '$lib/services/autosave';
   import type { ToolId } from '$lib/types/cad';
   import { onMount } from 'svelte';
 
@@ -19,11 +21,17 @@
   const project = getProjectStore();
   const scene = getSceneStore();
   const tools = getToolStore();
+  const history = getHistoryStore();
 
   let settingsOpen = $state(false);
 
   onMount(() => {
     settings.load();
+    startAutosave();
+
+    return () => {
+      stopAutosave();
+    };
   });
 
   function handleKeydown(e: KeyboardEvent) {
@@ -45,6 +53,18 @@
     if (ctrl && e.key === 'r') {
       e.preventDefault();
       runCurrentCode();
+      return;
+    }
+
+    // Undo/Redo (always active, parametric mode only)
+    if (ctrl && e.key === 'z' && !e.shiftKey && scene.codeMode === 'parametric') {
+      e.preventDefault();
+      performUndo();
+      return;
+    }
+    if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && scene.codeMode === 'parametric') {
+      e.preventDefault();
+      performRedo();
       return;
     }
 
@@ -76,6 +96,7 @@
     if ((e.key === 'Delete' || e.key === 'Backspace') && scene.codeMode === 'parametric') {
       if (scene.selectedIds.length > 0) {
         e.preventDefault();
+        history.pushSnapshot(scene.snapshot());
         scene.deleteSelected();
         triggerPipeline(100);
       }
@@ -89,6 +110,22 @@
       } else {
         scene.clearSelection();
       }
+    }
+  }
+
+  function performUndo() {
+    const snapshot = history.undo(scene.snapshot());
+    if (snapshot) {
+      scene.restoreSnapshot(snapshot);
+      triggerPipeline(100);
+    }
+  }
+
+  function performRedo() {
+    const snapshot = history.redo(scene.snapshot());
+    if (snapshot) {
+      scene.restoreSnapshot(snapshot);
+      triggerPipeline(100);
     }
   }
 

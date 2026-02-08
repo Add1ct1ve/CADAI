@@ -46,15 +46,19 @@ def main():
         print("Error: Code must assign final geometry to 'result' variable.", file=sys.stderr)
         sys.exit(3)
 
-    # Export to STL
+    # Export based on file extension
     try:
         import cadquery as cq
-        cq.exporters.export(result, output_file, cq.exporters.ExportTypes.STL)
+        ext = os.path.splitext(output_file)[1].lower()
+        if ext in ('.step', '.stp'):
+            cq.exporters.export(result, output_file, cq.exporters.ExportTypes.STEP)
+        else:
+            cq.exporters.export(result, output_file, cq.exporters.ExportTypes.STL)
     except Exception:
         traceback.print_exc()
         sys.exit(4)
 
-    print(f"STL exported to {output_file}")
+    print(f"Exported to {output_file}")
 
 
 if __name__ == "__main__":

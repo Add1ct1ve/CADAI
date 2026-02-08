@@ -80,3 +80,51 @@ pub fn execute_cadquery(
         stderr,
     })
 }
+
+/// Execute CadQuery Python code and export directly to a specific file path.
+///
+/// The runner script auto-detects the export format based on the output file extension
+/// (.step/.stp → STEP, otherwise STL).
+pub fn execute_cadquery_to_file(
+    venv_dir: &Path,
+    runner_script: &Path,
+    code: &str,
+    output_path: &str,
+) -> Result<(), AppError> {
+    let python = venv::get_venv_python(venv_dir);
+
+    if !python.exists() {
+        return Err(AppError::PythonNotFound);
+    }
+
+    let temp_dir = std::env::temp_dir().join("cadai-studio");
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let input_file = temp_dir.join("input.py");
+    std::fs::write(&input_file, code)?;
+
+    let output = Command::new(&python)
+        .args([
+            runner_script.to_string_lossy().as_ref(),
+            input_file.to_string_lossy().as_ref(),
+            output_path,
+        ])
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        let exit_code = output.status.code().unwrap_or(-1);
+        let error_msg = match exit_code {
+            2 => format!("CadQuery execution error:\n{}", stderr),
+            3 => "Code must assign final geometry to 'result' variable.".to_string(),
+            4 => format!("Export error:\n{}", stderr),
+            _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
+        };
+        return Err(AppError::CadQueryError(error_msg));
+    }
+
+    let _ = std::fs::remove_file(&input_file);
+
+    Ok(())
+}

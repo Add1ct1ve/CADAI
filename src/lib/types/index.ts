@@ -129,4 +129,9 @@ export interface ProjectFile {
   code: string;
   messages: RustChatMessage[];
   version: number;
+  scene?: {
+    objects: import('$lib/types/cad').SceneObject[];
+    codeMode: import('$lib/types/cad').CodeMode;
+    camera: import('$lib/types/cad').CameraState;
+  };
 }

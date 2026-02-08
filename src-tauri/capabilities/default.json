@@ -15,6 +15,13 @@
     "fs:default",
     "fs:allow-read",
     "fs:allow-write",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-exists",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$APPDATA/**" }]
+    },
     "shell:default",
     "shell:allow-execute",
     "shell:allow-spawn"

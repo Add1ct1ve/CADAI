@@ -11,6 +11,8 @@ pub struct ProjectFile {
     pub code: String,
     pub messages: Vec<ChatMessage>,
     pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scene: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -19,12 +21,14 @@ pub async fn save_project(
     code: String,
     messages: Vec<ChatMessage>,
     path: String,
+    scene: Option<serde_json::Value>,
 ) -> Result<(), AppError> {
     let project = ProjectFile {
         name,
         code,
         messages,
-        version: 1,
+        version: 2,
+        scene,
     };
     let json = serde_json::to_string_pretty(&project)?;
     std::fs::write(&path, json)?;
@@ -59,4 +63,24 @@ pub async fn export_stl(
     std::fs::write(&output_path, &result.stl_data)?;
 
     Ok(format!("STL exported to {}", output_path))
+}
+
+#[tauri::command]
+pub async fn export_step(
+    code: String,
+    output_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    let venv_path = state.venv_path.lock().unwrap().clone();
+    let venv_dir = venv_path
+        .ok_or(AppError::CadQueryError("Python environment not set up".into()))?;
+
+    let runner_script = crate::commands::cad::find_runner_script()?;
+
+    // The runner auto-detects .step extension and exports STEP format
+    crate::python::runner::execute_cadquery_to_file(
+        &venv_dir, &runner_script, &code, &output_path,
+    )?;
+
+    Ok(format!("STEP exported to {}", output_path))
 }

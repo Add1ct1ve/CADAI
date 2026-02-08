@@ -42,6 +42,7 @@ pub fn run() {
             commands::project::save_project,
             commands::project::load_project,
             commands::project::export_stl,
+            commands::project::export_step,
             commands::parallel::generate_parallel,
         ])
         .run(tauri::generate_context!())

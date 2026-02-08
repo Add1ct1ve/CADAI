@@ -1,10 +1,13 @@
 import type { ViewportState } from '$lib/types';
+import type { ViewportEngine } from '$lib/services/viewport-engine';
+import type { CameraState } from '$lib/types/cad';
 
 let isLoading = $state(false);
 let hasModel = $state(false);
 let error = $state<string | null>(null);
 let pendingStl = $state<string | null>(null);
 let pendingClear = $state(false);
+let engineRef = $state<ViewportEngine | null>(null);
 
 export function getViewportStore() {
   return {
@@ -37,6 +40,15 @@ export function getViewportStore() {
     },
     setPendingClear(val: boolean) {
       pendingClear = val;
+    },
+    setEngine(engine: ViewportEngine | null) {
+      engineRef = engine;
+    },
+    getCameraState(): CameraState | null {
+      return engineRef?.getCameraState() ?? null;
+    },
+    setCameraState(state: CameraState) {
+      engineRef?.setCameraState(state);
     },
     getState(): ViewportState {
       return { isLoading, hasModel, error };
