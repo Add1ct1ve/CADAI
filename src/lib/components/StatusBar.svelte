@@ -2,11 +2,13 @@
   import { onMount } from 'svelte';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
+  import { getSceneStore } from '$lib/stores/scene.svelte';
   import { checkPython } from '$lib/services/tauri';
   import type { PythonStatus } from '$lib/types';
 
   const settings = getSettingsStore();
   const viewport = getViewportStore();
+  const scene = getSceneStore();
 
   let pythonInfo = $state<PythonStatus | null>(null);
   let pythonCheckError = $state(false);
@@ -32,6 +34,13 @@
       : 'AI: Not configured';
   });
 
+  let selectionText = $derived(() => {
+    const sel = scene.selectedObjects;
+    if (sel.length === 0) return '';
+    if (sel.length === 1) return `Selected: ${sel[0].name}`;
+    return `${sel.length} objects selected`;
+  });
+
   onMount(async () => {
     try {
       pythonInfo = await checkPython();
@@ -44,6 +53,10 @@
 <div class="status-bar">
   <div class="status-left">
     <span class="status-item status-text">{statusText()}</span>
+    {#if selectionText()}
+      <span class="status-separator">|</span>
+      <span class="status-item selection-text">{selectionText()}</span>
+    {/if}
   </div>
   <div class="status-right">
     <span class="status-item">{pythonStatusText()}</span>
@@ -83,5 +96,9 @@
   .status-separator {
     color: var(--border);
     font-size: 11px;
+  }
+
+  .selection-text {
+    color: var(--accent);
   }
 </style>

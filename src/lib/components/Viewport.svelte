@@ -78,6 +78,12 @@
       recentlyDragged = true;
       setTimeout(() => { recentlyDragged = false; }, 50);
 
+      // Apply uniform scale if toggled on
+      if (tools.uniformScale) {
+        const s = Math.max(scale.x, scale.y, scale.z);
+        scale.set(s, s, s);
+      }
+
       const obj = scene.getObjectById(id);
       if (!obj) return;
 
@@ -241,6 +247,17 @@
     } else {
       engine.setTransformMode(null);
     }
+  });
+
+  // ── Sync snap settings to engine ──
+  $effect(() => {
+    if (!engine) return;
+    engine.setTranslationSnap(tools.translateSnap);
+  });
+
+  $effect(() => {
+    if (!engine) return;
+    engine.setRotationSnap(tools.rotationSnap);
   });
 
   // ── Sync selection → gizmo attachment ──

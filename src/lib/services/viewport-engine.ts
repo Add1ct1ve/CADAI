@@ -9,6 +9,8 @@ import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 const DEFAULT_COLOR = 0x89b4fa;
 const SELECTED_EMISSIVE = 0x335588;
 const HOVERED_EMISSIVE = 0x1a2a44;
+const SELECTED_OUTLINE_COLOR = 0x89b4fa;
+const HOVERED_OUTLINE_COLOR = 0x4a6a8a;
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformCallback = (id: ObjectId, group: THREE.Group) => void;
@@ -235,6 +237,20 @@ export class ViewportEngine {
   }
 
   /**
+   * Set translation snap increment (or null to disable).
+   */
+  setTranslationSnap(value: number | null): void {
+    this.transformControls.setTranslationSnap(value);
+  }
+
+  /**
+   * Set rotation snap in degrees (or null to disable).
+   */
+  setRotationSnap(degrees: number | null): void {
+    this.transformControls.setRotationSnap(degrees ? degrees * Math.PI / 180 : null);
+  }
+
+  /**
    * Check if the gizmo is currently being dragged.
    */
   isTransformDragging(): boolean {
@@ -306,7 +322,7 @@ export class ViewportEngine {
 
     this.scene.remove(group);
     group.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
         child.geometry.dispose();
         if (Array.isArray(child.material)) {
           child.material.forEach((m) => m.dispose());
@@ -379,6 +395,19 @@ export class ViewportEngine {
     const isSelected = this.selectedIds.has(id);
     const isHovered = this.hoveredIdInternal === id;
 
+    // Remove existing outlines
+    const toRemove: THREE.Object3D[] = [];
+    group.traverse((child) => {
+      if (child.userData.isOutline) toRemove.push(child);
+    });
+    for (const obj of toRemove) {
+      obj.parent?.remove(obj);
+      if (obj instanceof THREE.LineSegments) {
+        obj.geometry.dispose();
+        (obj.material as THREE.Material).dispose();
+      }
+    }
+
     group.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
         if (isSelected) {
@@ -390,6 +419,22 @@ export class ViewportEngine {
         } else {
           child.material.emissive.setHex(0x000000);
           child.material.emissiveIntensity = 0;
+        }
+
+        // Add edge outline for selected or hovered
+        if (isSelected || isHovered) {
+          const edgesGeo = new THREE.EdgesGeometry(child.geometry, 30);
+          const color = isSelected ? SELECTED_OUTLINE_COLOR : HOVERED_OUTLINE_COLOR;
+          const lineMat = new THREE.LineBasicMaterial({
+            color,
+            linewidth: 1,
+            transparent: true,
+            opacity: isSelected ? 1.0 : 0.5,
+          });
+          const outline = new THREE.LineSegments(edgesGeo, lineMat);
+          outline.userData.isOutline = true;
+          outline.raycast = () => {}; // Don't interfere with raycasting
+          child.add(outline);
         }
       }
     });
