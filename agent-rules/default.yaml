@@ -219,3 +219,143 @@ response_format:
     - "Never generate code for ambiguous requests without asking"
     - "Never assume dimensions - always ask if not specified"
     - "Never skip validation steps"
+
+# =============================================================================
+# CADQUERY COOKBOOK - REFERENCE PATTERNS
+# =============================================================================
+# Use these as reference for correct CadQuery API usage.
+# Each recipe is a self-contained working example.
+
+cookbook:
+  - title: "Hollow box (shell operation)"
+    description: "Create a box and shell it to make a container with uniform wall thickness"
+    code: |
+      import cadquery as cq
+      W, D, H = 60.0, 40.0, 30.0
+      WALL = 2.0
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .shell(-WALL)
+      )
+
+  - title: "Through-cut slot on a wall face"
+    description: "Select a specific face and cut a slot that goes all the way through"
+    code: |
+      import cadquery as cq
+      W, D, H = 60.0, 40.0, 30.0
+      SLOT_W, SLOT_H = 20.0, 10.0
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          # Select the front face (+X), place workplane, cut through
+          .faces(">X")
+          .workplane()
+          .rect(SLOT_W, SLOT_H)
+          .cutThruAll()
+      )
+
+  - title: "Opposing through-slots on two walls"
+    description: "Cut matching slots on opposite faces - e.g. entry ports on both short sides of a box"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 40.0, 30.0
+      WALL = 2.0
+      SLOT_W, SLOT_H = 20.0, 12.0
+      # Start with a hollow box
+      box = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .shell(-WALL)
+      )
+      # Cut slot on front face (+X)
+      box = (
+          box.faces(">X")
+          .workplane()
+          .rect(SLOT_W, SLOT_H)
+          .cutThruAll()
+      )
+      # Cut slot on back face (-X)
+      result = (
+          box.faces("<X")
+          .workplane()
+          .rect(SLOT_W, SLOT_H)
+          .cutThruAll()
+      )
+
+  - title: "Fillets and chamfers on specific edges"
+    description: "Apply fillets or chamfers to selected edges using edge selectors"
+    code: |
+      import cadquery as cq
+      W, D, H = 50.0, 30.0, 20.0
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          # Fillet only the top edges
+          .edges(">Z")
+          .fillet(2.0)
+          # Chamfer only the bottom edges
+          .edges("<Z")
+          .chamfer(1.0)
+      )
+
+  - title: "Pattern of holes (pushPoints)"
+    description: "Create multiple holes at specific positions using pushPoints"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 60.0, 5.0
+      HOLE_DIA = 5.5
+      # Hole positions as (x, y) tuples on the top face
+      HOLE_POS = [(30, 20), (-30, 20), (30, -20), (-30, -20)]
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .workplane()
+          .pushPoints(HOLE_POS)
+          .hole(HOLE_DIA)
+      )
+
+  - title: "Boolean operations (cut, union, intersect)"
+    description: "Combine two bodies using boolean cut, union, or intersect"
+    code: |
+      import cadquery as cq
+      # Base plate
+      plate = cq.Workplane("XY").box(60, 40, 5)
+      # Cylinder to add on top
+      boss = cq.Workplane("XY").workplane(offset=5).circle(10).extrude(15)
+      # Hole to subtract
+      hole = cq.Workplane("XY").circle(4).extrude(20)
+      # Union the boss onto the plate, then cut the hole
+      result = plate.union(boss).cut(hole)
+
+  - title: "Workplane switching and offsets"
+    description: "Work on different planes and at offsets from existing geometry"
+    code: |
+      import cadquery as cq
+      BASE_H = 10.0
+      # Base on XY plane
+      base = cq.Workplane("XY").box(40, 40, BASE_H)
+      # Switch to top face and extrude a smaller block upward
+      result = (
+          base.faces(">Z")
+          .workplane()
+          .rect(20, 20)
+          .extrude(15)
+      )
+
+  - title: "Concentric circles for tubes and rings"
+    description: "Create a tube or ring using concentric circles"
+    code: |
+      import cadquery as cq
+      OUTER_R = 20.0
+      INNER_R = 16.0
+      HEIGHT = 30.0
+      result = (
+          cq.Workplane("XY")
+          .circle(OUTER_R)
+          .circle(INNER_R)
+          .extrude(HEIGHT)
+      )

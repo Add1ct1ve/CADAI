@@ -15,6 +15,12 @@ pub struct AppConfig {
     pub openai_base_url: Option<String>,
     #[serde(default)]
     pub agent_rules_preset: Option<String>,
+    #[serde(default = "default_true")]
+    pub enable_code_review: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -28,6 +34,7 @@ impl Default for AppConfig {
             ollama_base_url: None,
             openai_base_url: None,
             agent_rules_preset: None,
+            enable_code_review: true,
         }
     }
 }

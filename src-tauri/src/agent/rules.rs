@@ -18,6 +18,14 @@ pub struct AgentRules {
     pub code_style: Option<CodeStyle>,
     pub manufacturing: Option<serde_yaml::Value>,
     pub response_format: Option<HashMap<String, Vec<String>>>,
+    pub cookbook: Option<Vec<CookbookEntry>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CookbookEntry {
+    pub title: String,
+    pub description: Option<String>,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +103,7 @@ impl AgentRules {
             code_style: None,
             manufacturing: None,
             response_format: None,
+            cookbook: None,
         }
     }
 }

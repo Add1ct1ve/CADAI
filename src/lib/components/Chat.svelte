@@ -431,6 +431,23 @@
             project.setCode(event.code);
             break;
 
+          case 'ReviewStatus':
+            {
+              const lastContent3 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${lastContent3}\n\n${event.message}`);
+            }
+            break;
+
+          case 'ReviewComplete':
+            {
+              const lastContent4 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              const reviewNote = event.was_modified
+                ? `Code corrected by reviewer: ${event.explanation}`
+                : `Code approved by reviewer.`;
+              chatStore.updateLastMessage(`${lastContent4}\n${reviewNote}`);
+            }
+            break;
+
           case 'Done':
             // Handled after the await
             break;

@@ -103,6 +103,24 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Cookbook (concrete code recipes) --
+    if let Some(ref cookbook) = rules.cookbook {
+        prompt.push_str("## CadQuery Cookbook - Reference Patterns\n");
+        prompt.push_str("Use these as reference for correct CadQuery API usage.\n\n");
+        for (i, entry) in cookbook.iter().enumerate() {
+            prompt.push_str(&format!("### Recipe {}: {}\n", i + 1, entry.title));
+            if let Some(ref desc) = entry.description {
+                prompt.push_str(&format!("{}\n", desc));
+            }
+            prompt.push_str("```python\n");
+            prompt.push_str(&entry.code);
+            if !entry.code.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("```\n\n");
+        }
+    }
+
     // -- Error handling rules --
     if let Some(ref on_err) = rules.on_error {
         prompt.push_str("## Error Handling\n");

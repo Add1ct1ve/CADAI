@@ -20,6 +20,7 @@ export interface AppConfig {
   ollama_base_url: string | null;
   openai_base_url: string | null;
   agent_rules_preset: string | null;
+  enable_code_review: boolean;
 }
 
 export interface ModelInfo {
@@ -112,6 +113,8 @@ export type MultiPartEvent =
   | { kind: 'PartComplete'; part_index: number; part_name: string; success: boolean; error?: string }
   | { kind: 'AssemblyStatus'; message: string }
   | { kind: 'FinalCode'; code: string }
+  | { kind: 'ReviewStatus'; message: string }
+  | { kind: 'ReviewComplete'; was_modified: boolean; explanation: string }
   | { kind: 'Done'; success: boolean; error?: string };
 
 export interface PartProgress {
