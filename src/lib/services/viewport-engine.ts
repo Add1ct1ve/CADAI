@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import type { ObjectId, PrimitiveParams, CadTransform } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform } from '$lib/types/cad';
+import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 
 const DEFAULT_COLOR = 0x89b4fa;
@@ -29,6 +30,9 @@ export class ViewportEngine {
   private objectMeshes: Map<ObjectId, THREE.Group> = new Map();
   private selectedIds: Set<ObjectId> = new Set();
   private hoveredIdInternal: ObjectId | null = null;
+
+  // Placement preview ghost
+  private ghostMesh: THREE.Group | null = null;
 
   // Raycaster
   private raycaster = new THREE.Raycaster();
@@ -450,6 +454,64 @@ export class ViewportEngine {
     this.ndcMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  // ─── Public API: Placement Ghost ─────────────────
+
+  /**
+   * Show a semi-transparent ghost mesh for placement preview.
+   */
+  showPlacementGhost(type: PrimitiveType): void {
+    this.clearGhost();
+
+    const params = getDefaultParams(type);
+    const geometry = this.createGeometry(params);
+    const material = new THREE.MeshStandardMaterial({
+      color: DEFAULT_COLOR,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+
+    const group = new THREE.Group();
+    group.add(mesh);
+    // Start off-screen until first mouse move
+    group.visible = false;
+
+    this.ghostMesh = group;
+    this.scene.add(group);
+  }
+
+  /**
+   * Move the ghost to a CadQuery position (grid-snapped).
+   */
+  updateGhostPosition(cadPos: [number, number, number]): void {
+    if (!this.ghostMesh) return;
+
+    const pos = cadToThreePos(cadPos);
+    this.ghostMesh.position.copy(pos);
+    this.ghostMesh.visible = true;
+  }
+
+  /**
+   * Remove and dispose the ghost mesh.
+   */
+  clearGhost(): void {
+    if (!this.ghostMesh) return;
+
+    this.scene.remove(this.ghostMesh);
+    this.ghostMesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else {
+          child.material.dispose();
+        }
+      }
+    });
+    this.ghostMesh = null;
+  }
+
   // ─── Public API: Geometry Creation ───────────────
 
   private createGeometry(params: PrimitiveParams): THREE.BufferGeometry {
@@ -606,6 +668,7 @@ export class ViewportEngine {
     this.transformControls.detach();
     this.transformControls.dispose();
     this.controls.dispose();
+    this.clearGhost();
     this.removeAllObjects();
     this.clearModel();
     this.renderer.dispose();
