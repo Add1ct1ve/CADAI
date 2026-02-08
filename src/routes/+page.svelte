@@ -13,6 +13,7 @@
   import { projectNew, projectSave } from '$lib/services/project-actions';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
   import type { ToolId } from '$lib/types/cad';
   import { onMount } from 'svelte';
@@ -22,6 +23,7 @@
   const scene = getSceneStore();
   const tools = getToolStore();
   const history = getHistoryStore();
+  const viewport = getViewportStore();
 
   let settingsOpen = $state(false);
 
@@ -70,6 +72,33 @@
 
     // Tool shortcuts (only when not focused on an input)
     if (isInput) return;
+
+    // View shortcuts (work in all modes)
+    if (e.key === 'Home') {
+      e.preventDefault();
+      viewport.fitAll();
+      return;
+    }
+    if (e.code === 'Numpad7') {
+      e.preventDefault();
+      viewport.animateToView('top');
+      return;
+    }
+    if (e.code === 'Numpad1') {
+      e.preventDefault();
+      viewport.animateToView('front');
+      return;
+    }
+    if (e.code === 'Numpad3') {
+      e.preventDefault();
+      viewport.animateToView('right');
+      return;
+    }
+    if (e.code === 'Numpad0') {
+      e.preventDefault();
+      viewport.animateToView('iso');
+      return;
+    }
 
     // Only allow tool shortcuts in parametric mode
     if (scene.codeMode === 'parametric') {

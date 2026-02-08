@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
@@ -24,6 +25,11 @@ export class ViewportEngine {
   private container: HTMLElement;
   private animationId: number | null = null;
   private resizeObserver: ResizeObserver;
+  private grid: THREE.GridHelper;
+  private axes: THREE.AxesHelper;
+  private viewHelper: ViewHelper;
+  private clock: THREE.Clock;
+  private _isAnimatingView = false;
 
   // Legacy single model (for manual mode / STL loading)
   private currentModel: THREE.Mesh | THREE.Group | null = null;
@@ -125,12 +131,19 @@ export class ViewportEngine {
     });
 
     // Grid
-    const grid = new THREE.GridHelper(100, 100, 0x404060, 0x2a2a40);
-    this.scene.add(grid);
+    this.grid = new THREE.GridHelper(100, 100, 0x404060, 0x2a2a40);
+    this.scene.add(this.grid);
 
     // Axes
-    const axes = new THREE.AxesHelper(5);
-    this.scene.add(axes);
+    this.axes = new THREE.AxesHelper(5);
+    this.scene.add(this.axes);
+
+    // ViewHelper (interactive axis gizmo in bottom-right corner)
+    this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
+    this.viewHelper.center = this.controls.target;
+
+    // Clock for ViewHelper animation
+    this.clock = new THREE.Clock();
 
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -158,8 +171,17 @@ export class ViewportEngine {
 
   private animate = (): void => {
     this.animationId = requestAnimationFrame(this.animate);
+    const delta = this.clock.getDelta();
+
+    if (this.viewHelper.animating) {
+      this.viewHelper.update(delta);
+    }
+
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+    this.renderer.autoClear = false;
+    this.viewHelper.render(this.renderer);
+    this.renderer.autoClear = true;
   };
 
   // ─── Public API: Camera ──────────────────────────
@@ -515,6 +537,135 @@ export class ViewportEngine {
     this.ndcMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  // ─── Public API: View Controls ───────────────────
+
+  /**
+   * Animate camera to a standard view preset.
+   */
+  animateToView(view: 'top' | 'front' | 'right' | 'iso'): void {
+    const target = this.controls.target.clone();
+    const distance = this.camera.position.distanceTo(target);
+
+    let direction: THREE.Vector3;
+    switch (view) {
+      case 'top':
+        direction = new THREE.Vector3(0, 1, 0);
+        break;
+      case 'front':
+        direction = new THREE.Vector3(0, 0, 1);
+        break;
+      case 'right':
+        direction = new THREE.Vector3(1, 0, 0);
+        break;
+      case 'iso':
+        direction = new THREE.Vector3(1, 0.75, 1).normalize();
+        break;
+    }
+
+    const targetPos = target.clone().add(direction.multiplyScalar(distance));
+    this.animateCameraTo(targetPos, target);
+  }
+
+  /**
+   * Fit all objects in view with smooth animation.
+   */
+  fitAll(): void {
+    const box = new THREE.Box3();
+    let hasContent = false;
+
+    // Include all parametric objects
+    for (const [, group] of this.objectMeshes) {
+      box.expandByObject(group);
+      hasContent = true;
+    }
+
+    // Include legacy current model
+    if (this.currentModel) {
+      box.expandByObject(this.currentModel);
+      hasContent = true;
+    }
+
+    if (!hasContent) {
+      // Empty scene: reset to default view
+      this.animateCameraTo(
+        new THREE.Vector3(8, 6, 8),
+        new THREE.Vector3(0, 0, 0),
+      );
+      return;
+    }
+
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = this.camera.fov * (Math.PI / 180);
+    let cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+    cameraDistance *= 1.8; // padding
+
+    const direction = new THREE.Vector3(1, 0.75, 1).normalize();
+    const targetPos = center.clone().add(direction.multiplyScalar(cameraDistance));
+
+    this.animateCameraTo(targetPos, center);
+  }
+
+  /**
+   * Toggle grid visibility.
+   */
+  setGridVisible(visible: boolean): void {
+    this.grid.visible = visible;
+  }
+
+  /**
+   * Toggle axes helper visibility.
+   */
+  setAxesVisible(visible: boolean): void {
+    this.axes.visible = visible;
+  }
+
+  /**
+   * Smoothly animate camera to a target position and look-at point.
+   */
+  private animateCameraTo(
+    targetPos: THREE.Vector3,
+    targetLookAt: THREE.Vector3,
+    duration = 400,
+  ): void {
+    if (this._isAnimatingView) return;
+    this._isAnimatingView = true;
+
+    const startPos = this.camera.position.clone();
+    const startTarget = this.controls.target.clone();
+    const startTime = performance.now();
+
+    // Temporarily disable damping to prevent OrbitControls from fighting
+    const wasDamping = this.controls.enableDamping;
+    this.controls.enableDamping = false;
+
+    const step = () => {
+      const elapsed = performance.now() - startTime;
+      const t = Math.min(elapsed / duration, 1);
+      // Ease-in-out cubic
+      const ease = t < 0.5
+        ? 4 * t * t * t
+        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+      this.camera.position.lerpVectors(startPos, targetPos, ease);
+      this.controls.target.lerpVectors(startTarget, targetLookAt, ease);
+      this.controls.update();
+
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        this.controls.enableDamping = wasDamping;
+        this._isAnimatingView = false;
+      }
+    };
+
+    requestAnimationFrame(step);
+  }
+
   // ─── Public API: Placement Ghost ─────────────────
 
   /**
@@ -728,6 +879,7 @@ export class ViewportEngine {
     this.resizeObserver.disconnect();
     this.transformControls.detach();
     this.transformControls.dispose();
+    this.viewHelper.dispose();
     this.controls.dispose();
     this.clearGhost();
     this.removeAllObjects();
