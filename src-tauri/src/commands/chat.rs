@@ -32,8 +32,8 @@ pub struct AutoRetryResult {
 }
 
 /// Create an AI provider based on the current configuration.
-/// Shared between `send_message` and `auto_retry` to avoid code duplication.
-fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>, AppError> {
+/// Shared between `send_message`, `auto_retry`, and `generate_parallel`.
+pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>, AppError> {
     match config.ai_provider.as_str() {
         "openai" => {
             let api_key = config
@@ -109,7 +109,7 @@ fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>, AppError> 
 
 /// Stream an AI response from the provider, forwarding deltas over the Tauri channel.
 /// Returns the fully accumulated response string.
-async fn stream_ai_response(
+pub(crate) async fn stream_ai_response(
     provider: Box<dyn AiProvider>,
     messages: Vec<ChatMessage>,
     on_event: &Channel<StreamEvent>,

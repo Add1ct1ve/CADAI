@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -83,6 +83,35 @@ export async function autoRetry(
   } catch (err) {
     console.error('auto_retry failed:', err);
     throw new Error(`Auto retry failed: ${err}`);
+  }
+}
+
+/**
+ * Send a chat message through the parallel generation pipeline.
+ * The planner decides whether to use single or multi-part generation.
+ * Events are forwarded via the onEvent callback.
+ */
+export async function generateParallel(
+  message: string,
+  history: RustChatMessage[],
+  onEvent: (event: MultiPartEvent) => void,
+): Promise<string> {
+  try {
+    const channel = new Channel<MultiPartEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+
+    const result = await invoke<string>('generate_parallel', {
+      message,
+      history,
+      onEvent: channel,
+    });
+
+    return result;
+  } catch (err) {
+    console.error('generate_parallel failed:', err);
+    throw new Error(`Generate parallel failed: ${err}`);
   }
 }
 

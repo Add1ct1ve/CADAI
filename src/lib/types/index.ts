@@ -88,6 +88,39 @@ export interface StructuredError {
   suggestion: string | null;
 }
 
+// Multi-part parallel generation types
+
+export interface GenerationPlan {
+  mode: 'single' | 'multi';
+  description?: string;
+  parts: PartSpec[];
+}
+
+export interface PartSpec {
+  name: string;
+  description: string;
+  position: [number, number, number];
+  constraints: string[];
+}
+
+export type MultiPartEvent =
+  | { kind: 'PlanStatus'; message: string }
+  | { kind: 'PlanResult'; plan: GenerationPlan }
+  | { kind: 'SingleDelta'; delta: string; done: boolean }
+  | { kind: 'SingleDone'; full_response: string }
+  | { kind: 'PartDelta'; part_index: number; part_name: string; delta: string }
+  | { kind: 'PartComplete'; part_index: number; part_name: string; success: boolean; error?: string }
+  | { kind: 'AssemblyStatus'; message: string }
+  | { kind: 'FinalCode'; code: string }
+  | { kind: 'Done'; success: boolean; error?: string };
+
+export interface PartProgress {
+  name: string;
+  status: 'pending' | 'generating' | 'complete' | 'failed';
+  streamedText: string;
+  error?: string;
+}
+
 export interface ProjectFile {
   name: string;
   code: string;

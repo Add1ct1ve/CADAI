@@ -81,7 +81,7 @@ impl From<&ChatMessage> for OllamaMessage {
 
 #[async_trait]
 impl AiProvider for OllamaProvider {
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<String, AppError> {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 

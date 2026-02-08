@@ -108,12 +108,12 @@ struct ClaudeDelta {
 
 #[async_trait]
 impl AiProvider for ClaudeProvider {
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String, AppError> {
         let (system, claude_messages) = self.build_request(messages, false);
 
         let body = ClaudeRequest {
             model: self.model.clone(),
-            max_tokens: DEFAULT_MAX_TOKENS,
+            max_tokens: max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             system,
             messages: claude_messages,
             stream: false,

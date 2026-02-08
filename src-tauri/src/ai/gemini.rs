@@ -131,7 +131,7 @@ struct GeminiResponsePart {
 
 #[async_trait]
 impl AiProvider for GeminiProvider {
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<String, AppError> {
         let body = self.build_request(messages);
 
         let response = self
