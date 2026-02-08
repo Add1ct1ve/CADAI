@@ -2,6 +2,7 @@ import type { ChatMessage } from '$lib/types';
 
 let messages = $state<ChatMessage[]>([]);
 let isStreaming = $state(false);
+let generationId = $state(0);
 
 export function getChatStore() {
   return {
@@ -10,6 +11,9 @@ export function getChatStore() {
     },
     get isStreaming() {
       return isStreaming;
+    },
+    get generationId() {
+      return generationId;
     },
     addMessage(msg: ChatMessage) {
       messages = [...messages, msg];
@@ -23,8 +27,14 @@ export function getChatStore() {
         messages = [...messages.slice(0, -1), { ...last, content }];
       }
     },
+    cancelGeneration() {
+      generationId++;
+      isStreaming = false;
+    },
     clear() {
       messages = [];
+      isStreaming = false;
+      generationId++;
     },
   };
 }
