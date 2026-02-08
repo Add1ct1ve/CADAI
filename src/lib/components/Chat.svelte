@@ -5,7 +5,7 @@
   import { sendMessageStreaming, extractPythonCode, executeCode, autoRetry } from '$lib/services/tauri';
   import ChatMessageComponent from './ChatMessage.svelte';
   import type { ChatMessage, RustChatMessage } from '$lib/types';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
 
@@ -34,9 +34,15 @@
    * Handle auto-retry when code execution fails.
    * Sends the error back to the AI for a fix, then re-executes.
    */
+  function handleStop() {
+    chatStore.cancelGeneration();
+    isRetrying = false;
+  }
+
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
     if (attempt > MAX_RETRIES) return;
 
+    const myGen = chatStore.generationId;
     isRetrying = true;
 
     // Add a system message indicating the retry attempt.
@@ -74,6 +80,7 @@
           chatStore.updateLastMessage(streamingContent);
         },
       );
+      if (chatStore.generationId !== myGen) return;
 
       // Ensure the final message matches the full response.
       chatStore.updateLastMessage(result.ai_response);
@@ -94,6 +101,7 @@
         // Try executing the new code.
         try {
           const execResult = await executeCode(result.new_code);
+          if (chatStore.generationId !== myGen) return;
           if (execResult.success && execResult.stl_base64) {
             viewportStore.setPendingStl(execResult.stl_base64);
             chatStore.addMessage({
@@ -155,8 +163,10 @@
         isError: true,
       });
     } finally {
-      chatStore.setStreaming(false);
-      isRetrying = false;
+      if (chatStore.generationId === myGen) {
+        chatStore.setStreaming(false);
+        isRetrying = false;
+      }
     }
   }
 
@@ -164,6 +174,7 @@
    * Handle the "Explain Error" action: send a message asking the AI to explain the error.
    */
   async function handleExplainError(errorMessage: string, failedCode: string) {
+    const myGen = chatStore.generationId;
     const text = `Please explain this error and suggest how to fix it:\n\nCode:\n\`\`\`python\n${failedCode}\n\`\`\`\n\nError:\n\`\`\`\n${errorMessage}\n\`\`\``;
 
     const userMsg: ChatMessage = {
@@ -194,6 +205,7 @@
         streamingContent += delta;
         chatStore.updateLastMessage(streamingContent);
       });
+      if (chatStore.generationId !== myGen) return;
 
       chatStore.updateLastMessage(fullResponse);
 
@@ -204,6 +216,7 @@
 
         try {
           const result = await executeCode(code);
+          if (chatStore.generationId !== myGen) return;
           if (result.success && result.stl_base64) {
             viewportStore.setPendingStl(result.stl_base64);
           } else if (!result.success) {
@@ -240,7 +253,9 @@
         isError: true,
       });
     } finally {
-      chatStore.setStreaming(false);
+      if (chatStore.generationId === myGen) {
+        chatStore.setStreaming(false);
+      }
     }
   }
 
@@ -263,6 +278,8 @@
   async function handleSend() {
     const text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
+
+    const myGen = chatStore.generationId;
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -297,6 +314,7 @@
         streamingContent += delta;
         chatStore.updateLastMessage(streamingContent);
       });
+      if (chatStore.generationId !== myGen) return;
 
       // Ensure the final message matches the full response
       chatStore.updateLastMessage(fullResponse);
@@ -310,6 +328,7 @@
         // Auto-execute the code
         try {
           const result = await executeCode(code);
+          if (chatStore.generationId !== myGen) return;
           if (result.success && result.stl_base64) {
             viewportStore.setPendingStl(result.stl_base64);
           } else if (!result.success) {
@@ -361,11 +380,17 @@
         isError: true,
       });
     } finally {
-      chatStore.setStreaming(false);
+      if (chatStore.generationId === myGen) {
+        chatStore.setStreaming(false);
+      }
     }
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && (chatStore.isStreaming || isRetrying)) {
+      handleStop();
+      return;
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || !e.shiftKey)) {
       e.preventDefault();
       handleSend();
@@ -388,7 +413,15 @@
     }
   });
 
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && (chatStore.isStreaming || isRetrying)) {
+      handleStop();
+    }
+  }
+
   onMount(() => {
+    window.addEventListener('keydown', handleWindowKeydown);
+
     // Add welcome message
     chatStore.addMessage({
       id: generateId(),
@@ -396,6 +429,10 @@
       content: 'Welcome to CAD AI Studio. Describe what you want to build and I will generate CadQuery code for you.',
       timestamp: Date.now(),
     });
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('keydown', handleWindowKeydown);
   });
 </script>
 
@@ -437,14 +474,24 @@
       rows={2}
       disabled={chatStore.isStreaming || isRetrying}
     ></textarea>
-    <button
-      class="send-btn"
-      onclick={handleSend}
-      disabled={chatStore.isStreaming || isRetrying || !inputText.trim()}
-      title="Send message"
-    >
-      Send
-    </button>
+    {#if chatStore.isStreaming || isRetrying}
+      <button
+        class="stop-btn"
+        onclick={handleStop}
+        title="Stop generation (Escape)"
+      >
+        Stop
+      </button>
+    {:else}
+      <button
+        class="send-btn"
+        onclick={handleSend}
+        disabled={!inputText.trim()}
+        title="Send message"
+      >
+        Send
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -591,5 +638,22 @@
   .send-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .stop-btn {
+    align-self: flex-end;
+    background: #e64553;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .stop-btn:hover {
+    background: #d13344;
   }
 </style>
