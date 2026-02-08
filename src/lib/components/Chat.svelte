@@ -2,9 +2,9 @@
   import { getChatStore } from '$lib/stores/chat.svelte';
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
-  import { sendMessageStreaming, extractPythonCode, executeCode, autoRetry } from '$lib/services/tauri';
+  import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming } from '$lib/services/tauri';
   import ChatMessageComponent from './ChatMessage.svelte';
-  import type { ChatMessage, RustChatMessage } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -16,6 +16,8 @@
   let inputText = $state('');
   let messagesContainer = $state<HTMLElement | null>(null);
   let isRetrying = $state(false);
+  let partProgress = $state<PartProgress[]>([]);
+  let isMultiPart = $state(false);
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -37,6 +39,8 @@
   function handleStop() {
     chatStore.cancelGeneration();
     isRetrying = false;
+    isMultiPart = false;
+    partProgress = [];
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -275,11 +279,30 @@
     handleExplainError(errorMessage, failedCode);
   }
 
+  function formatPartProgress(parts: PartProgress[]): string {
+    if (parts.length === 0) return '';
+    const lines = parts.map((p) => {
+      switch (p.status) {
+        case 'pending':
+          return `[ ] ${p.name}`;
+        case 'generating':
+          return `[...] ${p.name}`;
+        case 'complete':
+          return `[Done] ${p.name}`;
+        case 'failed':
+          return `[Failed] ${p.name}${p.error ? `: ${p.error}` : ''}`;
+      }
+    });
+    return `Generating ${parts.length} parts in parallel:\n${lines.join('\n')}`;
+  }
+
   async function handleSend() {
     const text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
 
     const myGen = chatStore.generationId;
+    isMultiPart = false;
+    partProgress = [];
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -307,45 +330,151 @@
 
     chatStore.setStreaming(true);
     let streamingContent = '';
+    const planStartTime = Date.now();
+    let planTimerInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
-      // Stream the response
-      const fullResponse = await sendMessageStreaming(text, rustHistory, (delta, _done) => {
-        streamingContent += delta;
-        chatStore.updateLastMessage(streamingContent);
+      const result = await generateParallel(text, rustHistory, (event: MultiPartEvent) => {
+        if (chatStore.generationId !== myGen) return;
+
+        switch (event.kind) {
+          case 'PlanStatus':
+            {
+              // Start elapsed timer for planning phase
+              const elapsed = Math.round((Date.now() - planStartTime) / 1000);
+              chatStore.updateLastMessage(`${event.message} (${elapsed}s)`);
+              if (!planTimerInterval) {
+                planTimerInterval = setInterval(() => {
+                  if (chatStore.generationId !== myGen) {
+                    if (planTimerInterval) clearInterval(planTimerInterval);
+                    planTimerInterval = null;
+                    return;
+                  }
+                  const el = Math.round((Date.now() - planStartTime) / 1000);
+                  chatStore.updateLastMessage(`${event.message} (${el}s)`);
+                }, 1000);
+              }
+            }
+            break;
+
+          case 'PlanResult':
+            // Stop the planning timer
+            if (planTimerInterval) {
+              clearInterval(planTimerInterval);
+              planTimerInterval = null;
+            }
+            if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
+              isMultiPart = true;
+              partProgress = event.plan.parts.map((p) => ({
+                name: p.name,
+                status: 'pending' as const,
+                streamedText: '',
+              }));
+              const desc = event.plan.description
+                ? `${event.plan.description}\n\n`
+                : '';
+              chatStore.updateLastMessage(
+                `${desc}${formatPartProgress(partProgress)}`
+              );
+            }
+            break;
+
+          case 'SingleDelta':
+            // Single-mode fallback: stream like normal
+            streamingContent += event.delta;
+            chatStore.updateLastMessage(streamingContent);
+            break;
+
+          case 'SingleDone':
+            streamingContent = event.full_response;
+            chatStore.updateLastMessage(streamingContent);
+            break;
+
+          case 'PartDelta':
+            if (partProgress[event.part_index]) {
+              partProgress[event.part_index].status = 'generating';
+              partProgress[event.part_index].streamedText += event.delta;
+              // Update progress display
+              const desc1 = chatStore.messages[chatStore.messages.length - 1]?.content.split('\nGenerating')[0] || '';
+              const prefix = desc1.includes('Generating') ? '' : desc1 + '\n';
+              chatStore.updateLastMessage(
+                `${prefix}${formatPartProgress(partProgress)}`
+              );
+            }
+            break;
+
+          case 'PartComplete':
+            if (partProgress[event.part_index]) {
+              partProgress[event.part_index].status = event.success ? 'complete' : 'failed';
+              if (event.error) {
+                partProgress[event.part_index].error = event.error;
+              }
+              // Rebuild the progress message
+              const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              const descPart = lastContent.split('\nGenerating')[0];
+              const prefix2 = descPart.includes('Generating') ? '' : descPart + '\n';
+              chatStore.updateLastMessage(
+                `${prefix2}${formatPartProgress(partProgress)}`
+              );
+            }
+            break;
+
+          case 'AssemblyStatus':
+            {
+              const lastContent2 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${lastContent2}\n\n${event.message}`);
+            }
+            break;
+
+          case 'FinalCode':
+            // Set code in editor immediately for UX (but don't gate execution on this)
+            project.setCode(event.code);
+            break;
+
+          case 'Done':
+            // Handled after the await
+            break;
+        }
       });
+
       if (chatStore.generationId !== myGen) return;
 
-      // Ensure the final message matches the full response
-      chatStore.updateLastMessage(fullResponse);
+      // Use the return value from invoke — this is authoritative and avoids
+      // the race condition where Channel events haven't fired yet.
+      if (isMultiPart) {
+        // Multi-part: result is the assembled Python code
+        const assembledCode = result;
+        project.setCode(assembledCode);
+        chatStore.updateLastMessage(
+          chatStore.messages[chatStore.messages.length - 1]?.content +
+            '\n\nAssembly complete! Executing code...'
+        );
 
-      // Extract Python code from the response
-      const code = extractPythonCode(fullResponse);
-      if (code) {
-        // Update the code editor
-        project.setCode(code);
-
-        // Auto-execute the code
         try {
-          const result = await executeCode(code);
+          const execResult = await executeCode(assembledCode);
           if (chatStore.generationId !== myGen) return;
-          if (result.success && result.stl_base64) {
-            viewportStore.setPendingStl(result.stl_base64);
-          } else if (!result.success) {
-            const errorInfo = result.stderr || 'Code execution failed';
+          if (execResult.success && execResult.stl_base64) {
+            viewportStore.setPendingStl(execResult.stl_base64);
+            chatStore.addMessage({
+              id: generateId(),
+              role: 'system',
+              content: 'Assembly executed successfully.',
+              timestamp: Date.now(),
+            });
+          } else if (!execResult.success) {
+            const errorInfo = execResult.stderr || 'Code execution failed';
             chatStore.addMessage({
               id: generateId(),
               role: 'system',
               content: `Execution error: ${errorInfo}`,
               timestamp: Date.now(),
               isError: true,
-              failedCode: code,
+              failedCode: assembledCode,
               errorMessage: errorInfo,
             });
 
-            // Auto-retry: send the error back to the AI for a fix.
             chatStore.setStreaming(false);
-            await handleAutoRetry(code, errorInfo, 1);
+            await handleAutoRetry(assembledCode, errorInfo, 1);
             return;
           }
         } catch (execErr) {
@@ -356,32 +485,80 @@
             content: `Failed to execute code: ${errMsg}`,
             timestamp: Date.now(),
             isError: true,
-            failedCode: code,
+            failedCode: assembledCode,
             errorMessage: errMsg,
           });
 
-          // Auto-retry on execution exception too.
           chatStore.setStreaming(false);
-          await handleAutoRetry(code, errMsg, 1);
+          await handleAutoRetry(assembledCode, errMsg, 1);
           return;
+        }
+      } else {
+        // Single mode: result is the full AI response text
+        const code = extractPythonCode(result);
+        if (code) {
+          project.setCode(code);
+
+          try {
+            const execResult = await executeCode(code);
+            if (chatStore.generationId !== myGen) return;
+            if (execResult.success && execResult.stl_base64) {
+              viewportStore.setPendingStl(execResult.stl_base64);
+            } else if (!execResult.success) {
+              const errorInfo = execResult.stderr || 'Code execution failed';
+              chatStore.addMessage({
+                id: generateId(),
+                role: 'system',
+                content: `Execution error: ${errorInfo}`,
+                timestamp: Date.now(),
+                isError: true,
+                failedCode: code,
+                errorMessage: errorInfo,
+              });
+
+              chatStore.setStreaming(false);
+              await handleAutoRetry(code, errorInfo, 1);
+              return;
+            }
+          } catch (execErr) {
+            const errMsg = `${execErr}`;
+            chatStore.addMessage({
+              id: generateId(),
+              role: 'system',
+              content: `Failed to execute code: ${errMsg}`,
+              timestamp: Date.now(),
+              isError: true,
+              failedCode: code,
+              errorMessage: errMsg,
+            });
+
+            chatStore.setStreaming(false);
+            await handleAutoRetry(code, errMsg, 1);
+            return;
+          }
         }
       }
     } catch (err) {
-      // If streaming failed and we have an empty assistant message, update it with the error
-      if (streamingContent.length === 0) {
-        // Remove the empty assistant message
+      if (streamingContent.length === 0 && !isMultiPart) {
         chatStore.updateLastMessage(`Error: ${err}`);
+      } else {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: `Error: ${err}`,
+          timestamp: Date.now(),
+          isError: true,
+        });
       }
-      chatStore.addMessage({
-        id: generateId(),
-        role: 'system',
-        content: `Error: ${err}`,
-        timestamp: Date.now(),
-        isError: true,
-      });
     } finally {
+      if (planTimerInterval) {
+        clearInterval(planTimerInterval);
+        planTimerInterval = null;
+      }
       if (chatStore.generationId === myGen) {
         chatStore.setStreaming(false);
+        isMultiPart = false;
+        partProgress = [];
       }
     }
   }

@@ -15,7 +15,8 @@ pub struct StreamDelta {
 #[allow(dead_code)]
 pub trait AiProvider: Send + Sync {
     /// Send messages and get a complete response.
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError>;
+    /// If `max_tokens` is `Some(n)`, cap the response length; otherwise use the provider default.
+    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String, AppError>;
 
     /// Send messages and stream the response via a channel.
     async fn stream(

@@ -40,6 +40,8 @@ struct OpenAiRequest {
     model: String,
     messages: Vec<OpenAiMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -95,13 +97,14 @@ impl From<&ChatMessage> for OpenAiMessage {
 
 #[async_trait]
 impl AiProvider for OpenAiProvider {
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String, AppError> {
         let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
 
         let body = OpenAiRequest {
             model: self.model.clone(),
             messages: openai_messages,
             stream: false,
+            max_tokens,
         };
 
         let response = self
@@ -152,6 +155,7 @@ impl AiProvider for OpenAiProvider {
             model: self.model.clone(),
             messages: openai_messages,
             stream: true,
+            max_tokens: None,
         };
 
         let response = self
