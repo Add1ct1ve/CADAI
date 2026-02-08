@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 
@@ -170,6 +170,22 @@ export class ViewportEngine {
 
   getContainer(): HTMLElement {
     return this.container;
+  }
+
+  getCameraState(): CameraState {
+    return {
+      position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
+      target: [this.controls.target.x, this.controls.target.y, this.controls.target.z],
+      zoom: this.camera.zoom,
+    };
+  }
+
+  setCameraState(state: CameraState): void {
+    this.camera.position.set(...state.position);
+    this.controls.target.set(...state.target);
+    this.camera.zoom = state.zoom;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
   }
 
   // ─── Public API: TransformControls ────────────────

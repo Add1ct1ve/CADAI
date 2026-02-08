@@ -5,6 +5,7 @@
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
+  import { getHistoryStore } from '$lib/stores/history.svelte';
   import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams } from '$lib/types/cad';
   import type * as THREE from 'three';
   import { onMount } from 'svelte';
@@ -14,6 +15,7 @@
   const viewportStore = getViewportStore();
   const scene = getSceneStore();
   const tools = getToolStore();
+  const history = getHistoryStore();
 
   // Tracking for diff-based preview mesh sync
   type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean };
@@ -24,6 +26,9 @@
   // Separate flag to suppress click selection right after a gizmo drag ends
   let recentlyDragged = false;
 
+  // Pre-drag snapshot for undo
+  let preDragSnapshot: { objects: import('$lib/types/cad').SceneObject[]; selectedIds: import('$lib/types/cad').ObjectId[] } | null = null;
+
   // Track previous code mode for mode-switch detection
   let prevCodeMode: string | null = null;
 
@@ -33,6 +38,7 @@
     try {
       viewportStore.setLoading(true);
       engine = new ViewportEngine(containerRef);
+      viewportStore.setEngine(engine);
 
       // Only show demo box in manual mode; parametric starts empty
       if (scene.codeMode !== 'parametric') {
@@ -51,6 +57,10 @@
     // ── Transform callbacks ──
 
     engine.onTransformChange((id, group) => {
+      // Capture snapshot before the first change in this drag
+      if (transformDraggingId === null) {
+        preDragSnapshot = scene.snapshot();
+      }
       transformDraggingId = id;
       // Convert Three.js position/rotation to CadQuery coords and update scene store
       const cadPos = threeToCadPos(group.position);
@@ -60,6 +70,12 @@
     });
 
     engine.onTransformEnd((id, group) => {
+      // Push pre-drag snapshot for undo
+      if (preDragSnapshot) {
+        history.pushSnapshot(preDragSnapshot);
+        preDragSnapshot = null;
+      }
+
       // Clear drag flag synchronously so the diff $effect rebuilds the mesh
       transformDraggingId = null;
       recentlyDragged = true;
@@ -73,6 +89,12 @@
     });
 
     engine.onScaleEnd((id, scale) => {
+      // Push pre-drag snapshot for undo
+      if (preDragSnapshot) {
+        history.pushSnapshot(preDragSnapshot);
+        preDragSnapshot = null;
+      }
+
       // Clear drag flag synchronously so the diff $effect rebuilds the mesh
       transformDraggingId = null;
       recentlyDragged = true;
@@ -93,6 +115,7 @@
     });
 
     return () => {
+      viewportStore.setEngine(null);
       if (engine) {
         engine.dispose();
         engine = null;
@@ -348,6 +371,7 @@
       const primitiveType = activeTool.replace('add-', '') as PrimitiveType;
       const gridPos = engine.getGridIntersection(e);
       if (gridPos) {
+        history.pushSnapshot(scene.snapshot());
         const obj = scene.addObject(primitiveType, gridPos);
         scene.select(obj.id);
         tools.revertToSelect();

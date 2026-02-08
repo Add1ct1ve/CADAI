@@ -199,9 +199,9 @@ export async function updateSettings(config: AppConfig): Promise<void> {
 /**
  * Save project to a file
  */
-export async function saveProject(name: string, code: string, messages: RustChatMessage[], path: string): Promise<void> {
+export async function saveProject(name: string, code: string, messages: RustChatMessage[], path: string, scene?: unknown): Promise<void> {
   try {
-    await invoke('save_project', { name, code, messages, path });
+    await invoke('save_project', { name, code, messages, path, scene: scene ?? null });
   } catch (err) {
     console.error('save_project failed:', err);
     throw new Error(`Save project failed: ${err}`);
@@ -229,6 +229,18 @@ export async function exportStl(code: string, outputPath: string): Promise<strin
   } catch (err) {
     console.error('export_stl failed:', err);
     throw new Error(`Export STL failed: ${err}`);
+  }
+}
+
+/**
+ * Export STEP: run CadQuery code and save the resulting STEP to a file
+ */
+export async function exportStep(code: string, outputPath: string): Promise<string> {
+  try {
+    return await invoke<string>('export_step', { code, outputPath });
+  } catch (err) {
+    console.error('export_step failed:', err);
+    throw new Error(`Export STEP failed: ${err}`);
   }
 }
 

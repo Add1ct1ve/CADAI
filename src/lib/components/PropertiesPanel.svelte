@@ -1,9 +1,11 @@
 <script lang="ts">
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
+  import { getHistoryStore } from '$lib/stores/history.svelte';
   import type { PrimitiveParams, CadTransform, BoxParams, CylinderParams, SphereParams, ConeParams } from '$lib/types/cad';
 
   const scene = getSceneStore();
+  const history = getHistoryStore();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -27,9 +29,21 @@
     scene.updateObject(obj.id, { name: value });
   }
 
+  // Capture snapshot before property panel mutations (debounced to avoid excessive snapshots)
+  let snapshotCaptured = false;
+  function captureOnce() {
+    if (!snapshotCaptured) {
+      history.pushSnapshot(scene.snapshot());
+      snapshotCaptured = true;
+      // Reset after debounce window so the next edit group captures a new snapshot
+      setTimeout(() => { snapshotCaptured = false; }, 500);
+    }
+  }
+
   function updateParam(key: string, value: number) {
     const obj = scene.firstSelected;
     if (!obj) return;
+    captureOnce();
     const newParams = { ...obj.params, [key]: value } as PrimitiveParams;
     scene.updateParams(obj.id, newParams);
     debounced(() => triggerPipeline());
@@ -38,6 +52,7 @@
   function updatePosition(axis: 0 | 1 | 2, value: number) {
     const obj = scene.firstSelected;
     if (!obj) return;
+    captureOnce();
     const pos = [...obj.transform.position] as [number, number, number];
     pos[axis] = value;
     scene.updateTransform(obj.id, { ...obj.transform, position: pos });
@@ -47,6 +62,7 @@
   function updateRotation(axis: 0 | 1 | 2, value: number) {
     const obj = scene.firstSelected;
     if (!obj) return;
+    captureOnce();
     const rot = [...obj.transform.rotation] as [number, number, number];
     rot[axis] = value;
     scene.updateTransform(obj.id, { ...obj.transform, rotation: rot });
@@ -68,6 +84,7 @@
   }
 
   function deleteObject() {
+    history.pushSnapshot(scene.snapshot());
     scene.deleteSelected();
     triggerPipeline(100);
   }
@@ -75,6 +92,7 @@
   function applyMoveDelta() {
     const obj = scene.firstSelected;
     if (!obj) return;
+    history.pushSnapshot(scene.snapshot());
     const pos = obj.transform.position;
     const newPos: [number, number, number] = [pos[0] + deltaX, pos[1] + deltaY, pos[2] + deltaZ];
     scene.updateTransform(obj.id, { ...obj.transform, position: newPos });
@@ -87,6 +105,7 @@
   function applyScaleFactor() {
     const obj = scene.firstSelected;
     if (!obj || scaleFactor <= 0) return;
+    history.pushSnapshot(scene.snapshot());
     const p = obj.params;
     let newParams: PrimitiveParams;
     switch (p.type) {
