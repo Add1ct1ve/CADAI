@@ -6,6 +6,7 @@
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
+  import ViewControls from '$lib/components/ViewControls.svelte';
   import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams } from '$lib/types/cad';
   import type * as THREE from 'three';
   import { onMount } from 'svelte';
@@ -408,6 +409,8 @@
       <span class="error-text">Viewport error: {viewportStore.error}</span>
     </div>
   {/if}
+
+  <ViewControls />
 
   <!-- Scene info overlay -->
   {#if scene.codeMode === 'parametric' && scene.objects.length > 0}

@@ -3,6 +3,12 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { executeCode } from '$lib/services/tauri';
 
+  interface Props {
+    readonly?: boolean;
+  }
+
+  let { readonly = false }: Props = $props();
+
   const project = getProjectStore();
   const viewportStore = getViewportStore();
 
@@ -113,6 +119,12 @@
     </div>
   </div>
 
+  {#if readonly}
+    <div class="readonly-banner">
+      Auto-generated — switch to Manual mode to edit
+    </div>
+  {/if}
+
   <div class="editor-body">
     <div class="line-numbers" aria-hidden="true">
       {#each lineNumbers() as num}
@@ -121,12 +133,14 @@
     </div>
     <textarea
       class="code-textarea"
+      class:readonly-textarea={readonly}
       value={project.code}
       oninput={handleInput}
       onkeydown={handleKeydown}
       spellcheck={false}
       autocomplete="off"
       autocapitalize="off"
+      {readonly}
     ></textarea>
   </div>
 
@@ -322,5 +336,23 @@
 
   .output-content.error-content {
     color: var(--error, #f38ba8);
+  }
+
+  .readonly-banner {
+    padding: 4px 12px;
+    background: rgba(137, 180, 250, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--accent);
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .readonly-textarea {
+    opacity: 0.7;
+    cursor: default;
   }
 </style>

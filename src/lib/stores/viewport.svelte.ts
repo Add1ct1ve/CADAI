@@ -8,6 +8,8 @@ let error = $state<string | null>(null);
 let pendingStl = $state<string | null>(null);
 let pendingClear = $state(false);
 let engineRef = $state<ViewportEngine | null>(null);
+let gridVisible = $state(true);
+let axesVisible = $state(true);
 
 export function getViewportStore() {
   return {
@@ -49,6 +51,26 @@ export function getViewportStore() {
     },
     setCameraState(state: CameraState) {
       engineRef?.setCameraState(state);
+    },
+    get gridVisible() {
+      return gridVisible;
+    },
+    get axesVisible() {
+      return axesVisible;
+    },
+    setGridVisible(val: boolean) {
+      gridVisible = val;
+      engineRef?.setGridVisible(val);
+    },
+    setAxesVisible(val: boolean) {
+      axesVisible = val;
+      engineRef?.setAxesVisible(val);
+    },
+    animateToView(view: 'top' | 'front' | 'right' | 'iso') {
+      engineRef?.animateToView(view);
+    },
+    fitAll() {
+      engineRef?.fitAll();
     },
     getState(): ViewportState {
       return { isLoading, hasModel, error };

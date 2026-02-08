@@ -17,6 +17,7 @@
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
     "@tauri-apps/plugin-opener": "^2",
+    "nanoid": "^5.1.6",
     "three": "^0.182.0"
   },
   "devDependencies": {

@@ -137,7 +137,7 @@ export function getSceneStore() {
 
     snapshot(): { objects: SceneObject[]; selectedIds: ObjectId[] } {
       return {
-        objects: structuredClone(objects),
+        objects: $state.snapshot(objects) as SceneObject[],
         selectedIds: [...selectedIds],
       };
     },
@@ -163,7 +163,7 @@ export function getSceneStore() {
 
     serialize(): { objects: SceneObject[]; codeMode: CodeMode } {
       return {
-        objects: structuredClone(objects),
+        objects: $state.snapshot(objects) as SceneObject[],
         codeMode,
       };
     },
