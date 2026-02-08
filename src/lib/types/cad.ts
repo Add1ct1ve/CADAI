@@ -1,6 +1,54 @@
 export type ObjectId = string;
 export type PrimitiveType = 'box' | 'cylinder' | 'sphere' | 'cone';
 
+// ─── Sketch types ────────────────────────────────
+export type SketchId = string;
+export type SketchEntityId = string;
+export type SketchPlane = 'XY' | 'XZ' | 'YZ';
+export type Point2D = [number, number];
+
+export interface SketchLine {
+  type: 'line';
+  id: SketchEntityId;
+  start: Point2D;
+  end: Point2D;
+}
+
+export interface SketchRectangle {
+  type: 'rectangle';
+  id: SketchEntityId;
+  corner1: Point2D;
+  corner2: Point2D;
+}
+
+export interface SketchCircle {
+  type: 'circle';
+  id: SketchEntityId;
+  center: Point2D;
+  radius: number;
+}
+
+export interface SketchArc {
+  type: 'arc';
+  id: SketchEntityId;
+  start: Point2D;
+  mid: Point2D;
+  end: Point2D;
+}
+
+export type SketchEntity = SketchLine | SketchRectangle | SketchCircle | SketchArc;
+
+export interface Sketch {
+  id: SketchId;
+  name: string;
+  plane: SketchPlane;
+  origin: [number, number, number];
+  entities: SketchEntity[];
+  closed: boolean;
+}
+
+export type SketchToolId = 'sketch-select' | 'sketch-line' | 'sketch-rect' | 'sketch-circle' | 'sketch-arc';
+
 export interface BoxParams {
   type: 'box';
   width: number;

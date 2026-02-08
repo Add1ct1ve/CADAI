@@ -1,4 +1,5 @@
 import { getSceneStore } from '$lib/stores/scene.svelte';
+import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getProjectStore } from '$lib/stores/project.svelte';
 import { getViewportStore } from '$lib/stores/viewport.svelte';
 import { generateCode } from '$lib/services/code-generator';
@@ -16,11 +17,12 @@ export function triggerPipeline(delay = 500) {
 
   debounceTimer = setTimeout(() => {
     const scene = getSceneStore();
+    const sketchStore = getSketchStore();
     const project = getProjectStore();
 
     if (scene.codeMode !== 'parametric') return;
 
-    const code = generateCode(scene.objects);
+    const code = generateCode(scene.objects, sketchStore.sketches);
     project.setCode(code);
   }, delay);
 }
@@ -31,6 +33,7 @@ export function triggerPipeline(delay = 500) {
  */
 export async function runPythonExecution() {
   const scene = getSceneStore();
+  const sketchStore = getSketchStore();
   const project = getProjectStore();
   const viewport = getViewportStore();
 
@@ -38,7 +41,7 @@ export async function runPythonExecution() {
 
   // Always generate fresh code from scene if in parametric mode
   if (scene.codeMode === 'parametric') {
-    const code = generateCode(scene.objects);
+    const code = generateCode(scene.objects, sketchStore.sketches);
     project.setCode(code);
   }
 

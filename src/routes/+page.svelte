@@ -10,18 +10,21 @@
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
+  import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { projectNew, projectSave } from '$lib/services/project-actions';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
-  import type { ToolId } from '$lib/types/cad';
+  import type { ToolId, SketchToolId } from '$lib/types/cad';
+  import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
 
   const settings = getSettingsStore();
   const project = getProjectStore();
   const scene = getSceneStore();
   const tools = getToolStore();
+  const sketchStore = getSketchStore();
   const history = getHistoryStore();
   const viewport = getViewportStore();
 
@@ -35,6 +38,27 @@
       stopAutosave();
     };
   });
+
+  // ── Full snapshot helpers (scene + sketch) ──
+  function captureFullSnapshot() {
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    return {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+    };
+  }
+
+  function restoreFullSnapshot(snapshot: SceneSnapshot) {
+    scene.restoreSnapshot({ objects: snapshot.objects, selectedIds: snapshot.selectedIds });
+    if (snapshot.sketches) {
+      sketchStore.restoreSnapshot({
+        sketches: snapshot.sketches,
+        activeSketchId: snapshot.activeSketchId ?? null,
+      });
+    }
+  }
 
   function handleKeydown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -72,6 +96,48 @@
 
     // Tool shortcuts (only when not focused on an input)
     if (isInput) return;
+
+    // ── Sketch mode shortcuts (intercept before 3D shortcuts) ──
+    if (sketchStore.isInSketchMode) {
+      // Escape: cancel drawing or exit sketch mode
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (sketchStore.drawingPoints.length > 0) {
+          sketchStore.clearDrawingState();
+        } else {
+          sketchStore.exitSketchMode();
+          triggerPipeline(100);
+        }
+        return;
+      }
+
+      // Delete/Backspace: delete selected entities
+      if ((e.key === 'Delete' || e.key === 'Backspace') && sketchStore.selectedEntityIds.length > 0) {
+        e.preventDefault();
+        history.pushSnapshot(captureFullSnapshot());
+        sketchStore.deleteSelectedEntities();
+        triggerPipeline(100);
+        return;
+      }
+
+      // Sketch tool shortcuts
+      const sketchToolMap: Record<string, SketchToolId> = {
+        v: 'sketch-select',
+        l: 'sketch-line',
+        r: 'sketch-rect',
+        c: 'sketch-circle',
+        a: 'sketch-arc',
+      };
+      const sketchTool = sketchToolMap[e.key.toLowerCase()];
+      if (sketchTool) {
+        e.preventDefault();
+        sketchStore.setSketchTool(sketchTool);
+        return;
+      }
+
+      // Block all other single-key shortcuts while in sketch mode
+      return;
+    }
 
     // View shortcuts (work in all modes)
     if (e.key === 'Home') {
@@ -125,7 +191,7 @@
     if ((e.key === 'Delete' || e.key === 'Backspace') && scene.codeMode === 'parametric') {
       if (scene.selectedIds.length > 0) {
         e.preventDefault();
-        history.pushSnapshot(scene.snapshot());
+        history.pushSnapshot(captureFullSnapshot());
         scene.deleteSelected();
         triggerPipeline(100);
       }
@@ -143,17 +209,17 @@
   }
 
   function performUndo() {
-    const snapshot = history.undo(scene.snapshot());
+    const snapshot = history.undo(captureFullSnapshot());
     if (snapshot) {
-      scene.restoreSnapshot(snapshot);
+      restoreFullSnapshot(snapshot);
       triggerPipeline(100);
     }
   }
 
   function performRedo() {
-    const snapshot = history.redo(scene.snapshot());
+    const snapshot = history.redo(captureFullSnapshot());
     if (snapshot) {
-      scene.restoreSnapshot(snapshot);
+      restoreFullSnapshot(snapshot);
       triggerPipeline(100);
     }
   }

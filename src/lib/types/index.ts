@@ -133,5 +133,6 @@ export interface ProjectFile {
     objects: import('$lib/types/cad').SceneObject[];
     codeMode: import('$lib/types/cad').CodeMode;
     camera: import('$lib/types/cad').CameraState;
+    sketches?: import('$lib/types/cad').Sketch[];
   };
 }
