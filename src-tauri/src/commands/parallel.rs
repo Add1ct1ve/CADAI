@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::StreamDelta;
 use crate::agent::prompts;
+use crate::agent::review;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -68,6 +69,13 @@ pub enum MultiPartEvent {
     },
     FinalCode {
         code: String,
+    },
+    ReviewStatus {
+        message: String,
+    },
+    ReviewComplete {
+        was_modified: bool,
+        explanation: String,
     },
     Done {
         success: bool,
@@ -201,6 +209,7 @@ pub async fn generate_parallel(
     let config = state.config.lock().unwrap().clone();
     let system_prompt =
         prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+    let user_request = message.clone();
 
     // -----------------------------------------------------------------------
     // Phase 1: Plan
@@ -279,6 +288,45 @@ pub async fn generate_parallel(
         let _ = on_event.send(MultiPartEvent::SingleDone {
             full_response: full_response.clone(),
         });
+
+        // Review step: verify the generated code matches the request
+        if config.enable_code_review {
+            if let Some(code) = extract_code_from_response(&full_response) {
+                let _ = on_event.send(MultiPartEvent::ReviewStatus {
+                    message: "Reviewing generated code...".to_string(),
+                });
+
+                let review_provider = create_provider(&config)?;
+                match review::review_code(review_provider, &user_request, &code).await {
+                    Ok(result) => {
+                        let _ = on_event.send(MultiPartEvent::ReviewComplete {
+                            was_modified: result.was_modified,
+                            explanation: result.explanation.clone(),
+                        });
+                        if result.was_modified {
+                            let _ = on_event.send(MultiPartEvent::FinalCode {
+                                code: result.code.clone(),
+                            });
+                            // Replace code in the response text
+                            let updated_response = full_response.replace(
+                                &code,
+                                &result.code,
+                            );
+                            let _ = on_event.send(MultiPartEvent::Done {
+                                success: true,
+                                error: None,
+                            });
+                            return Ok(updated_response);
+                        }
+                    }
+                    Err(e) => {
+                        // Review failed, continue with original code
+                        eprintln!("Code review failed: {}", e);
+                    }
+                }
+            }
+        }
+
         let _ = on_event.send(MultiPartEvent::Done {
             success: true,
             error: None,
@@ -420,12 +468,39 @@ pub async fn generate_parallel(
 
     match assemble_parts(&successful_parts) {
         Ok(code) => {
-            let _ = on_event.send(MultiPartEvent::FinalCode { code: code.clone() });
+            // Review assembled code before finalizing
+            let final_code = if config.enable_code_review {
+                let _ = on_event.send(MultiPartEvent::ReviewStatus {
+                    message: "Reviewing assembled code...".to_string(),
+                });
+                let review_provider = create_provider(&config)?;
+                match review::review_code(review_provider, &user_request, &code).await {
+                    Ok(result) => {
+                        let _ = on_event.send(MultiPartEvent::ReviewComplete {
+                            was_modified: result.was_modified,
+                            explanation: result.explanation.clone(),
+                        });
+                        if result.was_modified {
+                            result.code
+                        } else {
+                            code
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Code review failed: {}", e);
+                        code
+                    }
+                }
+            } else {
+                code
+            };
+
+            let _ = on_event.send(MultiPartEvent::FinalCode { code: final_code.clone() });
             let _ = on_event.send(MultiPartEvent::Done {
                 success: true,
                 error: None,
             });
-            Ok(code)
+            Ok(final_code)
         }
         Err(e) => {
             let _ = on_event.send(MultiPartEvent::Done {

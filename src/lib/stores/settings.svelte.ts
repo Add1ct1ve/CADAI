@@ -10,6 +10,7 @@ const defaultConfig: AppConfig = {
   ollama_base_url: null,
   openai_base_url: null,
   agent_rules_preset: null,
+  enable_code_review: true,
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });

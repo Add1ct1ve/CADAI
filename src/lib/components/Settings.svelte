@@ -23,6 +23,7 @@
   let baseUrl = $state('');
   let ollamaUrl = $state('http://localhost:11434');
   let agentPreset = $state('default');
+  let enableCodeReview = $state(true);
 
   let showApiKey = $state(false);
   let pythonStatus = $state<PythonStatus | null>(null);
@@ -43,6 +44,7 @@
       baseUrl = settings.config.openai_base_url || '';
       ollamaUrl = settings.config.ollama_base_url || 'http://localhost:11434';
       agentPreset = settings.config.agent_rules_preset || 'default';
+      enableCodeReview = settings.config.enable_code_review ?? true;
       showApiKey = false;
       setupMessage = '';
       refreshPython();
@@ -98,6 +100,7 @@
       openai_base_url: baseUrl || null,
       ollama_base_url: ollamaUrl || null,
       agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
+      enable_code_review: enableCodeReview,
     });
     await settings.save();
     onClose();
@@ -241,6 +244,17 @@
             <option value="cnc">CNC</option>
           </select>
           <span class="form-hint">Affects the system prompt for CAD-specific guidance.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label-inline">
+            <input
+              type="checkbox"
+              bind:checked={enableCodeReview}
+            />
+            Enable AI code review
+          </label>
+          <span class="form-hint">After generating code, the AI verifies it matches your request. Adds ~3s.</span>
         </div>
       </div>
 
@@ -421,6 +435,22 @@
     margin-top: 4px;
     font-size: 11px;
     color: var(--text-muted);
+  }
+
+  .form-label-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .form-label-inline input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
   }
 
   .input-with-toggle {
