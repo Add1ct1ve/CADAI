@@ -3,7 +3,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane } from '$lib/types/cad';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
@@ -394,6 +394,113 @@
     if (!obj) return;
     captureOnce();
     scene.removeHole(obj.id, index);
+    triggerAndRun();
+  }
+
+  // ── Object Boolean ──
+
+  const booleanTypeOptions: { value: BooleanOpType; label: string }[] = [
+    { value: 'union', label: 'Union' },
+    { value: 'subtract', label: 'Subtract' },
+    { value: 'intersect', label: 'Intersect' },
+  ];
+
+  const splitPlaneOptions: { value: SplitPlane; label: string }[] = [
+    { value: 'XY', label: 'XY' },
+    { value: 'XZ', label: 'XZ' },
+    { value: 'YZ', label: 'YZ' },
+  ];
+
+  const keepSideOptions: { value: string; label: string }[] = [
+    { value: 'both', label: 'Both' },
+    { value: 'positive', label: 'Positive' },
+    { value: 'negative', label: 'Negative' },
+  ];
+
+  function getBooleanTargets() {
+    const obj = scene.firstSelected;
+    const targets: { id: string; name: string }[] = [];
+    for (const o of scene.objects) {
+      if (o.id === obj?.id) continue;
+      if (o.visible && !o.booleanOp) {
+        targets.push({ id: o.id, name: o.name });
+      }
+    }
+    // Also include operated add-mode sketches
+    const sketchStore_ = sketchStore;
+    for (const s of sketchStore_.sketches) {
+      if (s.operation && s.operation.mode === 'add' && s.entities.length > 0) {
+        targets.push({ id: s.id, name: s.name });
+      }
+    }
+    return targets;
+  }
+
+  function addBooleanOp(type: BooleanOpType) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    const targets = getBooleanTargets();
+    if (targets.length === 0) return;
+    captureOnce();
+    scene.setBooleanOp(obj.id, { type, targetId: targets[0].id });
+    triggerAndRun();
+  }
+
+  function updateBooleanOpType(type: BooleanOpType) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.booleanOp) return;
+    captureOnce();
+    scene.setBooleanOp(obj.id, { ...obj.booleanOp, type });
+    triggerAndRun();
+  }
+
+  function updateBooleanTarget(targetId: string) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.booleanOp) return;
+    captureOnce();
+    scene.setBooleanOp(obj.id, { ...obj.booleanOp, targetId });
+    triggerAndRun();
+  }
+
+  function removeBooleanOp() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setBooleanOp(obj.id, undefined);
+    triggerAndRun();
+  }
+
+  // ── Object Split ──
+
+  function addSplitOp() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setSplitOp(obj.id, { plane: 'XY', offset: 0, keepSide: 'both' });
+    triggerAndRun();
+  }
+
+  function updateSplitOp(key: string, value: any) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.splitOp) return;
+    captureOnce();
+    scene.setSplitOp(obj.id, { ...obj.splitOp, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function updateSplitOpImmediate(key: string, value: any) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.splitOp) return;
+    captureOnce();
+    scene.setSplitOp(obj.id, { ...obj.splitOp, [key]: value });
+    triggerAndRun();
+  }
+
+  function removeSplitOp() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setSplitOp(obj.id, undefined);
     triggerAndRun();
   }
 
@@ -798,6 +905,72 @@
         </div>
       {/each}
       <button class="apply-btn full-width" onclick={addObjectHole}>Add Hole</button>
+    </div>
+
+    <!-- Boolean Operation -->
+    <div class="prop-section">
+      <div class="prop-section-title">Boolean</div>
+      {#if obj.booleanOp}
+        <div class="prop-row">
+          <label>Type</label>
+          <select class="prop-select" value={obj.booleanOp.type}
+            onchange={(e) => updateBooleanOpType((e.target as HTMLSelectElement).value as BooleanOpType)}>
+            {#each booleanTypeOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Target</label>
+          <select class="prop-select" value={obj.booleanOp.targetId}
+            onchange={(e) => updateBooleanTarget((e.target as HTMLSelectElement).value)}>
+            {#each getBooleanTargets() as target}
+              <option value={target.id}>{target.name}</option>
+            {/each}
+          </select>
+        </div>
+        <button class="remove-btn" onclick={removeBooleanOp}>Remove Boolean</button>
+      {:else if !obj.splitOp}
+        <span class="prop-hint">Select 2 objects for boolean, or:</span>
+        <div class="op-buttons">
+          <button class="apply-btn full-width" onclick={() => addBooleanOp('union')}>Set as Union Tool</button>
+          <button class="apply-btn full-width" onclick={() => addBooleanOp('subtract')}>Set as Subtract Tool</button>
+          <button class="apply-btn full-width" onclick={() => addBooleanOp('intersect')}>Set as Intersect Tool</button>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Split -->
+    <div class="prop-section">
+      <div class="prop-section-title">Split</div>
+      {#if obj.splitOp}
+        <div class="prop-row">
+          <label>Plane</label>
+          <select class="prop-select" value={obj.splitOp.plane}
+            onchange={(e) => updateSplitOpImmediate('plane', (e.target as HTMLSelectElement).value)}>
+            {#each splitPlaneOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Offset</label>
+          <input type="number" value={obj.splitOp.offset} step="1"
+            oninput={(e) => numInput(e, (v) => updateSplitOp('offset', v))} />
+        </div>
+        <div class="prop-row">
+          <label>Keep</label>
+          <select class="prop-select" value={obj.splitOp.keepSide}
+            onchange={(e) => updateSplitOpImmediate('keepSide', (e.target as HTMLSelectElement).value)}>
+            {#each keepSideOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <button class="remove-btn" onclick={removeSplitOp}>Remove Split</button>
+      {:else if !obj.booleanOp}
+        <button class="apply-btn full-width" onclick={addSplitOp}>Split Body</button>
+      {/if}
     </div>
 
     <!-- Appearance -->
@@ -1420,5 +1593,11 @@
     border: 1px solid var(--border-subtle);
     border-radius: 3px;
     margin-bottom: 4px;
+  }
+
+  .prop-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 2px;
   }
 </style>

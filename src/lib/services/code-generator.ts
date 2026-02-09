@@ -1,4 +1,4 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane } from '$lib/types/cad';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -194,6 +194,38 @@ function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
   return lines;
 }
 
+function generateSplitOp(name: string, split: SplitOp): string[] {
+  const lines: string[] = [];
+  lines.push(`# --- Split ${name} on ${split.plane} at offset ${fmt(split.offset)} ---`);
+
+  // Build a large half-space cutter on the split plane
+  // The half-space is a 1000x1000x1000 box on one side of the plane
+  const planeMap: Record<SplitPlane, { axis: string; offset: (o: number) => string; negTrans: (o: number) => string }> = {
+    'XY': { axis: 'Z', offset: (o) => `offset=cq.Vector(0, 0, ${fmt(o)})`, negTrans: (o) => `(0, 0, ${fmt(o - 1000)})` },
+    'XZ': { axis: 'Y', offset: (o) => `offset=cq.Vector(0, ${fmt(o)}, 0)`, negTrans: (o) => `(0, ${fmt(o - 1000)}, 0)` },
+    'YZ': { axis: 'X', offset: (o) => `offset=cq.Vector(${fmt(o)}, 0, 0)`, negTrans: (o) => `(${fmt(o - 1000)}, 0, 0)` },
+  };
+  const p = planeMap[split.plane];
+
+  if (split.keepSide === 'positive') {
+    // Cut away the negative half (below the plane)
+    lines.push(`_split_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False)).translate(${p.negTrans(split.offset)})`);
+    lines.push(`${name} = ${name}.cut(_split_cutter)`);
+  } else if (split.keepSide === 'negative') {
+    // Cut away the positive half (above the plane)
+    lines.push(`_split_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False))`);
+    lines.push(`${name} = ${name}.cut(_split_cutter)`);
+  } else {
+    // Keep both: create two halves
+    lines.push(`_split_pos_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False)).translate(${p.negTrans(split.offset)})`);
+    lines.push(`_split_neg_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False))`);
+    lines.push(`${name}_pos = ${name}.cut(_split_pos_cutter)`);
+    lines.push(`${name}_neg = ${name}.cut(_split_neg_cutter)`);
+  }
+  lines.push('');
+  return lines;
+}
+
 export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], activeFeatureIds?: string[]): string {
   // When activeFeatureIds is provided, use feature-tree ordering and filtering
   if (activeFeatureIds) {
@@ -304,10 +336,16 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   // Categorize features in order
   const addFeatures: Array<{ type: 'object'; obj: SceneObject } | { type: 'sketch'; sketch: Sketch }> = [];
   const cutSketches: Sketch[] = [];
+  const booleanOps: Array<{ toolName: string; opType: string; targetName: string }> = [];
+  const splitOps: Array<{ name: string; split: SplitOp; obj: SceneObject }> = [];
+  const booleanToolIds = new Set<string>();
 
   for (const id of activeFeatureIds) {
     const obj = objMap.get(id);
     if (obj && obj.visible) {
+      if (obj.booleanOp) {
+        booleanToolIds.add(obj.id);
+      }
       addFeatures.push({ type: 'object', obj });
       continue;
     }
@@ -327,7 +365,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
 
   const lines: string[] = ['import cadquery as cq', ''];
 
-  // Generate add features in order
+  // ── Pass 1: Generate all geometry ──
   const assemblyNames: string[] = [];
   const allVisibleObjects: SceneObject[] = [];
 
@@ -347,11 +385,52 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
       lines.push(...generateShell(obj.name, obj.shell));
       lines.push(...generateHoles(obj.name, obj.holes));
       lines.push('');
-      assemblyNames.push(obj.name);
+
+      // Collect boolean ops for pass 2
+      if (obj.booleanOp) {
+        const targetObj = objMap.get(obj.booleanOp.targetId);
+        const targetSketch = sketchMap.get(obj.booleanOp.targetId);
+        const targetName = targetObj?.name ?? targetSketch?.name;
+        if (targetName) {
+          booleanOps.push({ toolName: obj.name, opType: obj.booleanOp.type, targetName });
+        }
+      }
+
+      // Collect split ops for pass 3
+      if (obj.splitOp) {
+        splitOps.push({ name: obj.name, split: obj.splitOp, obj });
+      }
+
+      // Only add to assembly if NOT a boolean tool
+      if (!obj.booleanOp) {
+        assemblyNames.push(obj.name);
+      }
     }
   }
 
-  // Generate cut-mode sketches (must come after their targets)
+  // ── Pass 2: Emit boolean operations ──
+  if (booleanOps.length > 0) {
+    lines.push('# --- Boolean operations ---');
+    for (const op of booleanOps) {
+      const method = op.opType === 'union' ? 'union' : op.opType === 'subtract' ? 'cut' : 'intersect';
+      lines.push(`${op.targetName} = ${op.targetName}.${method}(${op.toolName})`);
+    }
+    lines.push('');
+  }
+
+  // ── Pass 3: Emit split operations ──
+  for (const { name, split, obj } of splitOps) {
+    lines.push(...generateSplitOp(name, split));
+    // Replace assembly name if split produces two halves
+    if (split.keepSide === 'both') {
+      const idx = assemblyNames.indexOf(name);
+      if (idx !== -1) {
+        assemblyNames.splice(idx, 1, `${name}_pos`, `${name}_neg`);
+      }
+    }
+  }
+
+  // ── Pass 4: Cut-mode sketches ──
   for (const sketch of cutSketches) {
     lines.push(...generateSketchBase(sketch, allSketches));
 
@@ -367,7 +446,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
     }
   }
 
-  // Assembly
+  // ── Assembly ──
   if (assemblyNames.length === 0) {
     lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
   } else if (assemblyNames.length === 1) {

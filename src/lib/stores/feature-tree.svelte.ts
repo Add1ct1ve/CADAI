@@ -1,4 +1,4 @@
-import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation } from '$lib/types/cad';
+import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation, SceneObject } from '$lib/types/cad';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 
@@ -8,8 +8,16 @@ let suppressedIds = $state<Set<string>>(new Set());
 let rollbackIndex = $state<number | null>(null);
 
 // ─── Icon helpers ───────────────────────────────
-function primitiveIcon(type: string): string {
-  switch (type) {
+function primitiveIcon(obj: SceneObject): string {
+  if (obj.booleanOp) {
+    switch (obj.booleanOp.type) {
+      case 'union':     return '\u228C'; // ⊌
+      case 'subtract':  return '\u2296'; // ⊖
+      case 'intersect': return '\u2293'; // ⊓
+    }
+  }
+  if (obj.splitOp) return '\u2702'; // ✂
+  switch (obj.params.type) {
     case 'box': return '\u25FB'; // ◻
     case 'cylinder': return '\u25CB'; // ○
     case 'sphere': return '\u25CF'; // ●
@@ -26,7 +34,13 @@ function sketchIcon(op?: SketchOperation): string {
   return '\u2B06';                        // ⬆ extrude add
 }
 
-function primitiveDetail(params: PrimitiveParams): string {
+function primitiveDetail(obj: SceneObject): string {
+  if (obj.booleanOp) {
+    const target = getSceneStore().getObjectById(obj.booleanOp.targetId);
+    return `${obj.booleanOp.type} \u2192 ${target?.name ?? '?'}`;
+  }
+  if (obj.splitOp) return `split ${obj.splitOp.plane} (${obj.splitOp.keepSide})`;
+  const params = obj.params;
   switch (params.type) {
     case 'box':
       return `Box ${params.width}\u00D7${params.depth}\u00D7${params.height}`;
@@ -89,9 +103,9 @@ export function getFeatureTreeStore() {
             id: obj.id,
             kind: 'primitive' as FeatureKind,
             name: obj.name,
-            icon: primitiveIcon(obj.params.type),
+            icon: primitiveIcon(obj),
             suppressed: suppressedIds.has(obj.id),
-            detail: primitiveDetail(obj.params),
+            detail: primitiveDetail(obj),
           });
           continue;
         }
