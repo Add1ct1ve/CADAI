@@ -3,6 +3,7 @@
   import StatusBar from '$lib/components/StatusBar.svelte';
   import SplitPane from '$lib/components/SplitPane.svelte';
   import Chat from '$lib/components/Chat.svelte';
+  import FeatureTree from '$lib/components/FeatureTree.svelte';
   import Viewport from '$lib/components/Viewport.svelte';
   import RightPanel from '$lib/components/RightPanel.svelte';
   import Settings from '$lib/components/Settings.svelte';
@@ -16,6 +17,7 @@
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
+  import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import type { ToolId, SketchToolId } from '$lib/types/cad';
   import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
@@ -27,6 +29,7 @@
   const sketchStore = getSketchStore();
   const history = getHistoryStore();
   const viewport = getViewportStore();
+  const featureTree = getFeatureTreeStore();
 
   let settingsOpen = $state(false);
 
@@ -41,15 +44,17 @@
     };
   });
 
-  // ── Full snapshot helpers (scene + sketch) ──
+  // ── Full snapshot helpers (scene + sketch + feature tree) ──
   function captureFullSnapshot() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
+    const ftSnap = featureTree.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      featureTree: ftSnap,
     };
   }
 
@@ -61,6 +66,11 @@
         activeSketchId: snapshot.activeSketchId ?? null,
         selectedSketchId: snapshot.selectedSketchId ?? null,
       });
+    }
+    if (snapshot.featureTree) {
+      featureTree.restoreSnapshot(snapshot.featureTree);
+    } else {
+      featureTree.syncFromStores();
     }
   }
 
@@ -268,7 +278,15 @@
     <SplitPane direction="horizontal" sizes={[25, 50, 25]}>
       {#snippet panes(index)}
         {#if index === 0}
-          <Chat />
+          <SplitPane direction="vertical" sizes={[35, 65]} minSize={80}>
+            {#snippet panes(subIndex)}
+              {#if subIndex === 0}
+                <FeatureTree />
+              {:else}
+                <Chat />
+              {/if}
+            {/snippet}
+          </SplitPane>
         {:else if index === 1}
           <Viewport />
         {:else}

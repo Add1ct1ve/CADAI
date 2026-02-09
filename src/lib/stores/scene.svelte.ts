@@ -10,6 +10,7 @@ import type {
   ChamferParams,
 } from '$lib/types/cad';
 import { getDefaultParams, getDefaultTransform } from '$lib/types/cad';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 
 let objects = $state<SceneObject[]>([]);
 let selectedIds = $state<ObjectId[]>([]);
@@ -66,6 +67,7 @@ export function getSceneStore() {
         locked: false,
       };
       objects = [...objects, obj];
+      getFeatureTreeStore().registerFeature(id);
       return obj;
     },
 
@@ -73,6 +75,7 @@ export function getSceneStore() {
       objects = objects.filter((o) => o.id !== id);
       selectedIds = selectedIds.filter((sid) => sid !== id);
       if (hoveredId === id) hoveredId = null;
+      getFeatureTreeStore().unregisterFeature(id);
     },
 
     updateObject(id: ObjectId, partial: Partial<SceneObject>) {
@@ -128,6 +131,9 @@ export function getSceneStore() {
     deleteSelected() {
       const toRemove = new Set(selectedIds);
       objects = objects.filter((o) => !toRemove.has(o.id));
+      for (const id of toRemove) {
+        getFeatureTreeStore().unregisterFeature(id);
+      }
       selectedIds = [];
     },
 
@@ -143,6 +149,7 @@ export function getSceneStore() {
       for (const key of Object.keys(nameCounts)) {
         delete nameCounts[key];
       }
+      // Note: feature tree clearAll is called by the caller (projectNew)
     },
 
     getObjectById(id: ObjectId): SceneObject | undefined {
@@ -173,6 +180,7 @@ export function getSceneStore() {
           nameCounts[type] = Math.max(nameCounts[type] ?? 0, num);
         }
       }
+      // Note: feature tree sync is handled by the caller (restoreFullSnapshot)
     },
 
     serialize(): { objects: SceneObject[]; codeMode: CodeMode } {
@@ -200,6 +208,7 @@ export function getSceneStore() {
           nameCounts[type] = Math.max(nameCounts[type] ?? 0, num);
         }
       }
+      // Note: feature tree sync is handled by the caller (projectOpen)
     },
   };
 }

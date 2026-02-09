@@ -2,10 +2,17 @@
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PropertiesPanel from '$lib/components/PropertiesPanel.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
+  import { onMount } from 'svelte';
 
   const scene = getSceneStore();
 
   let activeTab = $state<'code' | 'properties'>('code');
+
+  onMount(() => {
+    const handler = () => { activeTab = 'properties'; };
+    window.addEventListener('feature-tree:edit', handler);
+    return () => window.removeEventListener('feature-tree:edit', handler);
+  });
 </script>
 
 <div class="right-panel">

@@ -20,6 +20,7 @@ import {
   solve as runConstraintSolve,
   isSolverReady,
 } from '$lib/services/constraint-solver';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 
 let sketches = $state<Sketch[]>([]);
 let activeSketchId = $state<SketchId | null>(null);
@@ -122,6 +123,7 @@ export function getSketchStore() {
       sketches = sketches.filter((s) => s.id !== id);
       if (selectedSketchId === id) selectedSketchId = null;
       if (activeSketchId === id) activeSketchId = null;
+      getFeatureTreeStore().unregisterFeature(id);
     },
 
     editSketch(id: SketchId) {
@@ -153,6 +155,7 @@ export function getSketchStore() {
       hoveredEntityId = null;
       drawingPoints = [];
       previewPoint = null;
+      getFeatureTreeStore().registerFeature(id);
     },
 
     exitSketchMode() {
@@ -161,6 +164,7 @@ export function getSketchStore() {
         const sketch = sketches.find((s) => s.id === activeSketchId);
         if (sketch && sketch.entities.length === 0) {
           sketches = sketches.filter((s) => s.id !== activeSketchId);
+          getFeatureTreeStore().unregisterFeature(activeSketchId);
         }
       }
       activeSketchId = null;

@@ -4,6 +4,7 @@
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import type { ToolId, SketchPlane, SketchToolId } from '$lib/types/cad';
 
@@ -17,6 +18,7 @@
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
   const history = getHistoryStore();
+  const featureTree = getFeatureTreeStore();
 
   let isBusy = $state(false);
   let statusMessage = $state('');
@@ -90,11 +92,13 @@
   function handleUndo() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
+    const ftSnap = featureTree.snapshot();
     const current = {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      featureTree: ftSnap,
     };
     const snapshot = history.undo(current);
     if (snapshot) {
@@ -106,6 +110,11 @@
           selectedSketchId: snapshot.selectedSketchId ?? null,
         });
       }
+      if (snapshot.featureTree) {
+        featureTree.restoreSnapshot(snapshot.featureTree);
+      } else {
+        featureTree.syncFromStores();
+      }
       triggerPipeline(100);
     }
   }
@@ -113,11 +122,13 @@
   function handleRedo() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
+    const ftSnap = featureTree.snapshot();
     const current = {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      featureTree: ftSnap,
     };
     const snapshot = history.redo(current);
     if (snapshot) {
@@ -128,6 +139,11 @@
           activeSketchId: snapshot.activeSketchId ?? null,
           selectedSketchId: snapshot.selectedSketchId ?? null,
         });
+      }
+      if (snapshot.featureTree) {
+        featureTree.restoreSnapshot(snapshot.featureTree);
+      } else {
+        featureTree.syncFromStores();
       }
       triggerPipeline(100);
     }

@@ -119,7 +119,13 @@ function generateSketchBase(sketch: Sketch): string[] {
   return lines;
 }
 
-export function generateCode(objects: SceneObject[], sketches: Sketch[] = []): string {
+export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], activeFeatureIds?: string[]): string {
+  // When activeFeatureIds is provided, use feature-tree ordering and filtering
+  if (activeFeatureIds) {
+    return generateCodeOrdered(objects, sketches, activeFeatureIds);
+  }
+
+  // Legacy fallback: original behavior (insertion order)
   const hasObjects = objects.length > 0;
   const nonEmptySketches = sketches.filter((s) => s.entities.length > 0);
   const hasSketches = nonEmptySketches.length > 0;
@@ -198,6 +204,105 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = []): s
     lines.push('assy = cq.Assembly()');
     for (const name of allNames) {
       const obj = visibleObjects.find((o) => o.name === name);
+      if (obj && obj.params.type === 'cone') {
+        lines.push(`assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
+      } else {
+        lines.push(`assy.add(${name}, name="${name}")`);
+      }
+    }
+    lines.push('result = assy.toCompound()');
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** Feature-tree-ordered code generation */
+function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeFeatureIds: string[]): string {
+  // Build lookup maps
+  const objMap = new Map(objects.map((o) => [o.id, o]));
+  const sketchMap = new Map(sketches.filter((s) => s.entities.length > 0).map((s) => [s.id, s]));
+
+  // Categorize features in order
+  const addFeatures: Array<{ type: 'object'; obj: SceneObject } | { type: 'sketch'; sketch: Sketch }> = [];
+  const cutSketches: Sketch[] = [];
+
+  for (const id of activeFeatureIds) {
+    const obj = objMap.get(id);
+    if (obj && obj.visible) {
+      addFeatures.push({ type: 'object', obj });
+      continue;
+    }
+    const sketch = sketchMap.get(id);
+    if (sketch) {
+      if (sketch.extrude?.mode === 'cut') {
+        cutSketches.push(sketch);
+      } else {
+        addFeatures.push({ type: 'sketch', sketch });
+      }
+    }
+  }
+
+  if (addFeatures.length === 0 && cutSketches.length === 0) {
+    return `import cadquery as cq\n\n# Empty scene — add objects using the toolbar\nresult = cq.Workplane("XY").box(1, 1, 1)\n`;
+  }
+
+  const lines: string[] = ['import cadquery as cq', ''];
+
+  // Generate add features in order
+  const assemblyNames: string[] = [];
+  const allVisibleObjects: SceneObject[] = [];
+
+  for (const feature of addFeatures) {
+    if (feature.type === 'sketch') {
+      lines.push(...generateSketchBase(feature.sketch));
+      if (feature.sketch.extrude) {
+        assemblyNames.push(feature.sketch.name);
+      }
+    } else {
+      const obj = feature.obj;
+      allVisibleObjects.push(obj);
+      lines.push(`# --- ${obj.name} ---`);
+      lines.push(generatePrimitive(obj.name, obj.params));
+      lines.push(...generateTransform(obj.name, obj.transform));
+      lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
+      lines.push('');
+      assemblyNames.push(obj.name);
+    }
+  }
+
+  // Generate cut-mode sketches (must come after their targets)
+  for (const sketch of cutSketches) {
+    lines.push(...generateSketchBase(sketch));
+
+    const targetId = sketch.extrude?.cutTargetId;
+    if (targetId) {
+      const targetSketch = sketchMap.get(targetId);
+      const targetObj = objMap.get(targetId);
+      const targetName = targetSketch?.name ?? targetObj?.name;
+      if (targetName) {
+        lines.push(`${targetName} = ${targetName}.cut(${sketch.name}_cutter)`);
+        lines.push('');
+      }
+    }
+  }
+
+  // Assembly
+  if (assemblyNames.length === 0) {
+    lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
+  } else if (assemblyNames.length === 1) {
+    const name = assemblyNames[0];
+    const obj = allVisibleObjects.find((o) => o.name === name);
+    if (obj && obj.params.type === 'cone') {
+      lines.push(`result = cq.Workplane("XY").add(${name})`);
+    } else {
+      lines.push(`result = ${name}`);
+    }
+  } else {
+    lines.push('# Assemble all objects');
+    lines.push('assy = cq.Assembly()');
+    for (const name of assemblyNames) {
+      const obj = allVisibleObjects.find((o) => o.name === name);
       if (obj && obj.params.type === 'cone') {
         lines.push(`assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
       } else {

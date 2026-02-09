@@ -2,6 +2,7 @@ import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getProjectStore } from '$lib/stores/project.svelte';
 import { getViewportStore } from '$lib/stores/viewport.svelte';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import { generateCode } from '$lib/services/code-generator';
 import { executeCode } from '$lib/services/tauri';
 
@@ -22,7 +23,8 @@ export function triggerPipeline(delay = 500) {
 
     if (scene.codeMode !== 'parametric') return;
 
-    const code = generateCode(scene.objects, sketchStore.sketches);
+    const featureTree = getFeatureTreeStore();
+    const code = generateCode(scene.objects, sketchStore.sketches, featureTree.activeFeatureIds);
     project.setCode(code);
   }, delay);
 }
@@ -41,7 +43,8 @@ export async function runPythonExecution() {
 
   // Always generate fresh code from scene if in parametric mode
   if (scene.codeMode === 'parametric') {
-    const code = generateCode(scene.objects, sketchStore.sketches);
+    const featureTree = getFeatureTreeStore();
+    const code = generateCode(scene.objects, sketchStore.sketches, featureTree.activeFeatureIds);
     project.setCode(code);
   }
 

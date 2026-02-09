@@ -16,9 +16,11 @@ import {
 } from '$lib/services/tauri';
 import { getHistoryStore } from '$lib/stores/history.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import { clearDraft } from '$lib/services/autosave';
 import type { RustChatMessage, ChatMessage } from '$lib/types';
 import type { SceneObject, CodeMode, CameraState, Sketch } from '$lib/types/cad';
+import type { FeatureTreeSnapshot } from '$lib/stores/feature-tree.svelte';
 
 /**
  * Convert chat messages to the Rust format for project saving.
@@ -47,6 +49,7 @@ export async function projectNew(): Promise<string> {
   chatStore.clear();
   scene.clearAll();
   sketchStore.clearAll();
+  getFeatureTreeStore().clearAll();
   scene.setCodeMode('parametric');
   getHistoryStore().clear();
   const viewportStore = getViewportStore();
@@ -81,14 +84,22 @@ export async function projectOpen(): Promise<string> {
 
   // Restore scene state from v2 format
   const sketchStore = getSketchStore();
+  const ftStore = getFeatureTreeStore();
   if (file.scene) {
-    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[] };
+    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot };
     scene.restore({ objects: sceneData.objects, codeMode: sceneData.codeMode });
     // Restore sketches if present
     if (sceneData.sketches) {
       sketchStore.restore({ sketches: sceneData.sketches });
     } else {
       sketchStore.clearAll();
+    }
+    // Restore feature tree if present, else sync from stores (backward compat)
+    if (sceneData.featureTree) {
+      ftStore.restore(sceneData.featureTree);
+    } else {
+      ftStore.clearAll();
+      ftStore.syncFromStores();
     }
     // Clear viewport first so meshes get rebuilt from restored objects
     viewportStore.setPendingClear(true);
@@ -100,6 +111,7 @@ export async function projectOpen(): Promise<string> {
     // V1 file: just clear scene, keep manual mode
     scene.clearAll();
     sketchStore.clearAll();
+    ftStore.clearAll();
     scene.setCodeMode('manual');
     viewportStore.setPendingClear(true);
   }
@@ -126,9 +138,10 @@ export async function projectSave(): Promise<string> {
   // Build scene snapshot for v2 format
   const sceneData = scene.serialize();
   const sketchData = getSketchStore().serialize();
+  const ftData = getFeatureTreeStore().serialize();
   const camera = viewportStore.getCameraState();
   const scenePayload = camera
-    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches }
+    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData }
     : undefined;
 
   await saveProject(project.name, project.code, rustMessages, path, scenePayload);
