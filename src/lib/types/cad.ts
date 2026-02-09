@@ -99,7 +99,9 @@ export type SketchToolId =
   | 'sketch-select' | 'sketch-line' | 'sketch-rect' | 'sketch-circle' | 'sketch-arc'
   | 'sketch-constraint-coincident' | 'sketch-constraint-horizontal' | 'sketch-constraint-vertical'
   | 'sketch-constraint-parallel'   | 'sketch-constraint-perpendicular' | 'sketch-constraint-equal'
-  | 'sketch-constraint-distance'   | 'sketch-constraint-radius'    | 'sketch-constraint-angle';
+  | 'sketch-constraint-distance'   | 'sketch-constraint-radius'    | 'sketch-constraint-angle'
+  | 'sketch-op-trim' | 'sketch-op-extend' | 'sketch-op-offset'
+  | 'sketch-op-mirror' | 'sketch-op-fillet' | 'sketch-op-chamfer';
 
 export interface BoxParams {
   type: 'box';
