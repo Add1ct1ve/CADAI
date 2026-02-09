@@ -1,6 +1,15 @@
 export type ObjectId = string;
 export type PrimitiveType = 'box' | 'cylinder' | 'sphere' | 'cone';
 
+// ─── Display modes ───────────────────────────────
+export type DisplayMode = 'shaded' | 'wireframe' | 'shaded-edges' | 'transparent' | 'section';
+
+export interface SectionPlaneConfig {
+  enabled: boolean;
+  normal: [number, number, number]; // Three.js Y-up coords
+  offset: number;                   // distance along normal
+}
+
 // ─── Sketch types ────────────────────────────────
 export type SketchId = string;
 export type SketchEntityId = string;

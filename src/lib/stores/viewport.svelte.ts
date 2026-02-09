@@ -1,6 +1,6 @@
 import type { ViewportState } from '$lib/types';
 import type { ViewportEngine } from '$lib/services/viewport-engine';
-import type { CameraState } from '$lib/types/cad';
+import type { CameraState, DisplayMode, SectionPlaneConfig } from '$lib/types/cad';
 
 let isLoading = $state(false);
 let hasModel = $state(false);
@@ -10,6 +10,8 @@ let pendingClear = $state(false);
 let engineRef = $state<ViewportEngine | null>(null);
 let gridVisible = $state(true);
 let axesVisible = $state(true);
+let displayMode = $state<DisplayMode>('shaded');
+let sectionPlane = $state<SectionPlaneConfig>({ enabled: false, normal: [0, 1, 0], offset: 0 });
 
 export function getViewportStore() {
   return {
@@ -71,6 +73,25 @@ export function getViewportStore() {
     },
     fitAll() {
       engineRef?.fitAll();
+    },
+    get displayMode() { return displayMode; },
+    setDisplayMode(mode: DisplayMode) {
+      displayMode = mode;
+      engineRef?.setDisplayMode(mode);
+      // Auto-toggle section plane with section mode
+      if (mode === 'section' && !sectionPlane.enabled) {
+        sectionPlane = { ...sectionPlane, enabled: true };
+        engineRef?.setSectionPlane(sectionPlane);
+      }
+      if (mode !== 'section' && sectionPlane.enabled) {
+        sectionPlane = { ...sectionPlane, enabled: false };
+        engineRef?.setSectionPlane(sectionPlane);
+      }
+    },
+    get sectionPlane() { return sectionPlane; },
+    setSectionPlane(config: SectionPlaneConfig) {
+      sectionPlane = config;
+      engineRef?.setSectionPlane(config);
     },
     getState(): ViewportState {
       return { isLoading, hasModel, error };

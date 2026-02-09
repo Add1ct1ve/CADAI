@@ -20,7 +20,7 @@ import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import { getDatumStore } from '$lib/stores/datum.svelte';
 import { clearDraft } from '$lib/services/autosave';
 import type { RustChatMessage, ChatMessage } from '$lib/types';
-import type { SceneObject, CodeMode, CameraState, Sketch, DatumPlane, DatumAxis } from '$lib/types/cad';
+import type { SceneObject, CodeMode, CameraState, Sketch, DatumPlane, DatumAxis, DisplayMode } from '$lib/types/cad';
 import type { FeatureTreeSnapshot } from '$lib/stores/feature-tree.svelte';
 
 /**
@@ -56,6 +56,7 @@ export async function projectNew(): Promise<string> {
   getHistoryStore().clear();
   const viewportStore = getViewportStore();
   viewportStore.setPendingClear(true);
+  viewportStore.setDisplayMode('shaded');
   return 'New project created';
 }
 
@@ -88,7 +89,7 @@ export async function projectOpen(): Promise<string> {
   const sketchStore = getSketchStore();
   const ftStore = getFeatureTreeStore();
   if (file.scene) {
-    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot; datumPlanes?: DatumPlane[]; datumAxes?: DatumAxis[] };
+    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot; datumPlanes?: DatumPlane[]; datumAxes?: DatumAxis[]; displayMode?: DisplayMode };
     scene.restore({ objects: sceneData.objects, codeMode: sceneData.codeMode });
     // Restore sketches if present
     if (sceneData.sketches) {
@@ -114,6 +115,10 @@ export async function projectOpen(): Promise<string> {
     // Restore camera after a tick to allow viewport to process
     if (sceneData.camera) {
       setTimeout(() => viewportStore.setCameraState(sceneData.camera), 50);
+    }
+    // Restore display mode after camera
+    if (sceneData.displayMode) {
+      setTimeout(() => viewportStore.setDisplayMode(sceneData.displayMode!), 60);
     }
   } else {
     // V1 file: just clear scene, keep manual mode
@@ -151,7 +156,7 @@ export async function projectSave(): Promise<string> {
   const datumData = getDatumStore().serialize();
   const camera = viewportStore.getCameraState();
   const scenePayload = camera
-    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData, datumPlanes: datumData.datumPlanes, datumAxes: datumData.datumAxes }
+    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData, datumPlanes: datumData.datumPlanes, datumAxes: datumData.datumAxes, displayMode: viewportStore.displayMode }
     : undefined;
 
   await saveProject(project.name, project.code, rustMessages, path, scenePayload);

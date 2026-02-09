@@ -448,6 +448,16 @@
     engine.highlightInactiveSketch(sketchStore.selectedSketchId);
   });
 
+  // ── Sync display mode ──
+  $effect(() => {
+    if (engine) engine.setDisplayMode(viewportStore.displayMode);
+  });
+
+  // ── Sync section plane ──
+  $effect(() => {
+    if (engine) engine.setSectionPlane(viewportStore.sectionPlane);
+  });
+
   // ── Sync datum plane/axis visualizations ──
   $effect(() => {
     if (!engine) return;

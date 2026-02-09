@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId, DisplayMode, SectionPlaneConfig } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 import { SketchRenderer } from '$lib/services/sketch-renderer';
@@ -46,6 +46,11 @@ export class ViewportEngine {
 
   // Datum geometry meshes
   private datumMeshes: Map<DatumId, THREE.Group> = new Map();
+
+  // Display mode
+  private currentDisplayMode: DisplayMode = 'shaded';
+  private clippingPlane: THREE.Plane | null = null;
+  private sectionPlaneHelper: THREE.PlaneHelper | null = null;
 
   // Sketch support
   private sketchRenderer: SketchRenderer;
@@ -352,6 +357,11 @@ export class ViewportEngine {
 
     this.objectMeshes.set(id, group);
     this.scene.add(group);
+
+    // Apply current display mode before selection visuals
+    if (this.currentDisplayMode !== 'shaded') {
+      this.applyDisplayModeToMesh(mesh);
+    }
 
     // Apply selection/hover visuals if needed
     this.updateMeshVisuals(id);
@@ -1003,6 +1013,152 @@ export class ViewportEngine {
     if (group) group.visible = visible;
   }
 
+  // ─── Public API: Display Modes ──────────────────
+
+  /**
+   * Set the display mode for all CAD meshes.
+   */
+  setDisplayMode(mode: DisplayMode): void {
+    this.currentDisplayMode = mode;
+    this.applyDisplayModeToAll();
+  }
+
+  /**
+   * Set or remove the section/clipping plane.
+   */
+  setSectionPlane(config: SectionPlaneConfig): void {
+    // Remove existing helper
+    if (this.sectionPlaneHelper) {
+      this.scene.remove(this.sectionPlaneHelper);
+      this.sectionPlaneHelper = null;
+    }
+
+    if (config.enabled) {
+      const normal = new THREE.Vector3(...config.normal).normalize();
+      // Plane equation: dot(normal, point) + constant = 0
+      // We want to clip everything on the positive side of (origin + offset * normal)
+      this.clippingPlane = new THREE.Plane(normal, -config.offset);
+      this.renderer.clippingPlanes = [this.clippingPlane];
+
+      // Visual helper
+      this.sectionPlaneHelper = new THREE.PlaneHelper(this.clippingPlane, 30, 0xf38ba8);
+      this.scene.add(this.sectionPlaneHelper);
+    } else {
+      this.clippingPlane = null;
+      this.renderer.clippingPlanes = [];
+    }
+
+    this.renderer.localClippingEnabled = config.enabled;
+  }
+
+  private applyDisplayModeToAll(): void {
+    // Apply to parametric object meshes
+    for (const [id] of this.objectMeshes) {
+      this.applyDisplayModeToGroup(id);
+    }
+
+    // Apply to legacy current model
+    if (this.currentModel && this.currentModel instanceof THREE.Mesh) {
+      this.applyDisplayModeToMesh(this.currentModel);
+    }
+  }
+
+  private applyDisplayModeToGroup(id: ObjectId): void {
+    const group = this.objectMeshes.get(id);
+    if (!group) return;
+
+    // Remove existing display edges (but not selection outlines)
+    const toRemove: THREE.Object3D[] = [];
+    group.traverse((child) => {
+      if (child.userData.isDisplayEdge) toRemove.push(child);
+    });
+    for (const obj of toRemove) {
+      obj.parent?.remove(obj);
+      if (obj instanceof THREE.LineSegments) {
+        obj.geometry.dispose();
+        (obj.material as THREE.Material).dispose();
+      }
+    }
+
+    // Apply mode to mesh children
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        this.applyDisplayModeToMesh(child);
+      }
+    });
+
+    // Re-run selection/hover visuals so outlines coexist properly
+    this.updateMeshVisuals(id);
+  }
+
+  private applyDisplayModeToMesh(mesh: THREE.Mesh): void {
+    const mat = mesh.material;
+    if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+
+    const mode = this.currentDisplayMode;
+
+    switch (mode) {
+      case 'shaded':
+        mat.wireframe = false;
+        mat.transparent = false;
+        mat.opacity = 1;
+        mat.depthWrite = true;
+        mesh.castShadow = true;
+        break;
+
+      case 'wireframe':
+        mat.wireframe = true;
+        mat.transparent = false;
+        mat.opacity = 1;
+        mat.depthWrite = true;
+        mesh.castShadow = false;
+        break;
+
+      case 'shaded-edges':
+        mat.wireframe = false;
+        mat.transparent = false;
+        mat.opacity = 1;
+        mat.depthWrite = true;
+        mesh.castShadow = true;
+        this.addDisplayEdges(mesh, 0x606080, 0.6);
+        break;
+
+      case 'transparent':
+        mat.wireframe = false;
+        mat.transparent = true;
+        mat.opacity = 0.3;
+        mat.depthWrite = false;
+        mesh.castShadow = false;
+        this.addDisplayEdges(mesh, 0x89b4fa, 0.8);
+        break;
+
+      case 'section':
+        // Same material as shaded; clipping handled by renderer
+        mat.wireframe = false;
+        mat.transparent = false;
+        mat.opacity = 1;
+        mat.depthWrite = true;
+        mesh.castShadow = true;
+        break;
+    }
+
+    mat.needsUpdate = true;
+  }
+
+  private addDisplayEdges(mesh: THREE.Mesh, color: number, opacity: number): void {
+    const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 30);
+    const lineMat = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      linewidth: 1,
+    });
+    const edges = new THREE.LineSegments(edgesGeo, lineMat);
+    edges.userData.isDisplayEdge = true;
+    edges.raycast = () => {}; // Don't interfere with raycasting
+    mesh.add(edges);
+  }
+
   // ─── Public API: Geometry Creation ───────────────
 
   private createGeometry(params: PrimitiveParams): THREE.BufferGeometry {
@@ -1039,6 +1195,11 @@ export class ViewportEngine {
 
     this.currentModel = mesh;
     this.scene.add(mesh);
+
+    // Apply current display mode
+    if (this.currentDisplayMode !== 'shaded') {
+      this.applyDisplayModeToMesh(mesh);
+    }
   }
 
   /**
@@ -1078,6 +1239,11 @@ export class ViewportEngine {
 
     this.currentModel = mesh;
     this.scene.add(mesh);
+
+    // Apply current display mode
+    if (this.currentDisplayMode !== 'shaded') {
+      this.applyDisplayModeToMesh(mesh);
+    }
 
     // Auto-zoom: fit the model in view
     this.fitCameraToModel(size);
@@ -1165,6 +1331,15 @@ export class ViewportEngine {
     this.removeAllDatums();
     this.removeAllObjects();
     this.clearModel();
+
+    // Clean up section plane
+    if (this.sectionPlaneHelper) {
+      this.scene.remove(this.sectionPlaneHelper);
+      this.sectionPlaneHelper = null;
+    }
+    this.renderer.clippingPlanes = [];
+    this.renderer.localClippingEnabled = false;
+
     this.renderer.dispose();
 
     if (this.renderer.domElement.parentElement) {
