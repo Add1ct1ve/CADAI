@@ -11,9 +11,14 @@ import {
   loadProject,
   exportStl,
   exportStep,
+  export3mf,
+  meshCheck,
+  orientForPrint,
+  sheetMetalUnfold,
   showSaveDialog,
   showOpenDialog,
 } from '$lib/services/tauri';
+import type { MeshCheckResult, OrientResult, ColorInfo } from '$lib/services/tauri';
 import { getHistoryStore } from '$lib/stores/history.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
@@ -361,4 +366,47 @@ export async function projectExportStep(): Promise<string> {
 
   const result = await exportStep(project.code, path);
   return result || 'STEP exported successfully';
+}
+
+// ── Manufacturing Actions ──
+
+export async function projectExport3mf(): Promise<string> {
+  const project = getProjectStore();
+  const scene = getSceneStore();
+
+  const path = await showSaveDialog('model.3mf', '3mf');
+  if (!path) return '';
+
+  // Collect colors from scene objects
+  const colors: ColorInfo[] = scene.objects.map((obj) => {
+    const hex = obj.color || '#89b4fa';
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const a = obj.opacity !== undefined ? obj.opacity : 1.0;
+    return { r, g, b, a };
+  });
+
+  const result = await export3mf(project.code, path, colors.length > 0 ? colors : undefined);
+  return result || '3MF exported successfully';
+}
+
+export async function projectMeshCheck(): Promise<MeshCheckResult> {
+  const project = getProjectStore();
+  return await meshCheck(project.code);
+}
+
+export async function projectOrientForPrint(): Promise<OrientResult> {
+  const project = getProjectStore();
+  return await orientForPrint(project.code);
+}
+
+export async function projectSheetMetalUnfold(): Promise<string> {
+  const project = getProjectStore();
+
+  const path = await showSaveDialog('flat_pattern.dxf', 'dxf');
+  if (!path) return '';
+
+  const result = await sheetMetalUnfold(project.code, path);
+  return `Flat pattern exported (${result.face_count} faces, ${result.bend_count} bends, ${result.flat_width}x${result.flat_height}mm)`;
 }

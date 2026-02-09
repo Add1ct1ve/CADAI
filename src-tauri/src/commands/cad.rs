@@ -44,7 +44,7 @@ pub async fn execute_code(
     };
 
     // Find the runner.py script
-    let runner_script = find_runner_script()?;
+    let runner_script = super::find_python_script("runner.py")?;
 
     match runner::execute_cadquery(&venv_dir, &runner_script, &code) {
         Ok(result) => {
@@ -133,39 +133,3 @@ pub async fn setup_python(
     ))
 }
 
-pub(crate) fn find_runner_script() -> Result<std::path::PathBuf, AppError> {
-    // In development, look for it relative to the current working directory
-    let candidates = vec![
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("python")
-            .join("runner.py"),
-        // Also try relative to the executable
-        std::env::current_exe()
-            .unwrap_or_default()
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("python")
-            .join("runner.py"),
-        // Try up from src-tauri
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("..")
-            .join("python")
-            .join("runner.py"),
-    ];
-
-    for candidate in candidates {
-        let canonical = candidate.canonicalize().ok();
-        if let Some(path) = canonical {
-            if path.exists() {
-                return Ok(path);
-            }
-        }
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err(AppError::ConfigError("runner.py not found".into()))
-}

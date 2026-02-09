@@ -12,41 +12,6 @@ pub struct DrawingViewResult {
     pub height: f64,
 }
 
-/// Find a Python script in the python/ directory by name.
-fn find_python_script(name: &str) -> Result<std::path::PathBuf, AppError> {
-    let candidates = vec![
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("python")
-            .join(name),
-        std::env::current_exe()
-            .unwrap_or_default()
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("python")
-            .join(name),
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("..")
-            .join("python")
-            .join(name),
-    ];
-
-    for candidate in candidates {
-        let canonical = candidate.canonicalize().ok();
-        if let Some(path) = canonical {
-            if path.exists() {
-                return Ok(path);
-            }
-        }
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err(AppError::ConfigError(format!("{} not found", name)))
-}
-
 #[tauri::command]
 pub async fn generate_drawing_view(
     code: String,
@@ -69,7 +34,7 @@ pub async fn generate_drawing_view(
         }
     };
 
-    let script = find_python_script("drawing_view.py")?;
+    let script = super::find_python_script("drawing_view.py")?;
 
     // Write code to temp file
     let temp_dir = std::env::temp_dir().join("cadai-studio");
@@ -165,7 +130,7 @@ pub async fn export_drawing_pdf(
         }
     };
 
-    let script = find_python_script("drawing_export.py")?;
+    let script = super::find_python_script("drawing_export.py")?;
 
     let temp_dir = std::env::temp_dir().join("cadai-studio");
     std::fs::create_dir_all(&temp_dir)?;
@@ -207,7 +172,7 @@ pub async fn export_drawing_dxf(
         }
     };
 
-    let script = find_python_script("drawing_export.py")?;
+    let script = super::find_python_script("drawing_export.py")?;
 
     let temp_dir = std::env::temp_dir().join("cadai-studio");
     std::fs::create_dir_all(&temp_dir)?;
