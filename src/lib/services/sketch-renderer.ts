@@ -16,12 +16,15 @@ import {
   threeToSketchPos,
 } from '$lib/services/sketch-plane-utils';
 import { getPointCoords } from '$lib/services/constraint-solver';
+import { findEntityIntersections, reflectPoint } from '$lib/services/sketch-operations';
 
 const SKETCH_COLOR = 0xf9e2af; // yellow
 const INACTIVE_SKETCH_COLOR = 0xa6935c; // dimmer yellow for inactive sketches
 const SELECTED_COLOR = 0x89b4fa; // blue accent
 const HOVERED_COLOR = 0x74c7ec; // teal
 const PREVIEW_COLOR = 0x6c7086; // gray
+const TRIM_HIGHLIGHT_COLOR = 0xf38ba8; // red for trim preview
+const OP_PREVIEW_COLOR = 0x94e2d5; // teal for operation preview
 const PLANE_COLOR = 0x89b4fa; // accent blue for plane overlay
 const GRID_COLOR = 0x45475a; // surface2
 const WELL_CONSTRAINED_COLOR = 0xa6e3a1; // green
@@ -42,6 +45,7 @@ export class SketchRenderer {
   private inactiveMeshes: Map<SketchId, THREE.Group> = new Map();
   private constraintGroup: THREE.Group;
   private previewLine: THREE.Line | null = null;
+  private opPreviewLines: THREE.Line[] = [];
   private planeInfo: SketchPlaneInfo | null = null;
 
   constructor(scene: THREE.Scene) {
@@ -186,6 +190,28 @@ export class SketchRenderer {
         }
         break;
       }
+
+      // ── Operation previews ──
+      case 'sketch-op-trim': {
+        // Highlight the hovered entity in red to show which segment would be removed
+        const hoveredEntity = sketch.entities.find(e => {
+          const d = entityDistance(preview, e);
+          return d < 0.5;
+        });
+        if (hoveredEntity) {
+          const entityLine = this.createEntityLineWithPlane(hoveredEntity, TRIM_HIGHLIGHT_COLOR, this.planeInfo);
+          if (entityLine) {
+            this.opPreviewLines.push(entityLine);
+            this.container.add(entityLine);
+          }
+        }
+        break;
+      }
+      case 'sketch-op-mirror': {
+        // Show mirror preview of selected entities when hovering over the mirror line
+        // (We'd need selectedEntityIds here; skip for now - mirror preview is complex)
+        break;
+      }
     }
 
     if (points.length >= 2) {
@@ -209,6 +235,12 @@ export class SketchRenderer {
       (this.previewLine.material as THREE.Material).dispose();
       this.previewLine = null;
     }
+    for (const line of this.opPreviewLines) {
+      this.container.remove(line);
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+    }
+    this.opPreviewLines = [];
   }
 
   // ── Raycast (2D distance-based hit-test) ────────

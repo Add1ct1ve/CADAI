@@ -203,6 +203,15 @@
     { id: 'sketch-constraint-radius',        label: 'Rad',    shortcut: 'Q' },
     { id: 'sketch-constraint-angle',         label: 'Angle',  shortcut: 'N' },
   ];
+
+  const operationToolButtons: { id: SketchToolId; label: string; shortcut: string }[] = [
+    { id: 'sketch-op-trim',    label: 'Trim',    shortcut: 'X' },
+    { id: 'sketch-op-extend',  label: 'Extend',  shortcut: 'W' },
+    { id: 'sketch-op-offset',  label: 'Offset',  shortcut: 'F' },
+    { id: 'sketch-op-mirror',  label: 'Mirror',  shortcut: 'M' },
+    { id: 'sketch-op-fillet',  label: 'Fillet',  shortcut: 'G' },
+    { id: 'sketch-op-chamfer', label: 'Chamfer', shortcut: 'J' },
+  ];
 </script>
 
 <div class="toolbar">
@@ -275,6 +284,20 @@
       {#each constraintToolButtons as btn}
         <button
           class="toolbar-btn tool-btn constraint-btn"
+          class:tool-active-sketch={sketchStore.activeSketchTool === btn.id}
+          onclick={() => setSketchTool(btn.id)}
+          title="{btn.label} ({btn.shortcut})"
+        >
+          {btn.label}
+        </button>
+      {/each}
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Operation tools -->
+      {#each operationToolButtons as btn}
+        <button
+          class="toolbar-btn tool-btn operation-btn"
           class:tool-active-sketch={sketchStore.activeSketchTool === btn.id}
           onclick={() => setSketchTool(btn.id)}
           title="{btn.label} ({btn.shortcut})"
@@ -526,6 +549,18 @@
   .constraint-btn:hover {
     background: rgba(203, 166, 247, 0.1);
     border-color: #cba6f7;
+  }
+
+  .operation-btn {
+    font-size: 10px;
+    padding: 3px 6px;
+    color: #94e2d5;
+    border: 1px solid rgba(148, 226, 213, 0.3);
+  }
+
+  .operation-btn:hover {
+    background: rgba(148, 226, 213, 0.1);
+    border-color: #94e2d5;
   }
 
   .sketch-finish-btn {

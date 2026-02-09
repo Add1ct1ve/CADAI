@@ -150,6 +150,12 @@
         d: 'sketch-constraint-distance',
         q: 'sketch-constraint-radius',
         n: 'sketch-constraint-angle',
+        x: 'sketch-op-trim',
+        w: 'sketch-op-extend',
+        f: 'sketch-op-offset',
+        m: 'sketch-op-mirror',
+        g: 'sketch-op-fillet',
+        j: 'sketch-op-chamfer',
       };
       const sketchTool = sketchToolMap[e.key.toLowerCase()];
       if (sketchTool) {

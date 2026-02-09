@@ -9,10 +9,12 @@
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { handleSketchClick } from '$lib/services/sketch-interaction';
   import { handleConstraintSelection } from '$lib/services/constraint-interaction';
+  import { handleSketchOp, handleTrim } from '$lib/services/sketch-operations';
+  import type { PendingSketchOp, SketchOpAction } from '$lib/services/sketch-operations';
   import { snapToSketchGrid } from '$lib/services/sketch-plane-utils';
   import ViewControls from '$lib/components/ViewControls.svelte';
   import DimensionInput from '$lib/components/DimensionInput.svelte';
-  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint } from '$lib/types/cad';
+  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint, SketchToolId } from '$lib/types/cad';
   import type * as THREE from 'three';
   import { onMount } from 'svelte';
 
@@ -45,6 +47,7 @@
   let dimensionInputDefaultValue = $state(0);
   let dimensionInputPosition = $state({ x: 0, y: 0 });
   let pendingConstraint = $state<Partial<SketchConstraint> | null>(null);
+  let pendingSketchOp = $state<PendingSketchOp | null>(null);
   let constraintStatusMessage = $state('');
 
   // ── Full snapshot helpers (scene + sketch) ──
@@ -443,17 +446,18 @@
       const pt = sketchStore.sketchSnap ? snapToSketchGrid(rawPt, sketchStore.sketchSnap) : rawPt;
       sketchStore.setPreviewPoint(pt);
 
-      // Hover detection for select tool or constraint tools
+      // Hover detection for select tool, constraint tools, or operation tools
       const currentTool = sketchStore.activeSketchTool;
       const isConstraintTool = currentTool.startsWith('sketch-constraint-');
-      if (currentTool === 'sketch-select' || isConstraintTool) {
+      const isOpTool = currentTool.startsWith('sketch-op-');
+      if (currentTool === 'sketch-select' || isConstraintTool || isOpTool) {
         const hitId = engine.raycastSketchEntities(e, sketch);
         sketchStore.setHoveredEntity(hitId);
       }
 
       // Set cursor
       if (containerRef) {
-        if (currentTool === 'sketch-select' || isConstraintTool) {
+        if (currentTool === 'sketch-select' || isConstraintTool || isOpTool) {
           const hitId = engine.raycastSketchEntities(e, sketch);
           containerRef.style.cursor = hitId ? 'pointer' : '';
         } else {
@@ -549,6 +553,38 @@
         return;
       }
 
+      // Sketch operation tools
+      if (tool.startsWith('sketch-op-')) {
+        constraintStatusMessage = '';
+
+        // Trim uses click point on entity directly
+        if (tool === 'sketch-op-trim') {
+          const hitId = engine.raycastSketchEntities(e, sketch);
+          if (!hitId) return;
+          const rawPt = engine.getSketchPlaneIntersection(e, sketch);
+          if (!rawPt) return;
+          const pt = sketchStore.sketchSnap ? snapToSketchGrid(rawPt, sketchStore.sketchSnap) : rawPt;
+          const opAction = handleTrim(pt, hitId, sketch.entities, () => sketchStore.newEntityId());
+          applySketchOpAction(opAction, e);
+          return;
+        }
+
+        // Other ops: select entities, then dispatch
+        const hitId = engine.raycastSketchEntities(e, sketch);
+        if (hitId) {
+          sketchStore.selectEntity(hitId, true);
+        }
+
+        const opAction = handleSketchOp(
+          tool,
+          sketchStore.selectedEntityIds,
+          sketch.entities,
+          () => sketchStore.newEntityId(),
+        );
+        applySketchOpAction(opAction, e);
+        return;
+      }
+
       // Drawing tools
       const rawPt = engine.getSketchPlaneIntersection(e, sketch);
       if (!rawPt) return;
@@ -639,15 +675,62 @@
       sketchStore.addConstraint(constraint);
       sketchStore.selectEntity(null);
       triggerPipeline(100);
+    } else if (pendingSketchOp) {
+      const sketch = sketchStore.activeSketch;
+      if (sketch) {
+        const opAction = handleSketchOp(
+          pendingSketchOp.opType as SketchToolId,
+          pendingSketchOp.entityIds,
+          sketch.entities,
+          () => sketchStore.newEntityId(),
+          value,
+          pendingSketchOp.clickPoint,
+        );
+        if (opAction.type === 'replace') {
+          history.pushSnapshot(captureFullSnapshot());
+          sketchStore.applySketchOp(opAction.removeIds, opAction.addEntities);
+          sketchStore.selectEntity(null);
+          triggerPipeline(100);
+        } else if (opAction.type === 'invalid') {
+          constraintStatusMessage = opAction.message;
+        }
+      }
     }
     dimensionInputVisible = false;
     pendingConstraint = null;
+    pendingSketchOp = null;
   }
 
   function handleDimensionCancel() {
     dimensionInputVisible = false;
     pendingConstraint = null;
+    pendingSketchOp = null;
     sketchStore.selectEntity(null);
+  }
+
+  function applySketchOpAction(action: SketchOpAction, e: PointerEvent) {
+    switch (action.type) {
+      case 'replace':
+        history.pushSnapshot(captureFullSnapshot());
+        sketchStore.applySketchOp(action.removeIds, action.addEntities);
+        sketchStore.selectEntity(null);
+        triggerPipeline(100);
+        break;
+      case 'need-value':
+        pendingSketchOp = action.pendingOp;
+        dimensionInputPrompt = action.prompt;
+        dimensionInputDefaultValue = action.defaultValue;
+        dimensionInputPosition = { x: e.clientX, y: e.clientY };
+        dimensionInputVisible = true;
+        break;
+      case 'need-more':
+        constraintStatusMessage = action.message;
+        break;
+      case 'invalid':
+        constraintStatusMessage = action.message;
+        sketchStore.selectEntity(null);
+        break;
+    }
   }
 
   // Sketch tool hint text
@@ -666,6 +749,12 @@
     'sketch-constraint-distance': 'Click 2 entities to set distance between endpoints',
     'sketch-constraint-radius': 'Click a circle or arc to set its radius',
     'sketch-constraint-angle': 'Click 2 lines to set the angle between them',
+    'sketch-op-trim': 'Click on a segment to trim it at intersections',
+    'sketch-op-extend': 'Click a line to extend it to the nearest intersection',
+    'sketch-op-offset': 'Select entity, then enter offset distance',
+    'sketch-op-mirror': 'Select entities to mirror, then click the mirror line',
+    'sketch-op-fillet': 'Select 2 connected lines, then enter fillet radius',
+    'sketch-op-chamfer': 'Select 2 connected lines, then enter chamfer distance',
   };
 </script>
 

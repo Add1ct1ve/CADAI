@@ -235,6 +235,24 @@ export function getSketchStore() {
       this.runSolver();
     },
 
+    applySketchOp(removeIds: string[], addEntities: SketchEntity[]) {
+      if (!activeSketchId) return;
+      const removeSet = new Set(removeIds);
+      sketches = sketches.map((s) => {
+        if (s.id !== activeSketchId) return s;
+        const filteredEntities = s.entities.filter((e) => !removeSet.has(e.id));
+        const filteredConstraints = (s.constraints ?? []).filter((c) =>
+          !constraintReferencesAny(c, removeSet),
+        );
+        return {
+          ...s,
+          entities: [...filteredEntities, ...addEntities],
+          constraints: filteredConstraints,
+        };
+      });
+      this.runSolver();
+    },
+
     addDrawingPoint(point: Point2D) {
       drawingPoints = [...drawingPoints, point];
     },
