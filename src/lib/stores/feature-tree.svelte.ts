@@ -17,6 +17,13 @@ function primitiveIcon(obj: SceneObject): string {
     }
   }
   if (obj.splitOp) return '\u2702'; // ✂
+  if (obj.patternOp) {
+    switch (obj.patternOp.type) {
+      case 'mirror':   return '\u2194'; // ↔
+      case 'linear':   return '\u22EF'; // ⋯
+      case 'circular': return '\u21BB'; // ↻
+    }
+  }
   switch (obj.params.type) {
     case 'box': return '\u25FB'; // ◻
     case 'cylinder': return '\u25CB'; // ○
@@ -40,6 +47,16 @@ function primitiveDetail(obj: SceneObject): string {
     return `${obj.booleanOp.type} \u2192 ${target?.name ?? '?'}`;
   }
   if (obj.splitOp) return `split ${obj.splitOp.plane} (${obj.splitOp.keepSide})`;
+  if (obj.patternOp) {
+    switch (obj.patternOp.type) {
+      case 'mirror':
+        return `mirror ${obj.patternOp.plane}${obj.patternOp.offset ? ` +${obj.patternOp.offset}` : ''}`;
+      case 'linear':
+        return `${obj.patternOp.count}\u00D7 linear ${obj.patternOp.direction} @${obj.patternOp.spacing}mm`;
+      case 'circular':
+        return `${obj.patternOp.count}\u00D7 circular ${obj.patternOp.axis} ${obj.patternOp.fullAngle}\u00B0`;
+    }
+  }
   const params = obj.params;
   switch (params.type) {
     case 'box':

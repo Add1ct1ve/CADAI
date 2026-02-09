@@ -18,7 +18,7 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
-  import type { ToolId, SketchToolId, BooleanOpType } from '$lib/types/cad';
+  import type { ToolId, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
   import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
 
@@ -98,6 +98,23 @@
     runPythonExecution();
   }
 
+  function applyPatternFromPage(type: PatternType) {
+    if (scene.codeMode !== 'parametric' || sketchStore.isInSketchMode) return;
+    if (scene.selectedIds.length !== 1) return;
+    const obj = scene.firstSelected;
+    if (!obj || obj.booleanOp || obj.splitOp) return;
+    history.pushSnapshot(captureFullSnapshot());
+    let op: PatternOp;
+    switch (type) {
+      case 'mirror': op = { type: 'mirror', plane: 'XY', offset: 0, keepOriginal: true }; break;
+      case 'linear': op = { type: 'linear', direction: 'X', spacing: 20, count: 3 }; break;
+      case 'circular': op = { type: 'circular', axis: 'Z', count: 6, fullAngle: 360 }; break;
+    }
+    scene.setPatternOp(obj.id, op);
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
@@ -139,6 +156,9 @@
       if (key === 'D') { e.preventDefault(); applyBooleanFromPage('subtract'); return; }
       if (key === 'I') { e.preventDefault(); applyBooleanFromPage('intersect'); return; }
       if (key === 'P') { e.preventDefault(); applySplitFromPage(); return; }
+      if (key === 'M') { e.preventDefault(); applyPatternFromPage('mirror'); return; }
+      if (key === 'L') { e.preventDefault(); applyPatternFromPage('linear'); return; }
+      if (key === 'O') { e.preventDefault(); applyPatternFromPage('circular'); return; }
     }
 
     // Tool shortcuts (only when not focused on an input)

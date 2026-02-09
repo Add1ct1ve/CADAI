@@ -137,6 +137,32 @@ export interface SplitOp {
   keepSide: 'positive' | 'negative' | 'both';
 }
 
+// ─── Pattern types ─────────────────────────────
+export type PatternType = 'mirror' | 'linear' | 'circular';
+
+export interface MirrorPattern {
+  type: 'mirror';
+  plane: 'XY' | 'XZ' | 'YZ';
+  offset: number;
+  keepOriginal: boolean;
+}
+
+export interface LinearPattern {
+  type: 'linear';
+  direction: 'X' | 'Y' | 'Z';
+  spacing: number;
+  count: number;
+}
+
+export interface CircularPattern {
+  type: 'circular';
+  axis: 'X' | 'Y' | 'Z';
+  count: number;
+  fullAngle: number;
+}
+
+export type PatternOp = MirrorPattern | LinearPattern | CircularPattern;
+
 export interface Sketch {
   id: SketchId;
   name: string;
@@ -207,6 +233,7 @@ export interface SceneObject {
   holes?: HoleParams[];
   booleanOp?: BooleanOp;
   splitOp?: SplitOp;
+  patternOp?: PatternOp;
   suppressed?: boolean;
 }
 

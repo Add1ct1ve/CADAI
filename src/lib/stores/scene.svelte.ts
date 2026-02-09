@@ -12,6 +12,7 @@ import type {
   HoleParams,
   BooleanOp,
   SplitOp,
+  PatternOp,
 } from '$lib/types/cad';
 import { getDefaultParams, getDefaultTransform } from '$lib/types/cad';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
@@ -154,13 +155,21 @@ export function getSceneStore() {
 
     setBooleanOp(id: ObjectId, op: BooleanOp | undefined) {
       objects = objects.map((o) =>
-        o.id === id ? { ...o, booleanOp: op, splitOp: op ? undefined : o.splitOp } : o,
+        o.id === id ? { ...o, booleanOp: op, splitOp: op ? undefined : o.splitOp, patternOp: op ? undefined : o.patternOp } : o,
       );
     },
 
     setSplitOp(id: ObjectId, op: SplitOp | undefined) {
       objects = objects.map((o) =>
-        o.id === id ? { ...o, splitOp: op, booleanOp: op ? undefined : o.booleanOp } : o,
+        o.id === id ? { ...o, splitOp: op, booleanOp: op ? undefined : o.booleanOp, patternOp: op ? undefined : o.patternOp } : o,
+      );
+    },
+
+    setPatternOp(id: ObjectId, op: PatternOp | undefined) {
+      objects = objects.map((o) =>
+        o.id === id
+          ? { ...o, patternOp: op, booleanOp: op ? undefined : o.booleanOp, splitOp: op ? undefined : o.splitOp }
+          : o,
       );
     },
 

@@ -1,4 +1,4 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp } from '$lib/types/cad';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -226,6 +226,63 @@ function generateSplitOp(name: string, split: SplitOp): string[] {
   return lines;
 }
 
+function generatePatternOp(name: string, pattern: PatternOp): string[] {
+  const lines: string[] = [];
+  lines.push(`# --- Pattern: ${pattern.type} ---`);
+
+  switch (pattern.type) {
+    case 'mirror': {
+      const plane = pattern.plane;
+      if (pattern.keepOriginal) {
+        if (pattern.offset !== 0) {
+          const axisVec = plane === 'XY' ? `(0, 0, ${fmt(-pattern.offset)})`
+            : plane === 'XZ' ? `(0, ${fmt(-pattern.offset)}, 0)`
+            : `(${fmt(-pattern.offset)}, 0, 0)`;
+          const backVec = plane === 'XY' ? `(0, 0, ${fmt(pattern.offset)})`
+            : plane === 'XZ' ? `(0, ${fmt(pattern.offset)}, 0)`
+            : `(${fmt(pattern.offset)}, 0, 0)`;
+          lines.push(`${name} = ${name}.union(${name}.translate(${axisVec}).mirror("${plane}").translate(${backVec}))`);
+        } else {
+          lines.push(`${name} = ${name}.union(${name}.mirror("${plane}"))`);
+        }
+      } else {
+        if (pattern.offset !== 0) {
+          const axisVec = plane === 'XY' ? `(0, 0, ${fmt(-pattern.offset)})`
+            : plane === 'XZ' ? `(0, ${fmt(-pattern.offset)}, 0)`
+            : `(${fmt(-pattern.offset)}, 0, 0)`;
+          const backVec = plane === 'XY' ? `(0, 0, ${fmt(pattern.offset)})`
+            : plane === 'XZ' ? `(0, ${fmt(pattern.offset)}, 0)`
+            : `(${fmt(pattern.offset)}, 0, 0)`;
+          lines.push(`${name} = ${name}.translate(${axisVec}).mirror("${plane}").translate(${backVec})`);
+        } else {
+          lines.push(`${name} = ${name}.mirror("${plane}")`);
+        }
+      }
+      break;
+    }
+    case 'linear': {
+      const dirVec = pattern.direction === 'X' ? [1, 0, 0] : pattern.direction === 'Y' ? [0, 1, 0] : [0, 0, 1];
+      lines.push(`_base_${name} = ${name}`);
+      lines.push(`for _i in range(1, ${pattern.count}):`);
+      lines.push(`    ${name} = ${name}.union(_base_${name}.translate((`);
+      lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[0]},`);
+      lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[1]},`);
+      lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[2]})))`);
+      break;
+    }
+    case 'circular': {
+      const axisVec = pattern.axis === 'X' ? '(1, 0, 0)' : pattern.axis === 'Y' ? '(0, 1, 0)' : '(0, 0, 1)';
+      const angleStep = pattern.fullAngle / pattern.count;
+      lines.push(`_base_${name} = ${name}`);
+      lines.push(`for _i in range(1, ${pattern.count}):`);
+      lines.push(`    ${name} = ${name}.union(_base_${name}.rotate((0,0,0), ${axisVec}, ${fmt(angleStep)} * _i))`);
+      break;
+    }
+  }
+  lines.push('');
+  return lines;
+}
+
 export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], activeFeatureIds?: string[]): string {
   // When activeFeatureIds is provided, use feature-tree ordering and filtering
   if (activeFeatureIds) {
@@ -338,6 +395,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const cutSketches: Sketch[] = [];
   const booleanOps: Array<{ toolName: string; opType: string; targetName: string }> = [];
   const splitOps: Array<{ name: string; split: SplitOp; obj: SceneObject }> = [];
+  const patternOps: Array<{ name: string; pattern: PatternOp }> = [];
   const booleanToolIds = new Set<string>();
 
   for (const id of activeFeatureIds) {
@@ -401,6 +459,11 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         splitOps.push({ name: obj.name, split: obj.splitOp, obj });
       }
 
+      // Collect pattern ops for pass 3.5
+      if (obj.patternOp) {
+        patternOps.push({ name: obj.name, pattern: obj.patternOp });
+      }
+
       // Only add to assembly if NOT a boolean tool
       if (!obj.booleanOp) {
         assemblyNames.push(obj.name);
@@ -428,6 +491,11 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         assemblyNames.splice(idx, 1, `${name}_pos`, `${name}_neg`);
       }
     }
+  }
+
+  // ── Pass 3.5: Pattern operations ──
+  for (const { name, pattern } of patternOps) {
+    lines.push(...generatePatternOp(name, pattern));
   }
 
   // ── Pass 4: Cut-mode sketches ──

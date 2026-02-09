@@ -3,7 +3,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane, PatternOp, PatternType } from '$lib/types/cad';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
@@ -504,6 +504,78 @@
     triggerAndRun();
   }
 
+  // ── Object Pattern ──
+
+  const patternTypeOptions: { value: PatternType; label: string }[] = [
+    { value: 'mirror', label: 'Mirror' },
+    { value: 'linear', label: 'Linear' },
+    { value: 'circular', label: 'Circular' },
+  ];
+
+  const patternPlaneOptions: { value: string; label: string }[] = [
+    { value: 'XY', label: 'XY' }, { value: 'XZ', label: 'XZ' }, { value: 'YZ', label: 'YZ' },
+  ];
+
+  const patternAxisOptions: { value: string; label: string }[] = [
+    { value: 'X', label: 'X' }, { value: 'Y', label: 'Y' }, { value: 'Z', label: 'Z' },
+  ];
+
+  const patternDirOptions: { value: string; label: string }[] = [
+    { value: 'X', label: 'X' }, { value: 'Y', label: 'Y' }, { value: 'Z', label: 'Z' },
+  ];
+
+  function addPatternOp(type: PatternType) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    let op: PatternOp;
+    switch (type) {
+      case 'mirror': op = { type: 'mirror', plane: 'XY', offset: 0, keepOriginal: true }; break;
+      case 'linear': op = { type: 'linear', direction: 'X', spacing: 20, count: 3 }; break;
+      case 'circular': op = { type: 'circular', axis: 'Z', count: 6, fullAngle: 360 }; break;
+    }
+    scene.setPatternOp(obj.id, op);
+    triggerAndRun();
+  }
+
+  function switchPatternType(newType: PatternType) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    let op: PatternOp;
+    switch (newType) {
+      case 'mirror': op = { type: 'mirror', plane: 'XY', offset: 0, keepOriginal: true }; break;
+      case 'linear': op = { type: 'linear', direction: 'X', spacing: 20, count: 3 }; break;
+      case 'circular': op = { type: 'circular', axis: 'Z', count: 6, fullAngle: 360 }; break;
+    }
+    scene.setPatternOp(obj.id, op);
+    triggerAndRun();
+  }
+
+  function updatePatternOp(key: string, value: any) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.patternOp) return;
+    captureOnce();
+    scene.setPatternOp(obj.id, { ...obj.patternOp, [key]: value } as PatternOp);
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function updatePatternOpImmediate(key: string, value: any) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.patternOp) return;
+    captureOnce();
+    scene.setPatternOp(obj.id, { ...obj.patternOp, [key]: value } as PatternOp);
+    triggerAndRun();
+  }
+
+  function removePatternOp() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setPatternOp(obj.id, undefined);
+    triggerAndRun();
+  }
+
   function addSketchFillet() {
     const sketch = sketchStore.selectedSketch;
     if (!sketch) return;
@@ -930,7 +1002,7 @@
           </select>
         </div>
         <button class="remove-btn" onclick={removeBooleanOp}>Remove Boolean</button>
-      {:else if !obj.splitOp}
+      {:else if !obj.splitOp && !obj.patternOp}
         <span class="prop-hint">Select 2 objects for boolean, or:</span>
         <div class="op-buttons">
           <button class="apply-btn full-width" onclick={() => addBooleanOp('union')}>Set as Union Tool</button>
@@ -968,8 +1040,96 @@
           </select>
         </div>
         <button class="remove-btn" onclick={removeSplitOp}>Remove Split</button>
-      {:else if !obj.booleanOp}
+      {:else if !obj.booleanOp && !obj.patternOp}
         <button class="apply-btn full-width" onclick={addSplitOp}>Split Body</button>
+      {/if}
+    </div>
+
+    <!-- Pattern -->
+    <div class="prop-section">
+      <div class="prop-section-title">Pattern</div>
+      {#if obj.patternOp}
+        <div class="prop-row">
+          <label>Type</label>
+          <select class="prop-select" value={obj.patternOp.type}
+            onchange={(e) => switchPatternType((e.target as HTMLSelectElement).value as PatternType)}>
+            {#each patternTypeOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+
+        {#if obj.patternOp.type === 'mirror'}
+          <div class="prop-row">
+            <label>Plane</label>
+            <select class="prop-select" value={obj.patternOp.plane}
+              onchange={(e) => updatePatternOpImmediate('plane', (e.target as HTMLSelectElement).value)}>
+              {#each patternPlaneOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Offset</label>
+            <input type="number" value={obj.patternOp.offset} step="1"
+              oninput={(e) => numInput(e, (v) => updatePatternOp('offset', v))} />
+          </div>
+          <div class="prop-row">
+            <label>Keep Orig</label>
+            <button class="toggle-btn" class:active={obj.patternOp.keepOriginal}
+              onclick={() => { if (obj.patternOp?.type === 'mirror') updatePatternOpImmediate('keepOriginal', !obj.patternOp.keepOriginal); }}>
+              {obj.patternOp.keepOriginal ? 'Yes' : 'No'}
+            </button>
+          </div>
+        {:else if obj.patternOp.type === 'linear'}
+          <div class="prop-row">
+            <label>Dir</label>
+            <select class="prop-select" value={obj.patternOp.direction}
+              onchange={(e) => updatePatternOpImmediate('direction', (e.target as HTMLSelectElement).value)}>
+              {#each patternDirOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Spacing</label>
+            <input type="number" value={obj.patternOp.spacing} step="1" min="0.1"
+              oninput={(e) => numInput(e, (v) => updatePatternOp('spacing', v))} />
+          </div>
+          <div class="prop-row">
+            <label>Count</label>
+            <input type="number" value={obj.patternOp.count} step="1" min="2" max="50"
+              oninput={(e) => numInput(e, (v) => updatePatternOp('count', Math.max(2, Math.round(v))))} />
+          </div>
+        {:else if obj.patternOp.type === 'circular'}
+          <div class="prop-row">
+            <label>Axis</label>
+            <select class="prop-select" value={obj.patternOp.axis}
+              onchange={(e) => updatePatternOpImmediate('axis', (e.target as HTMLSelectElement).value)}>
+              {#each patternAxisOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Count</label>
+            <input type="number" value={obj.patternOp.count} step="1" min="2" max="50"
+              oninput={(e) => numInput(e, (v) => updatePatternOp('count', Math.max(2, Math.round(v))))} />
+          </div>
+          <div class="prop-row">
+            <label>Angle</label>
+            <input type="number" value={obj.patternOp.fullAngle} step="15" min="1" max="360"
+              oninput={(e) => numInput(e, (v) => updatePatternOp('fullAngle', v))} />
+          </div>
+        {/if}
+
+        <button class="remove-btn" onclick={removePatternOp}>Remove Pattern</button>
+      {:else if !obj.booleanOp && !obj.splitOp}
+        <div class="op-buttons">
+          <button class="apply-btn full-width" onclick={() => addPatternOp('mirror')}>Mirror Body</button>
+          <button class="apply-btn full-width" onclick={() => addPatternOp('linear')}>Linear Pattern</button>
+          <button class="apply-btn full-width" onclick={() => addPatternOp('circular')}>Circular Pattern</button>
+        </div>
       {/if}
     </div>
 
