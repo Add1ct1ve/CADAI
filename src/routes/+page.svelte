@@ -7,7 +7,9 @@
   import Viewport from '$lib/components/Viewport.svelte';
   import RightPanel from '$lib/components/RightPanel.svelte';
   import Settings from '$lib/components/Settings.svelte';
+  import ShortcutsPanel from '$lib/components/ShortcutsPanel.svelte';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
+  import { applyTheme } from '$lib/services/theme';
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
@@ -34,9 +36,19 @@
   const datumStore = getDatumStore();
 
   let settingsOpen = $state(false);
+  let shortcutsOpen = $state(false);
 
   onMount(() => {
-    settings.load();
+    settings.load().then(() => {
+      // Apply persisted theme
+      applyTheme((settings.config.theme as 'dark' | 'light') || 'dark');
+
+      // Apply persisted snap values
+      tools.setTranslateSnap(settings.config.snap_translate ?? 1);
+      tools.setRotationSnap(settings.config.snap_rotation ?? 15);
+      sketchStore.setSketchSnap(settings.config.snap_sketch ?? 0.5);
+    });
+
     startAutosave();
     sketchStore.initSolver().catch(console.error);
 
@@ -176,6 +188,13 @@
 
     // Tool shortcuts (only when not focused on an input)
     if (isInput) return;
+
+    // ? key: open shortcuts panel
+    if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
+      e.preventDefault();
+      shortcutsOpen = !shortcutsOpen;
+      return;
+    }
 
     // ── Sketch mode shortcuts (intercept before 3D shortcuts) ──
     if (sketchStore.isInSketchMode) {
@@ -370,6 +389,7 @@
 
   <StatusBar />
   <Settings open={settingsOpen} onClose={() => { settingsOpen = false; }} />
+  <ShortcutsPanel open={shortcutsOpen} onClose={() => { shortcutsOpen = false; }} />
 </div>
 
 <style>

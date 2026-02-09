@@ -17,7 +17,12 @@
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import ViewControls from '$lib/components/ViewControls.svelte';
   import DimensionInput from '$lib/components/DimensionInput.svelte';
-  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint, SketchToolId } from '$lib/types/cad';
+  import MeasurePanel from '$lib/components/MeasurePanel.svelte';
+  import { getSettingsStore } from '$lib/stores/settings.svelte';
+  import { getMeasureStore } from '$lib/stores/measure.svelte';
+  import { computeMassProperties } from '$lib/services/mass-properties';
+  import { nanoid } from 'nanoid';
+  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint, SketchToolId, MeasurePoint } from '$lib/types/cad';
   import * as THREE from 'three';
   import { onMount } from 'svelte';
 
@@ -30,9 +35,11 @@
   const datumStore = getDatumStore();
   const featureTree = getFeatureTreeStore();
   const history = getHistoryStore();
+  const measureStore = getMeasureStore();
+  const settingsStore = getSettingsStore();
 
   // Tracking for diff-based preview mesh sync
-  type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean };
+  type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean; metalness: number; roughness: number; opacity: number };
   let prevObjectMap = new Map<ObjectId, ObjectFingerprint>();
 
   // Track which object is being dragged by gizmo to prevent feedback loop
@@ -101,6 +108,15 @@
       if (scene.codeMode !== 'parametric') {
         engine.loadDemoBox();
         viewportStore.setHasModel(true);
+      }
+
+      // Apply persisted grid and theme settings
+      const cfg = settingsStore.config;
+      if (cfg.grid_size !== 100 || cfg.grid_spacing !== 1) {
+        engine.rebuildGrid(cfg.grid_size, cfg.grid_spacing);
+      }
+      if (cfg.theme === 'light') {
+        engine.setThemeColors('light');
       }
 
       viewportStore.setLoading(false);
@@ -234,7 +250,9 @@
       engine.clearModel();
       engine.removeAllObjects();
       engine.removeAllDatums();
+      engine.clearAllMeasurements();
       engine.exitSketchMode();
+      measureStore.clearAll();
       prevObjectMap = new Map();
       viewportStore.setPendingClear(false);
       viewportStore.setHasModel(false);
@@ -286,33 +304,40 @@
 
       const paramsStr = JSON.stringify(obj.params);
       const transformStr = JSON.stringify(obj.transform);
+      const curMetalness = obj.metalness ?? 0.3;
+      const curRoughness = obj.roughness ?? 0.7;
+      const curOpacity = obj.opacity ?? 1.0;
       const prev = prevObjectMap.get(obj.id);
+
+      const fingerprint: ObjectFingerprint = {
+        params: paramsStr,
+        transform: transformStr,
+        color: obj.color,
+        visible: obj.visible,
+        metalness: curMetalness,
+        roughness: curRoughness,
+        opacity: curOpacity,
+      };
 
       if (!prev) {
         // New object — full add
-        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color);
-        prevObjectMap.set(obj.id, {
-          params: paramsStr,
-          transform: transformStr,
-          color: obj.color,
-          visible: obj.visible,
-        });
-      } else if (prev.params !== paramsStr || prev.color !== obj.color) {
-        // Params or color changed — full rebuild
-        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color);
-        prevObjectMap.set(obj.id, {
-          params: paramsStr,
-          transform: transformStr,
-          color: obj.color,
-          visible: obj.visible,
-        });
+        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        prevObjectMap.set(obj.id, fingerprint);
+      } else if (prev.params !== paramsStr) {
+        // Params changed — full rebuild
+        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        prevObjectMap.set(obj.id, fingerprint);
+      } else if (prev.color !== obj.color || prev.metalness !== curMetalness || prev.roughness !== curRoughness || prev.opacity !== curOpacity) {
+        // Material/color changed — lightweight material update (no geometry rebuild)
+        engine.updateObjectMaterial(obj.id, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        if (prev.transform !== transformStr) {
+          engine.updateObjectTransform(obj.id, obj.transform);
+        }
+        prevObjectMap.set(obj.id, fingerprint);
       } else if (prev.transform !== transformStr) {
         // Only transform changed — lightweight update
         engine.updateObjectTransform(obj.id, obj.transform);
-        prevObjectMap.set(obj.id, {
-          ...prev,
-          transform: transformStr,
-        });
+        prevObjectMap.set(obj.id, { ...prev, transform: transformStr });
       }
     }
   });
@@ -484,6 +509,76 @@
     }
   });
 
+  // ── Sync measurements to engine ──
+  $effect(() => {
+    if (!engine) return;
+
+    const currentMeasurements = measureStore.measurements;
+    const engineIds = engine.getMeasurementIds();
+    const storeIds = new Set(currentMeasurements.map((m) => m.id));
+
+    // Remove measurements no longer in store
+    for (const id of engineIds) {
+      if (!storeIds.has(id)) {
+        engine.removeMeasurement(id);
+      }
+    }
+
+    // Add new measurements
+    for (const m of currentMeasurements) {
+      if (!engineIds.has(m.id)) {
+        switch (m.type) {
+          case 'distance':
+            engine.addDistanceMeasurement(
+              m.id,
+              new THREE.Vector3(...m.point1.worldPos),
+              new THREE.Vector3(...m.point2.worldPos),
+              m.distance,
+            );
+            break;
+          case 'angle':
+            engine.addAngleMeasurement(
+              m.id,
+              new THREE.Vector3(...m.vertex.worldPos),
+              new THREE.Vector3(...m.arm1.worldPos),
+              new THREE.Vector3(...m.arm2.worldPos),
+              m.angleDegrees,
+            );
+            break;
+          case 'radius':
+            engine.addRadiusMeasurement(
+              m.id,
+              new THREE.Vector3(...m.center),
+              m.radius,
+            );
+            break;
+          case 'bbox':
+            engine.addBBoxMeasurement(m.id, m.objectId);
+            break;
+        }
+      }
+    }
+  });
+
+  // ── Sync pending marker ──
+  $effect(() => {
+    if (!engine) return;
+    const pending = measureStore.pendingPoints;
+    if (pending.length > 0) {
+      engine.showPendingMarker(new THREE.Vector3(...pending[pending.length - 1].worldPos));
+    } else {
+      engine.clearPendingMarker();
+    }
+  });
+
+  // ── Clear measure tool state when switching away ──
+  $effect(() => {
+    if (tools.activeTool !== 'measure') {
+      measureStore.setMeasureTool(null);
+      measureStore.clearPending();
+    }
+  });
+
   function handlePointerMove(e: PointerEvent) {
     if (!engine) return;
 
@@ -517,6 +612,12 @@
           containerRef.style.cursor = 'crosshair';
         }
       }
+      return;
+    }
+
+    // ── Measure mode pointer move ──
+    if (tools.activeTool === 'measure' && !sketchStore.isInSketchMode) {
+      if (containerRef) containerRef.style.cursor = 'crosshair';
       return;
     }
 
@@ -670,6 +771,81 @@
           }
           triggerPipeline(100);
           break;
+      }
+      return;
+    }
+
+    // ── Measure mode ──
+    if (tools.activeTool === 'measure' && !sketchStore.isInSketchMode) {
+      const measureTool = measureStore.activeMeasureTool;
+      if (!measureTool) return;
+
+      // Try raycast surface first, fall back to grid
+      const surfaceHit = engine.raycastSurface(e);
+      let worldPos: [number, number, number];
+      let objectId: ObjectId | undefined;
+
+      if (surfaceHit) {
+        worldPos = [surfaceHit.point.x, surfaceHit.point.y, surfaceHit.point.z];
+        objectId = surfaceHit.objectId ?? undefined;
+      } else {
+        const gridPos = engine.getGridIntersection(e);
+        if (!gridPos) return;
+        // Grid returns CadQuery coords; convert to Three.js Y-up for worldPos
+        worldPos = [gridPos[0], 0, -gridPos[1]];
+      }
+
+      const point: MeasurePoint = { worldPos, objectId };
+
+      switch (measureTool) {
+        case 'measure-distance':
+        case 'measure-angle':
+          measureStore.addPendingPoint(point);
+          break;
+
+        case 'measure-radius': {
+          // Single click on object: read radius from params
+          if (!objectId) return;
+          const obj = scene.getObjectById(objectId);
+          if (!obj) return;
+          if (obj.params.type === 'cylinder') {
+            measureStore.addMeasurement({
+              type: 'radius',
+              id: nanoid(10),
+              center: worldPos,
+              objectId,
+              radius: obj.params.radius,
+            });
+          } else if (obj.params.type === 'sphere') {
+            measureStore.addMeasurement({
+              type: 'radius',
+              id: nanoid(10),
+              center: worldPos,
+              objectId,
+              radius: obj.params.radius,
+            });
+          }
+          break;
+        }
+
+        case 'measure-bbox': {
+          if (!objectId) return;
+          const bbox = engine.getObjectBBox(objectId);
+          if (!bbox) return;
+          const size = new THREE.Vector3();
+          bbox.getSize(size);
+          measureStore.addMeasurement({
+            type: 'bbox',
+            id: nanoid(10),
+            objectId,
+            min: [bbox.min.x, bbox.min.y, bbox.min.z],
+            max: [bbox.max.x, bbox.max.y, bbox.max.z],
+            sizeX: size.x,
+            sizeY: size.y,
+            sizeZ: size.z,
+          });
+          break;
+        }
       }
       return;
     }
@@ -829,6 +1005,10 @@
   {/if}
 
   <ViewControls />
+
+  {#if tools.activeTool === 'measure' && !sketchStore.isInSketchMode}
+    <MeasurePanel />
+  {/if}
 
   <!-- Scene info overlay -->
   {#if scene.codeMode === 'parametric' && scene.objects.length > 0 && !sketchStore.isInSketchMode}

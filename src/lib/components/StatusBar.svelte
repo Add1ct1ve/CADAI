@@ -4,6 +4,7 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { checkPython } from '$lib/services/tauri';
+  import { unitSuffix } from '$lib/services/units';
   import type { PythonStatus } from '$lib/types';
 
   const settings = getSettingsStore();
@@ -26,6 +27,10 @@
     if (!pythonInfo.venv_ready) return `Python: ${pythonInfo.python_version ?? 'found'} (no venv)`;
     if (!pythonInfo.cadquery_installed) return `Python: ${pythonInfo.python_version} (no CadQuery)`;
     return `Python: ${pythonInfo.python_version} + CadQuery`;
+  });
+
+  let unitsText = $derived(() => {
+    return `Units: ${unitSuffix(settings.config.display_units)}`;
   });
 
   let aiProvider = $derived(() => {
@@ -59,6 +64,8 @@
     {/if}
   </div>
   <div class="status-right">
+    <span class="status-item">{unitsText()}</span>
+    <span class="status-separator">|</span>
     <span class="status-item">{pythonStatusText()}</span>
     <span class="status-separator">|</span>
     <span class="status-item">{aiProvider()}</span>

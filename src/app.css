@@ -19,6 +19,23 @@
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
 }
 
+[data-theme="light"] {
+  --bg-base: #eff1f5;
+  --bg-surface: #e6e9ef;
+  --bg-overlay: #dce0e8;
+  --bg-mantle: #ccd0da;
+  --accent: #1e66f5;
+  --accent-hover: #0050d4;
+  --text-primary: #4c4f69;
+  --text-secondary: #5c5f77;
+  --text-muted: #8c8fa1;
+  --border: #9ca0b0;
+  --border-subtle: #bcc0cc;
+  --success: #40a02b;
+  --warning: #df8e1d;
+  --error: #d20f39;
+}
+
 *,
 *::before,
 *::after {

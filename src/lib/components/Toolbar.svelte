@@ -8,6 +8,7 @@
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import type { ToolId, SketchPlane, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
   import { getDatumStore } from '$lib/stores/datum.svelte';
+  import { getSettingsStore } from '$lib/stores/settings.svelte';
   import { runPythonExecution } from '$lib/services/execution-pipeline';
 
   interface Props {
@@ -22,6 +23,7 @@
   const history = getHistoryStore();
   const featureTree = getFeatureTreeStore();
   const datumStore = getDatumStore();
+  const settingsStore = getSettingsStore();
 
   let isBusy = $state(false);
   let statusMessage = $state('');
@@ -450,10 +452,10 @@
       <button
         class="toolbar-btn snap-btn"
         class:snap-active={sketchStore.sketchSnap !== null}
-        onclick={() => sketchStore.setSketchSnap(sketchStore.sketchSnap ? null : 0.5)}
-        title="Toggle sketch grid snap (0.5 units)"
+        onclick={() => sketchStore.setSketchSnap(sketchStore.sketchSnap ? null : (settingsStore.config.snap_sketch ?? 0.5))}
+        title="Toggle sketch grid snap ({settingsStore.config.snap_sketch ?? 0.5} units)"
       >
-        Snap: 0.5
+        Snap: {settingsStore.config.snap_sketch ?? 0.5}
       </button>
     {:else}
       <!-- Normal 3D tools -->
@@ -476,20 +478,20 @@
         <button
           class="toolbar-btn snap-btn"
           class:snap-active={toolStore.translateSnap !== null}
-          onclick={() => toolStore.setTranslateSnap(toolStore.translateSnap ? null : 1)}
-          title="Toggle translation snap (1 unit)"
+          onclick={() => toolStore.setTranslateSnap(toolStore.translateSnap ? null : (settingsStore.config.snap_translate ?? 1))}
+          title="Toggle translation snap ({settingsStore.config.snap_translate ?? 1} unit)"
         >
-          Snap: 1u
+          Snap: {settingsStore.config.snap_translate ?? 1}u
         </button>
       {/if}
       {#if toolStore.activeTool === 'rotate'}
         <button
           class="toolbar-btn snap-btn"
           class:snap-active={toolStore.rotationSnap !== null}
-          onclick={() => toolStore.setRotationSnap(toolStore.rotationSnap ? null : 15)}
-          title="Toggle rotation snap (15 degrees)"
+          onclick={() => toolStore.setRotationSnap(toolStore.rotationSnap ? null : (settingsStore.config.snap_rotation ?? 15))}
+          title="Toggle rotation snap ({settingsStore.config.snap_rotation ?? 15} degrees)"
         >
-          Snap: 15°
+          Snap: {settingsStore.config.snap_rotation ?? 15}&deg;
         </button>
       {/if}
       {#if toolStore.activeTool === 'scale'}
@@ -597,6 +599,15 @@
         onclick={() => { datumPopup = datumPopup === 'axis' ? null : 'axis'; }}
         title="Datum Axis"
         disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>Datum Axis</button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Measure -->
+      <button class="toolbar-btn measure-btn"
+        class:tool-active={toolStore.activeTool === 'measure'}
+        onclick={() => setTool('measure')}
+        title="Measurement Tools"
+        disabled={sketchStore.isInSketchMode}>Measure</button>
 
       <div class="toolbar-separator"></div>
 
@@ -901,6 +912,24 @@
     background: var(--bg-overlay);
     border-radius: 3px;
     animation: fadeIn 0.2s ease;
+  }
+
+  .measure-btn {
+    font-size: 11px;
+    color: #94e2d5;
+    border: 1px solid rgba(148, 226, 213, 0.3);
+  }
+
+  .measure-btn:hover:not(:disabled) {
+    background: rgba(148, 226, 213, 0.1);
+    border-color: #94e2d5;
+  }
+
+  .measure-btn.tool-active {
+    background: rgba(148, 226, 213, 0.15);
+    border-color: #94e2d5;
+    color: #94e2d5;
+    font-weight: 600;
   }
 
   .datum-btn {

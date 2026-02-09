@@ -6,6 +6,7 @@
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane, PatternOp, PatternType, DatumPlaneDefinition } from '$lib/types/cad';
   import { isDatumPlane, isDatumAxis } from '$lib/types/cad';
+  import { MATERIALS, getMaterial, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_OPACITY } from '$lib/data/materials';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
@@ -725,6 +726,49 @@
     triggerPipeline(100);
   }
 
+  // ── Material helpers ──
+
+  function applyMaterial(materialId: string) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    if (!materialId) {
+      // "Custom" selected — clear materialId but keep current values
+      captureOnce();
+      scene.updateObject(obj.id, { materialId: undefined });
+      return;
+    }
+    const preset = getMaterial(materialId);
+    if (!preset) return;
+    captureOnce();
+    scene.updateObject(obj.id, {
+      materialId: preset.id,
+      color: preset.color,
+      metalness: preset.metalness,
+      roughness: preset.roughness,
+    });
+  }
+
+  function updateMetalness(val: number) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.updateObject(obj.id, { metalness: val, materialId: undefined });
+  }
+
+  function updateRoughness(val: number) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.updateObject(obj.id, { roughness: val, materialId: undefined });
+  }
+
+  function updateOpacity(val: number) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.updateObject(obj.id, { opacity: val });
+  }
+
   function sketchOnDatumPlane() {
     const datum = datumStore.selectedDatum;
     if (!datum || !isDatumPlane(datum)) return;
@@ -1211,8 +1255,39 @@
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
       <div class="prop-row">
+        <label>Material</label>
+        <select class="prop-select" value={obj.materialId ?? ''}
+          onchange={(e) => applyMaterial((e.target as HTMLSelectElement).value)}>
+          <option value="">Custom</option>
+          {#each MATERIALS as mat}
+            <option value={mat.id}>{mat.name}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
         <label>Color</label>
         <input type="color" value={obj.color} oninput={updateColor} class="color-picker" />
+      </div>
+      <div class="prop-row">
+        <label>Metal</label>
+        <input type="range" class="slider" min="0" max="1" step="0.05"
+          value={obj.metalness ?? DEFAULT_METALNESS}
+          oninput={(e) => updateMetalness(parseFloat((e.target as HTMLInputElement).value))} />
+        <span class="slider-val">{(obj.metalness ?? DEFAULT_METALNESS).toFixed(2)}</span>
+      </div>
+      <div class="prop-row">
+        <label>Rough</label>
+        <input type="range" class="slider" min="0" max="1" step="0.05"
+          value={obj.roughness ?? DEFAULT_ROUGHNESS}
+          oninput={(e) => updateRoughness(parseFloat((e.target as HTMLInputElement).value))} />
+        <span class="slider-val">{(obj.roughness ?? DEFAULT_ROUGHNESS).toFixed(2)}</span>
+      </div>
+      <div class="prop-row">
+        <label>Opacity</label>
+        <input type="range" class="slider" min="0" max="1" step="0.05"
+          value={obj.opacity ?? DEFAULT_OPACITY}
+          oninput={(e) => updateOpacity(parseFloat((e.target as HTMLInputElement).value))} />
+        <span class="slider-val">{Math.round((obj.opacity ?? DEFAULT_OPACITY) * 100)}%</span>
       </div>
       <div class="prop-row">
         <label>Visible</label>
@@ -1977,5 +2052,44 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-bottom: 2px;
+  }
+
+  .slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--border-subtle);
+    border-radius: 2px;
+    outline: none;
+    min-width: 0;
+  }
+
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+  }
+
+  .slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+  }
+
+  .slider-val {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    width: 36px;
+    text-align: right;
+    flex-shrink: 0;
   }
 </style>

@@ -1,8 +1,13 @@
 <script lang="ts">
   import { getSettingsStore } from '$lib/stores/settings.svelte';
+  import { getViewportStore } from '$lib/stores/viewport.svelte';
+  import { getToolStore } from '$lib/stores/tools.svelte';
+  import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { checkPython, setupPython, getProviderRegistry } from '$lib/services/tauri';
+  import { applyTheme } from '$lib/services/theme';
   import type { PythonStatus, ProviderInfo } from '$lib/types';
-  import { onMount } from 'svelte';
+  import type { ThemeId } from '$lib/services/theme';
+  import ShortcutsPanel from './ShortcutsPanel.svelte';
 
   interface Props {
     open: boolean;
@@ -12,6 +17,9 @@
   let { open, onClose }: Props = $props();
 
   const settings = getSettingsStore();
+  const viewport = getViewportStore();
+  const tools = getToolStore();
+  const sketchStore = getSketchStore();
 
   // Provider registry loaded from backend
   let registry = $state<ProviderInfo[]>([]);
@@ -25,11 +33,24 @@
   let agentPreset = $state('default');
   let enableCodeReview = $state(true);
 
+  // New settings
+  let theme = $state<ThemeId>('dark');
+  let displayUnits = $state<'mm' | 'inch'>('mm');
+  let gridSize = $state(100);
+  let gridSpacing = $state(1);
+  let snapTranslateEnabled = $state(true);
+  let snapTranslateValue = $state(1);
+  let snapRotationEnabled = $state(true);
+  let snapRotationValue = $state(15);
+  let snapSketchEnabled = $state(true);
+  let snapSketchValue = $state(0.5);
+
   let showApiKey = $state(false);
   let pythonStatus = $state<PythonStatus | null>(null);
   let pythonCheckError = $state(false);
   let setupMessage = $state('');
   let isSettingUp = $state(false);
+  let shortcutsOpen = $state(false);
 
   // Derived: the currently selected provider info from the registry
   let currentProvider = $derived(registry.find((p) => p.id === provider));
@@ -45,6 +66,16 @@
       ollamaUrl = settings.config.ollama_base_url || 'http://localhost:11434';
       agentPreset = settings.config.agent_rules_preset || 'default';
       enableCodeReview = settings.config.enable_code_review ?? true;
+      theme = (settings.config.theme as ThemeId) || 'dark';
+      displayUnits = settings.config.display_units || 'mm';
+      gridSize = settings.config.grid_size ?? 100;
+      gridSpacing = settings.config.grid_spacing ?? 1;
+      snapTranslateEnabled = settings.config.snap_translate != null;
+      snapTranslateValue = settings.config.snap_translate ?? 1;
+      snapRotationEnabled = settings.config.snap_rotation != null;
+      snapRotationValue = settings.config.snap_rotation ?? 15;
+      snapSketchEnabled = settings.config.snap_sketch != null;
+      snapSketchValue = settings.config.snap_sketch ?? 0.5;
       showApiKey = false;
       setupMessage = '';
       refreshPython();
@@ -93,6 +124,10 @@
   }
 
   async function handleSave() {
+    const snapTranslate = snapTranslateEnabled ? snapTranslateValue : null;
+    const snapRotation = snapRotationEnabled ? snapRotationValue : null;
+    const snapSketch = snapSketchEnabled ? snapSketchValue : null;
+
     settings.update({
       ai_provider: provider,
       model,
@@ -101,8 +136,28 @@
       ollama_base_url: ollamaUrl || null,
       agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
       enable_code_review: enableCodeReview,
+      theme,
+      display_units: displayUnits,
+      grid_size: gridSize,
+      grid_spacing: gridSpacing,
+      snap_translate: snapTranslate,
+      snap_rotation: snapRotation,
+      snap_sketch: snapSketch,
     });
     await settings.save();
+
+    // Apply theme
+    applyTheme(theme);
+    viewport.setThemeColors(theme);
+
+    // Apply grid
+    viewport.setGridConfig(gridSize, gridSpacing);
+
+    // Apply snap values
+    tools.setTranslateSnap(snapTranslate);
+    tools.setRotationSnap(snapRotation);
+    sketchStore.setSketchSnap(snapSketch);
+
     onClose();
   }
 
@@ -130,6 +185,112 @@
     </div>
 
     <div class="settings-body">
+      <!-- General Section -->
+      <div class="settings-section">
+        <h3 class="section-title">General</h3>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label class="form-label" for="theme-select">Theme</label>
+            <select id="theme-select" class="form-select" bind:value={theme}>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+
+          <div class="form-group half">
+            <label class="form-label" for="units-select">Display Units</label>
+            <select id="units-select" class="form-select" bind:value={displayUnits}>
+              <option value="mm">Millimeters (mm)</option>
+              <option value="inch">Inches (in)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grid & Snapping Section -->
+      <div class="settings-section">
+        <h3 class="section-title">Grid & Snapping</h3>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label class="form-label" for="grid-size-select">Grid Size</label>
+            <select id="grid-size-select" class="form-select" bind:value={gridSize}>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+              <option value={500}>500</option>
+            </select>
+          </div>
+
+          <div class="form-group half">
+            <label class="form-label" for="grid-spacing-select">Grid Spacing</label>
+            <select id="grid-spacing-select" class="form-select" bind:value={gridSpacing}>
+              <option value={0.5}>0.5</option>
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="snap-group">
+          <div class="snap-row">
+            <label class="form-label-inline">
+              <input type="checkbox" bind:checked={snapTranslateEnabled} />
+              Translation Snap
+            </label>
+            <input
+              class="form-input snap-input"
+              type="number"
+              min="0.1"
+              step="0.5"
+              bind:value={snapTranslateValue}
+              disabled={!snapTranslateEnabled}
+            />
+          </div>
+
+          <div class="snap-row">
+            <label class="form-label-inline">
+              <input type="checkbox" bind:checked={snapRotationEnabled} />
+              Rotation Snap (&deg;)
+            </label>
+            <input
+              class="form-input snap-input"
+              type="number"
+              min="1"
+              step="5"
+              bind:value={snapRotationValue}
+              disabled={!snapRotationEnabled}
+            />
+          </div>
+
+          <div class="snap-row">
+            <label class="form-label-inline">
+              <input type="checkbox" bind:checked={snapSketchEnabled} />
+              Sketch Snap
+            </label>
+            <input
+              class="form-input snap-input"
+              type="number"
+              min="0.1"
+              step="0.1"
+              bind:value={snapSketchValue}
+              disabled={!snapSketchEnabled}
+            />
+          </div>
+        </div>
+
+        <button
+          class="shortcuts-btn"
+          onclick={() => { shortcutsOpen = true; }}
+          type="button"
+        >
+          View Keyboard Shortcuts
+        </button>
+      </div>
+
       <!-- AI Provider Section -->
       <div class="settings-section">
         <h3 class="section-title">AI Provider</h3>
@@ -314,6 +475,8 @@
 </div>
 {/if}
 
+<ShortcutsPanel open={shortcutsOpen} onClose={() => { shortcutsOpen = false; }} />
+
 <style>
   .settings-overlay {
     position: fixed;
@@ -399,6 +562,17 @@
     margin-bottom: 12px;
   }
 
+  .form-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .form-group.half {
+    flex: 1;
+    margin-bottom: 0;
+  }
+
   .form-label {
     display: block;
     margin-bottom: 4px;
@@ -474,6 +648,46 @@
   }
 
   .toggle-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+
+  /* Snap controls */
+  .snap-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .snap-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .snap-input {
+    width: 80px !important;
+    text-align: right;
+  }
+
+  .snap-input:disabled {
+    opacity: 0.4;
+  }
+
+  .shortcuts-btn {
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    padding: 7px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .shortcuts-btn:hover {
     color: var(--text-primary);
     border-color: var(--accent);
   }

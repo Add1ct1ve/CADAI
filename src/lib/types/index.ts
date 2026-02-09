@@ -21,6 +21,12 @@ export interface AppConfig {
   openai_base_url: string | null;
   agent_rules_preset: string | null;
   enable_code_review: boolean;
+  display_units: 'mm' | 'inch';
+  grid_size: number;
+  grid_spacing: number;
+  snap_translate: number | null;
+  snap_rotation: number | null;
+  snap_sketch: number | null;
 }
 
 export interface ModelInfo {

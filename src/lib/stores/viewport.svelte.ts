@@ -12,6 +12,8 @@ let gridVisible = $state(true);
 let axesVisible = $state(true);
 let displayMode = $state<DisplayMode>('shaded');
 let sectionPlane = $state<SectionPlaneConfig>({ enabled: false, normal: [0, 1, 0], offset: 0 });
+let gridSize = $state(100);
+let gridSpacing = $state(1);
 
 export function getViewportStore() {
   return {
@@ -92,6 +94,16 @@ export function getViewportStore() {
     setSectionPlane(config: SectionPlaneConfig) {
       sectionPlane = config;
       engineRef?.setSectionPlane(config);
+    },
+    get gridSize() { return gridSize; },
+    get gridSpacing() { return gridSpacing; },
+    setGridConfig(size: number, spacing: number) {
+      gridSize = size;
+      gridSpacing = spacing;
+      engineRef?.rebuildGrid(size, spacing);
+    },
+    setThemeColors(theme: 'dark' | 'light') {
+      engineRef?.setThemeColors(theme);
     },
     getState(): ViewportState {
       return { isLoading, hasModel, error };
