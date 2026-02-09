@@ -3,7 +3,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, EdgeSelector, ExtrudeParams, FilletParams, ChamferParams, SketchConstraint } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType } from '$lib/types/cad';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
@@ -24,6 +24,22 @@
     { value: 'top', label: 'Top' },
     { value: 'bottom', label: 'Bottom' },
     { value: 'vertical', label: 'Vertical' },
+  ];
+
+  const faceSelectorOptions: { value: FaceSelector; label: string }[] = [
+    { value: '>Z', label: 'Top (+Z)' },
+    { value: '<Z', label: 'Bottom (-Z)' },
+    { value: '>X', label: 'Right (+X)' },
+    { value: '<X', label: 'Left (-X)' },
+    { value: '>Y', label: 'Front (+Y)' },
+    { value: '<Y', label: 'Back (-Y)' },
+  ];
+
+  const holeTypeOptions: { value: HoleType; label: string }[] = [
+    { value: 'through', label: 'Through' },
+    { value: 'blind', label: 'Blind' },
+    { value: 'counterbore', label: 'Counterbore' },
+    { value: 'countersink', label: 'Countersink' },
   ];
 
   function debounced(fn: () => void, ms = 300) {
@@ -207,47 +223,177 @@
     triggerAndRun();
   }
 
-  // ── Sketch Extrude/Fillet/Chamfer ──
+  // ── Sketch 3D Operations (Extrude/Revolve/Sweep) ──
 
   function addSketchExtrude() {
     const sketch = sketchStore.selectedSketch;
     if (!sketch) return;
     captureOnce();
-    sketchStore.setExtrude(sketch.id, { distance: 10, mode: 'add' });
+    sketchStore.setOperation(sketch.id, { type: 'extrude', distance: 10, mode: 'add' });
     triggerAndRun();
   }
 
-  function updateSketchExtrudeDistance(value: number) {
-    const sketch = sketchStore.selectedSketch;
-    if (!sketch || !sketch.extrude) return;
-    captureOnce();
-    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, distance: value });
-    debounced(() => { triggerPipeline(100); runPythonExecution(); });
-  }
-
-  function updateSketchExtrudeMode(mode: 'add' | 'cut') {
-    const sketch = sketchStore.selectedSketch;
-    if (!sketch || !sketch.extrude) return;
-    captureOnce();
-    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, mode });
-    triggerAndRun();
-  }
-
-  function updateSketchCutTarget(targetId: string) {
-    const sketch = sketchStore.selectedSketch;
-    if (!sketch || !sketch.extrude) return;
-    captureOnce();
-    sketchStore.setExtrude(sketch.id, { ...sketch.extrude, cutTargetId: targetId || undefined });
-    triggerAndRun();
-  }
-
-  function removeSketchExtrude() {
+  function addSketchRevolve() {
     const sketch = sketchStore.selectedSketch;
     if (!sketch) return;
     captureOnce();
-    sketchStore.setExtrude(sketch.id, undefined);
+    sketchStore.setOperation(sketch.id, { type: 'revolve', angle: 360, mode: 'add', axisDirection: 'Y', axisOffset: 0 });
+    triggerAndRun();
+  }
+
+  function addSketchSweep() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    // Find first other sketch as default path
+    const otherSketch = sketchStore.sketches.find(s => s.id !== sketch.id && s.entities.length > 0);
+    sketchStore.setOperation(sketch.id, { type: 'sweep', mode: 'add', pathSketchId: otherSketch?.id ?? '' });
+    triggerAndRun();
+  }
+
+  function updateSketchOperation(partial: Partial<SketchOperation>) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.operation) return;
+    captureOnce();
+    sketchStore.setOperation(sketch.id, { ...sketch.operation, ...partial } as SketchOperation);
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function updateSketchOperationImmediate(partial: Partial<SketchOperation>) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.operation) return;
+    captureOnce();
+    sketchStore.setOperation(sketch.id, { ...sketch.operation, ...partial } as SketchOperation);
+    triggerAndRun();
+  }
+
+  function removeSketchOperation() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setOperation(sketch.id, undefined);
     sketchStore.setSketchFillet(sketch.id, undefined);
     sketchStore.setSketchChamfer(sketch.id, undefined);
+    sketchStore.setSketchShell(sketch.id, undefined);
+    sketchStore.setSketchHoles(sketch.id, undefined);
+    triggerAndRun();
+  }
+
+  // ── Sketch Shell ──
+
+  function addSketchShell() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchShell(sketch.id, { thickness: -2, face: '>Z' });
+    triggerAndRun();
+  }
+
+  function updateSketchShell(key: string, value: number | FaceSelector) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.shell) return;
+    captureOnce();
+    sketchStore.setSketchShell(sketch.id, { ...sketch.shell, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeSketchShell() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.setSketchShell(sketch.id, undefined);
+    triggerAndRun();
+  }
+
+  // ── Sketch Holes ──
+
+  function addSketchHole() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.addSketchHole(sketch.id, { holeType: 'through', diameter: 5, position: [0, 0], face: '>Z' });
+    triggerAndRun();
+  }
+
+  function updateSketchHole(index: number, key: string, value: any) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch || !sketch.holes?.[index]) return;
+    captureOnce();
+    let updated = { ...sketch.holes[index], [key]: value };
+    // Set sensible defaults when hole type changes
+    if (key === 'holeType') {
+      if (value === 'blind') updated = { ...updated, depth: updated.depth ?? 5 };
+      if (value === 'counterbore') updated = { ...updated, cboreDiameter: updated.cboreDiameter ?? updated.diameter * 1.6, cboreDepth: updated.cboreDepth ?? 3 };
+      if (value === 'countersink') updated = { ...updated, cskDiameter: updated.cskDiameter ?? updated.diameter * 2, cskAngle: updated.cskAngle ?? 82 };
+    }
+    sketchStore.updateSketchHole(sketch.id, index, updated);
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeSketchHole(index: number) {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    sketchStore.removeSketchHole(sketch.id, index);
+    triggerAndRun();
+  }
+
+  // ── Object Shell ──
+
+  function addObjectShell() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setShell(obj.id, { thickness: -2, face: '>Z' });
+    triggerAndRun();
+  }
+
+  function updateObjectShell(key: string, value: number | FaceSelector) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.shell) return;
+    captureOnce();
+    scene.setShell(obj.id, { ...obj.shell, [key]: value });
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeObjectShell() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.setShell(obj.id, undefined);
+    triggerAndRun();
+  }
+
+  // ── Object Holes ──
+
+  function addObjectHole() {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.addHole(obj.id, { holeType: 'through', diameter: 5, position: [0, 0], face: '>Z' });
+    triggerAndRun();
+  }
+
+  function updateObjectHole(index: number, key: string, value: any) {
+    const obj = scene.firstSelected;
+    if (!obj || !obj.holes?.[index]) return;
+    captureOnce();
+    let updated = { ...obj.holes[index], [key]: value };
+    // Set sensible defaults when hole type changes
+    if (key === 'holeType') {
+      if (value === 'blind') updated = { ...updated, depth: updated.depth ?? 5 };
+      if (value === 'counterbore') updated = { ...updated, cboreDiameter: updated.cboreDiameter ?? updated.diameter * 1.6, cboreDepth: updated.cboreDepth ?? 3 };
+      if (value === 'countersink') updated = { ...updated, cskDiameter: updated.cskDiameter ?? updated.diameter * 2, cskAngle: updated.cskAngle ?? 82 };
+    }
+    scene.updateHole(obj.id, index, updated);
+    debounced(() => { triggerPipeline(100); runPythonExecution(); });
+  }
+
+  function removeObjectHole(index: number) {
+    const obj = scene.firstSelected;
+    if (!obj) return;
+    captureOnce();
+    scene.removeHole(obj.id, index);
     triggerAndRun();
   }
 
@@ -333,15 +479,15 @@
     triggerAndRun();
   }
 
-  // Build list of possible cut targets (other extruded sketches + visible primitives)
+  // Build list of possible cut targets (other operated add-mode sketches + visible primitives)
   function getCutTargets() {
     const sketch = sketchStore.selectedSketch;
     const targets: { id: string; name: string }[] = [];
 
-    // Extruded add-mode sketches (excluding current)
+    // Add-mode sketches with 3D operations (excluding current)
     for (const s of sketchStore.sketches) {
       if (s.id === sketch?.id) continue;
-      if (s.extrude && s.extrude.mode === 'add' && s.entities.length > 0) {
+      if (s.operation && s.operation.mode === 'add' && s.entities.length > 0) {
         targets.push({ id: s.id, name: s.name });
       }
     }
@@ -354,6 +500,19 @@
     }
 
     return targets;
+  }
+
+  // Build list of possible path sketches (for sweep)
+  function getPathSketches() {
+    const sketch = sketchStore.selectedSketch;
+    const paths: { id: string; name: string }[] = [];
+    for (const s of sketchStore.sketches) {
+      if (s.id === sketch?.id) continue;
+      if (s.entities.length > 0 && !s.operation) {
+        paths.push({ id: s.id, name: s.name });
+      }
+    }
+    return paths;
   }
 </script>
 
@@ -542,6 +701,105 @@
       {/if}
     </div>
 
+    <!-- Shell (Object) -->
+    <div class="prop-section">
+      <div class="prop-section-title">Shell</div>
+      {#if obj.shell}
+        <div class="prop-row">
+          <label>Thickness</label>
+          <input type="number" value={obj.shell.thickness} step="0.5"
+            oninput={(e) => numInput(e, (v) => updateObjectShell('thickness', v))} />
+        </div>
+        <div class="prop-row">
+          <label>Face</label>
+          <select class="prop-select" value={obj.shell.face}
+            onchange={(e) => updateObjectShell('face', (e.target as HTMLSelectElement).value as FaceSelector)}>
+            {#each faceSelectorOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+        <button class="remove-btn" onclick={removeObjectShell}>Remove Shell</button>
+      {:else}
+        <button class="apply-btn full-width" onclick={addObjectShell}>Add Shell</button>
+      {/if}
+    </div>
+
+    <!-- Holes (Object) -->
+    <div class="prop-section">
+      <div class="prop-section-title">Holes ({obj.holes?.length ?? 0})</div>
+      {#each (obj.holes ?? []) as hole, index}
+        <div class="hole-item">
+          <div class="prop-row">
+            <label>Type</label>
+            <select class="prop-select" value={hole.holeType}
+              onchange={(e) => updateObjectHole(index, 'holeType', (e.target as HTMLSelectElement).value)}>
+              {#each holeTypeOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Dia</label>
+            <input type="number" value={hole.diameter} step="0.5" min="0.1"
+              oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'diameter', v))} />
+          </div>
+          {#if hole.holeType === 'blind'}
+            <div class="prop-row">
+              <label>Depth</label>
+              <input type="number" value={hole.depth ?? 5} step="0.5" min="0.1"
+                oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'depth', v))} />
+            </div>
+          {/if}
+          {#if hole.holeType === 'counterbore'}
+            <div class="prop-row">
+              <label>CB Dia</label>
+              <input type="number" value={hole.cboreDiameter ?? 8} step="0.5" min="0.1"
+                oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cboreDiameter', v))} />
+            </div>
+            <div class="prop-row">
+              <label>CB Dep</label>
+              <input type="number" value={hole.cboreDepth ?? 3} step="0.5" min="0.1"
+                oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cboreDepth', v))} />
+            </div>
+          {/if}
+          {#if hole.holeType === 'countersink'}
+            <div class="prop-row">
+              <label>CS Dia</label>
+              <input type="number" value={hole.cskDiameter ?? 10} step="0.5" min="0.1"
+                oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cskDiameter', v))} />
+            </div>
+            <div class="prop-row">
+              <label>CS Angle</label>
+              <input type="number" value={hole.cskAngle ?? 82} step="1" min="1" max="180"
+                oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cskAngle', v))} />
+            </div>
+          {/if}
+          <div class="prop-row">
+            <label>Face</label>
+            <select class="prop-select" value={hole.face}
+              onchange={(e) => updateObjectHole(index, 'face', (e.target as HTMLSelectElement).value)}>
+              {#each faceSelectorOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Pos X</label>
+            <input type="number" value={hole.position[0]} step="1"
+              oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'position', [v, hole.position[1]]))} />
+          </div>
+          <div class="prop-row">
+            <label>Pos Y</label>
+            <input type="number" value={hole.position[1]} step="1"
+              oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'position', [hole.position[0], v]))} />
+          </div>
+          <button class="remove-btn" onclick={() => removeObjectHole(index)}>Remove Hole</button>
+        </div>
+      {/each}
+      <button class="apply-btn full-width" onclick={addObjectHole}>Add Hole</button>
+    </div>
+
     <!-- Appearance -->
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
@@ -586,28 +844,39 @@
       </div>
     </div>
 
-    <!-- Extrude -->
+    <!-- 3D Operation -->
     <div class="prop-section">
-      <div class="prop-section-title">Extrude</div>
-      {#if sketch.extrude}
+      <div class="prop-section-title">3D Operation</div>
+      {#if !sketch.operation}
+        <div class="op-buttons">
+          <button class="apply-btn full-width" onclick={addSketchExtrude}>Extrude</button>
+          <button class="apply-btn full-width" onclick={addSketchRevolve}>Revolve</button>
+          <button class="apply-btn full-width" onclick={addSketchSweep}>Sweep</button>
+        </div>
+      {:else if sketch.operation.type === 'extrude'}
         <div class="prop-row">
           <label>Distance</label>
-          <input type="number" value={sketch.extrude.distance} step="1" min="0.1"
-            oninput={(e) => numInput(e, updateSketchExtrudeDistance)} />
+          <input type="number" value={sketch.operation.distance} step="1" min="0.1"
+            oninput={(e) => numInput(e, (v) => updateSketchOperation({ distance: v }))} />
+        </div>
+        <div class="prop-row">
+          <label>Taper</label>
+          <input type="number" value={sketch.operation.taper ?? 0} step="1" min="0" max="89"
+            oninput={(e) => numInput(e, (v) => updateSketchOperation({ taper: v || undefined }))} />
         </div>
         <div class="prop-row">
           <label>Mode</label>
-          <select class="prop-select" value={sketch.extrude.mode}
-            onchange={(e) => updateSketchExtrudeMode((e.target as HTMLSelectElement).value as 'add' | 'cut')}>
+          <select class="prop-select" value={sketch.operation.mode}
+            onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
             <option value="add">Add</option>
             <option value="cut">Cut</option>
           </select>
         </div>
-        {#if sketch.extrude.mode === 'cut'}
+        {#if sketch.operation.mode === 'cut'}
           <div class="prop-row">
             <label>Target</label>
-            <select class="prop-select" value={sketch.extrude.cutTargetId ?? ''}
-              onchange={(e) => updateSketchCutTarget((e.target as HTMLSelectElement).value)}>
+            <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
+              onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
               <option value="">None</option>
               {#each getCutTargets() as target}
                 <option value={target.id}>{target.name}</option>
@@ -615,14 +884,85 @@
             </select>
           </div>
         {/if}
-        <button class="remove-btn" onclick={removeSketchExtrude}>Remove Extrude</button>
-      {:else}
-        <button class="apply-btn full-width" onclick={addSketchExtrude}>Extrude</button>
+        <button class="remove-btn" onclick={removeSketchOperation}>Remove Extrude</button>
+      {:else if sketch.operation.type === 'revolve'}
+        <div class="prop-row">
+          <label>Angle</label>
+          <input type="number" value={sketch.operation.angle} step="15" min="1" max="360"
+            oninput={(e) => numInput(e, (v) => updateSketchOperation({ angle: v }))} />
+        </div>
+        <div class="prop-row">
+          <label>Axis</label>
+          <select class="prop-select" value={sketch.operation.axisDirection}
+            onchange={(e) => updateSketchOperationImmediate({ axisDirection: (e.target as HTMLSelectElement).value as 'X' | 'Y' })}>
+            <option value="X">X</option>
+            <option value="Y">Y</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Offset</label>
+          <input type="number" value={sketch.operation.axisOffset} step="1"
+            oninput={(e) => numInput(e, (v) => updateSketchOperation({ axisOffset: v }))} />
+        </div>
+        <div class="prop-row">
+          <label>Mode</label>
+          <select class="prop-select" value={sketch.operation.mode}
+            onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
+          </select>
+        </div>
+        {#if sketch.operation.mode === 'cut'}
+          <div class="prop-row">
+            <label>Target</label>
+            <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
+              onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
+              <option value="">None</option>
+              {#each getCutTargets() as target}
+                <option value={target.id}>{target.name}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        <button class="remove-btn" onclick={removeSketchOperation}>Remove Revolve</button>
+      {:else if sketch.operation.type === 'sweep'}
+        <div class="prop-row">
+          <label>Path</label>
+          <select class="prop-select" value={sketch.operation.pathSketchId}
+            onchange={(e) => updateSketchOperationImmediate({ pathSketchId: (e.target as HTMLSelectElement).value })}>
+            <option value="">Select path...</option>
+            {#each getPathSketches() as ps}
+              <option value={ps.id}>{ps.name}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Mode</label>
+          <select class="prop-select" value={sketch.operation.mode}
+            onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
+          </select>
+        </div>
+        {#if sketch.operation.mode === 'cut'}
+          <div class="prop-row">
+            <label>Target</label>
+            <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
+              onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
+              <option value="">None</option>
+              {#each getCutTargets() as target}
+                <option value={target.id}>{target.name}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        <button class="remove-btn" onclick={removeSketchOperation}>Remove Sweep</button>
       {/if}
     </div>
 
-    <!-- Fillet (only when extruded) -->
-    {#if sketch.extrude}
+    <!-- Post-processing (only when 3D operation is set) -->
+    {#if sketch.operation}
+      <!-- Fillet -->
       <div class="prop-section">
         <div class="prop-section-title">Fillet</div>
         {#if sketch.fillet}
@@ -646,7 +986,7 @@
         {/if}
       </div>
 
-      <!-- Chamfer (only when extruded) -->
+      <!-- Chamfer -->
       <div class="prop-section">
         <div class="prop-section-title">Chamfer</div>
         {#if sketch.chamfer}
@@ -668,6 +1008,105 @@
         {:else}
           <button class="apply-btn full-width" onclick={addSketchChamfer}>Add Chamfer</button>
         {/if}
+      </div>
+
+      <!-- Shell -->
+      <div class="prop-section">
+        <div class="prop-section-title">Shell</div>
+        {#if sketch.shell}
+          <div class="prop-row">
+            <label>Thickness</label>
+            <input type="number" value={sketch.shell.thickness} step="0.5"
+              oninput={(e) => numInput(e, (v) => updateSketchShell('thickness', v))} />
+          </div>
+          <div class="prop-row">
+            <label>Face</label>
+            <select class="prop-select" value={sketch.shell.face}
+              onchange={(e) => updateSketchShell('face', (e.target as HTMLSelectElement).value as FaceSelector)}>
+              {#each faceSelectorOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+          <button class="remove-btn" onclick={removeSketchShell}>Remove Shell</button>
+        {:else}
+          <button class="apply-btn full-width" onclick={addSketchShell}>Add Shell</button>
+        {/if}
+      </div>
+
+      <!-- Holes -->
+      <div class="prop-section">
+        <div class="prop-section-title">Holes ({sketch.holes?.length ?? 0})</div>
+        {#each (sketch.holes ?? []) as hole, index}
+          <div class="hole-item">
+            <div class="prop-row">
+              <label>Type</label>
+              <select class="prop-select" value={hole.holeType}
+                onchange={(e) => updateSketchHole(index, 'holeType', (e.target as HTMLSelectElement).value)}>
+                {#each holeTypeOptions as opt}
+                  <option value={opt.value}>{opt.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="prop-row">
+              <label>Dia</label>
+              <input type="number" value={hole.diameter} step="0.5" min="0.1"
+                oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'diameter', v))} />
+            </div>
+            {#if hole.holeType === 'blind'}
+              <div class="prop-row">
+                <label>Depth</label>
+                <input type="number" value={hole.depth ?? 5} step="0.5" min="0.1"
+                  oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'depth', v))} />
+              </div>
+            {/if}
+            {#if hole.holeType === 'counterbore'}
+              <div class="prop-row">
+                <label>CB Dia</label>
+                <input type="number" value={hole.cboreDiameter ?? 8} step="0.5" min="0.1"
+                  oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cboreDiameter', v))} />
+              </div>
+              <div class="prop-row">
+                <label>CB Dep</label>
+                <input type="number" value={hole.cboreDepth ?? 3} step="0.5" min="0.1"
+                  oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cboreDepth', v))} />
+              </div>
+            {/if}
+            {#if hole.holeType === 'countersink'}
+              <div class="prop-row">
+                <label>CS Dia</label>
+                <input type="number" value={hole.cskDiameter ?? 10} step="0.5" min="0.1"
+                  oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cskDiameter', v))} />
+              </div>
+              <div class="prop-row">
+                <label>CS Angle</label>
+                <input type="number" value={hole.cskAngle ?? 82} step="1" min="1" max="180"
+                  oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cskAngle', v))} />
+              </div>
+            {/if}
+            <div class="prop-row">
+              <label>Face</label>
+              <select class="prop-select" value={hole.face}
+                onchange={(e) => updateSketchHole(index, 'face', (e.target as HTMLSelectElement).value)}>
+                {#each faceSelectorOptions as opt}
+                  <option value={opt.value}>{opt.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="prop-row">
+              <label>Pos X</label>
+              <input type="number" value={hole.position[0]} step="1"
+                oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'position', [v, hole.position[1]]))} />
+            </div>
+            <div class="prop-row">
+              <label>Pos Y</label>
+              <input type="number" value={hole.position[1]} step="1"
+                oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'position', [hole.position[0], v]))} />
+            </div>
+            <button class="remove-btn" onclick={() => removeSketchHole(index)}>Remove Hole</button>
+          </div>
+        {/each}
+        <button class="apply-btn full-width" onclick={addSketchHole}>Add Hole</button>
       </div>
     {/if}
 
@@ -965,5 +1404,21 @@
 
   .constraint-remove-btn:hover {
     color: var(--error);
+  }
+
+  .op-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .hole-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    margin-bottom: 4px;
   }
 </style>

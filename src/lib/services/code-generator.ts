@@ -1,4 +1,4 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane } from '$lib/types/cad';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -61,6 +61,64 @@ function generateFilletChamfer(name: string, fillet?: FilletParams, chamfer?: Ch
   return lines;
 }
 
+function generateShell(name: string, shell?: ShellParams): string[] {
+  if (!shell) return [];
+  return [`${name} = ${name}.faces("${shell.face}").shell(${fmt(shell.thickness)})`];
+}
+
+function generateHoles(name: string, holes?: HoleParams[]): string[] {
+  if (!holes?.length) return [];
+  const lines: string[] = [];
+  for (const hole of holes) {
+    const face = `.faces("${hole.face}").workplane()`;
+    const pos = (hole.position[0] !== 0 || hole.position[1] !== 0)
+      ? `.center(${fmt(hole.position[0])}, ${fmt(hole.position[1])})` : '';
+    switch (hole.holeType) {
+      case 'through':
+        lines.push(`${name} = ${name}${face}${pos}.hole(${fmt(hole.diameter)})`);
+        break;
+      case 'blind':
+        lines.push(`${name} = ${name}${face}${pos}.hole(${fmt(hole.diameter)}, ${fmt(hole.depth ?? 5)})`);
+        break;
+      case 'counterbore':
+        lines.push(`${name} = ${name}${face}${pos}.cboreHole(${fmt(hole.diameter)}, ${fmt(hole.cboreDiameter ?? hole.diameter * 1.6)}, ${fmt(hole.cboreDepth ?? 3)})`);
+        break;
+      case 'countersink':
+        lines.push(`${name} = ${name}${face}${pos}.cskHole(${fmt(hole.diameter)}, ${fmt(hole.cskDiameter ?? hole.diameter * 2)}, ${fmt(hole.cskAngle ?? 82)})`);
+        break;
+    }
+  }
+  return lines;
+}
+
+/** Map sketch plane + axis direction + offset to CadQuery revolve args */
+function revolveAxis(plane: SketchPlane, op: RevolveParams): string {
+  // CadQuery .revolve(angle, axisStart, axisEnd) uses 2D sketch-plane coordinates
+  // axisDirection='X' means axis along sketch X, 'Y' means along sketch Y
+  // axisOffset is the perpendicular offset from origin
+  const offset = op.axisOffset;
+  if (op.axisDirection === 'X') {
+    // Axis along X at Y=offset
+    return `(0, ${fmt(offset)}, 0), (1, ${fmt(offset)}, 0)`;
+  } else {
+    // Axis along Y at X=offset
+    return `(${fmt(offset)}, 0, 0), (${fmt(offset)}, 1, 0)`;
+  }
+}
+
+/** Generate a CadQuery wire from a path sketch (for sweep) */
+function generatePathWire(varName: string, pathSketch: Sketch): string[] {
+  const lines: string[] = [];
+  lines.push(`${varName} = (`);
+  lines.push(`    cq.Workplane("${pathSketch.plane}")`);
+  for (const entity of pathSketch.entities) {
+    lines.push(...generateSketchEntity(entity));
+  }
+  lines.push(`    .wire()`);
+  lines.push(`)`);
+  return lines;
+}
+
 function generateSketchEntity(entity: SketchEntity): string[] {
   const lines: string[] = [];
   switch (entity.type) {
@@ -89,13 +147,22 @@ function generateSketchEntity(entity: SketchEntity): string[] {
   return lines;
 }
 
-function generateSketchBase(sketch: Sketch): string[] {
+function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
   const lines: string[] = [];
   const constraintCount = (sketch.constraints ?? []).length;
   const constraintInfo = constraintCount > 0 ? ` [${constraintCount} constraint${constraintCount !== 1 ? 's' : ''}]` : '';
   lines.push(`# --- ${sketch.name} (${sketch.plane} plane) ---${constraintInfo}`);
 
-  const varName = sketch.extrude?.mode === 'cut' ? `${sketch.name}_cutter` : sketch.name;
+  const op = sketch.operation;
+  const varName = op?.mode === 'cut' ? `${sketch.name}_cutter` : sketch.name;
+
+  // For sweep, generate path sketch inline first
+  if (op?.type === 'sweep' && allSketches) {
+    const pathSketch = allSketches.find(s => s.id === op.pathSketchId);
+    if (pathSketch) {
+      lines.push(...generatePathWire(`${sketch.name}_path`, pathSketch));
+    }
+  }
 
   lines.push(`${varName} = (`);
   lines.push(`    cq.Workplane("${sketch.plane}")`);
@@ -104,15 +171,23 @@ function generateSketchBase(sketch: Sketch): string[] {
     lines.push(...generateSketchEntity(entity));
   }
 
-  if (sketch.extrude) {
-    lines.push(`    .extrude(${fmt(sketch.extrude.distance)})`);
+  // Apply 3D operation
+  if (op?.type === 'extrude') {
+    const taperArg = op.taper ? `, taper=${fmt(op.taper)}` : '';
+    lines.push(`    .extrude(${fmt(op.distance)}${taperArg})`);
+  } else if (op?.type === 'revolve') {
+    lines.push(`    .revolve(${fmt(op.angle)}, ${revolveAxis(sketch.plane, op)})`);
+  } else if (op?.type === 'sweep') {
+    lines.push(`    .sweep(${sketch.name}_path)`);
   }
 
   lines.push(`)`);
 
-  // Fillet/chamfer (only if extruded — 2D sketches can't have these)
-  if (sketch.extrude) {
+  // Post-processing chain (only if 3D operation set)
+  if (op) {
     lines.push(...generateFilletChamfer(varName, sketch.fillet, sketch.chamfer));
+    lines.push(...generateShell(varName, sketch.shell));
+    lines.push(...generateHoles(varName, sketch.holes));
   }
 
   lines.push('');
@@ -137,14 +212,14 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   const lines: string[] = ['import cadquery as cq', ''];
 
   // Separate sketches into add-mode and cut-mode
-  const addSketches = nonEmptySketches.filter((s) => !s.extrude || s.extrude.mode === 'add');
-  const cutSketches = nonEmptySketches.filter((s) => s.extrude?.mode === 'cut');
-  // Non-extruded sketches are 2D-only, excluded from assembly
-  const extrudedAddSketches = addSketches.filter((s) => s.extrude);
+  const addSketches = nonEmptySketches.filter((s) => !s.operation || s.operation.mode === 'add');
+  const cutSketches = nonEmptySketches.filter((s) => s.operation?.mode === 'cut');
+  // Non-operated sketches are 2D-only, excluded from assembly
+  const operatedAddSketches = addSketches.filter((s) => s.operation);
 
-  // Generate add-mode sketches (including non-extruded for code display)
+  // Generate add-mode sketches (including non-operated for code display)
   for (const sketch of addSketches) {
-    lines.push(...generateSketchBase(sketch));
+    lines.push(...generateSketchBase(sketch, nonEmptySketches));
   }
 
   // Generate objects (primitives)
@@ -159,16 +234,18 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
 
     // Fillet/chamfer on primitives
     lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
+    lines.push(...generateShell(obj.name, obj.shell));
+    lines.push(...generateHoles(obj.name, obj.holes));
 
     lines.push('');
   }
 
   // Generate cut-mode sketches
   for (const sketch of cutSketches) {
-    lines.push(...generateSketchBase(sketch));
+    lines.push(...generateSketchBase(sketch, nonEmptySketches));
 
     // Apply cut to target
-    const targetId = sketch.extrude?.cutTargetId;
+    const targetId = sketch.operation?.mode === 'cut' ? (sketch.operation as any).cutTargetId : undefined;
     if (targetId) {
       // Find target name (could be another sketch or a primitive)
       const targetSketch = nonEmptySketches.find((s) => s.id === targetId);
@@ -182,9 +259,9 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   }
 
   // Collect all named results for assembly
-  // Only include extruded add-sketches and visible primitives
+  // Only include operated add-sketches and visible primitives
   const allNames: string[] = [
-    ...extrudedAddSketches.map((s) => s.name),
+    ...operatedAddSketches.map((s) => s.name),
     ...visibleObjects.map((o) => o.name),
   ];
 
@@ -221,7 +298,8 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
 function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeFeatureIds: string[]): string {
   // Build lookup maps
   const objMap = new Map(objects.map((o) => [o.id, o]));
-  const sketchMap = new Map(sketches.filter((s) => s.entities.length > 0).map((s) => [s.id, s]));
+  const allSketches = sketches.filter((s) => s.entities.length > 0);
+  const sketchMap = new Map(allSketches.map((s) => [s.id, s]));
 
   // Categorize features in order
   const addFeatures: Array<{ type: 'object'; obj: SceneObject } | { type: 'sketch'; sketch: Sketch }> = [];
@@ -235,7 +313,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
     }
     const sketch = sketchMap.get(id);
     if (sketch) {
-      if (sketch.extrude?.mode === 'cut') {
+      if (sketch.operation?.mode === 'cut') {
         cutSketches.push(sketch);
       } else {
         addFeatures.push({ type: 'sketch', sketch });
@@ -255,8 +333,8 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
 
   for (const feature of addFeatures) {
     if (feature.type === 'sketch') {
-      lines.push(...generateSketchBase(feature.sketch));
-      if (feature.sketch.extrude) {
+      lines.push(...generateSketchBase(feature.sketch, allSketches));
+      if (feature.sketch.operation) {
         assemblyNames.push(feature.sketch.name);
       }
     } else {
@@ -266,6 +344,8 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
       lines.push(generatePrimitive(obj.name, obj.params));
       lines.push(...generateTransform(obj.name, obj.transform));
       lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
+      lines.push(...generateShell(obj.name, obj.shell));
+      lines.push(...generateHoles(obj.name, obj.holes));
       lines.push('');
       assemblyNames.push(obj.name);
     }
@@ -273,12 +353,12 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
 
   // Generate cut-mode sketches (must come after their targets)
   for (const sketch of cutSketches) {
-    lines.push(...generateSketchBase(sketch));
+    lines.push(...generateSketchBase(sketch, allSketches));
 
-    const targetId = sketch.extrude?.cutTargetId;
-    if (targetId) {
-      const targetSketch = sketchMap.get(targetId);
-      const targetObj = objMap.get(targetId);
+    const cutTargetId = sketch.operation?.mode === 'cut' ? (sketch.operation as any).cutTargetId : undefined;
+    if (cutTargetId) {
+      const targetSketch = sketchMap.get(cutTargetId);
+      const targetObj = objMap.get(cutTargetId);
       const targetName = targetSketch?.name ?? targetObj?.name;
       if (targetName) {
         lines.push(`${targetName} = ${targetName}.cut(${sketch.name}_cutter)`);

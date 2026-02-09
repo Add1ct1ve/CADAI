@@ -10,9 +10,11 @@ import type {
   SketchConstraint,
   ConstraintState,
   SketchToolId,
-  ExtrudeParams,
+  SketchOperation,
   FilletParams,
   ChamferParams,
+  ShellParams,
+  HoleParams,
 } from '$lib/types/cad';
 import {
   initSolver as initConstraintSolver,
@@ -101,10 +103,46 @@ export function getSketchStore() {
       return sketches.find((s) => s.id === id) ?? null;
     },
 
-    setExtrude(sketchId: SketchId, params: ExtrudeParams | undefined) {
+    setOperation(sketchId: SketchId, params: SketchOperation | undefined) {
       sketches = sketches.map((s) =>
-        s.id === sketchId ? { ...s, extrude: params } : s,
+        s.id === sketchId ? { ...s, operation: params } : s,
       );
+    },
+
+    setSketchShell(sketchId: SketchId, params: ShellParams | undefined) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, shell: params } : s,
+      );
+    },
+
+    setSketchHoles(sketchId: SketchId, holes: HoleParams[] | undefined) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, holes } : s,
+      );
+    },
+
+    addSketchHole(sketchId: SketchId, hole: HoleParams) {
+      sketches = sketches.map((s) =>
+        s.id === sketchId ? { ...s, holes: [...(s.holes ?? []), hole] } : s,
+      );
+    },
+
+    removeSketchHole(sketchId: SketchId, index: number) {
+      sketches = sketches.map((s) => {
+        if (s.id !== sketchId) return s;
+        const holes = [...(s.holes ?? [])];
+        holes.splice(index, 1);
+        return { ...s, holes: holes.length > 0 ? holes : undefined };
+      });
+    },
+
+    updateSketchHole(sketchId: SketchId, index: number, hole: HoleParams) {
+      sketches = sketches.map((s) => {
+        if (s.id !== sketchId) return s;
+        const holes = [...(s.holes ?? [])];
+        holes[index] = hole;
+        return { ...s, holes };
+      });
     },
 
     setSketchFillet(sketchId: SketchId, params: FilletParams | undefined) {
@@ -360,9 +398,13 @@ export function getSketchStore() {
 
     restore(data: { sketches: Sketch[] }) {
       // Ensure backward compatibility: add constraints field if missing
+      // Migrate old extrude field → operation
       sketches = data.sketches.map(s => ({
         ...s,
         constraints: s.constraints ?? [],
+        operation: s.operation ?? ((s as any).extrude
+          ? { type: 'extrude' as const, ...(s as any).extrude }
+          : undefined),
       }));
       activeSketchId = null;
       selectedSketchId = null;

@@ -64,12 +64,33 @@ export type SketchConstraint =
 export type ConstraintState = 'under-constrained' | 'well-constrained' | 'over-constrained';
 
 export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical';
+export type FaceSelector = '>Z' | '<Z' | '>X' | '<X' | '>Y' | '<Y';
 
 export interface ExtrudeParams {
+  type: 'extrude';
   distance: number;
   mode: 'add' | 'cut';
   cutTargetId?: string;
+  taper?: number;  // draft angle in degrees (0 = no taper)
 }
+
+export interface RevolveParams {
+  type: 'revolve';
+  angle: number;              // degrees (default 360)
+  mode: 'add' | 'cut';
+  cutTargetId?: string;
+  axisDirection: 'X' | 'Y';  // axis relative to sketch plane
+  axisOffset: number;         // perpendicular distance from origin to axis
+}
+
+export interface SweepParams {
+  type: 'sweep';
+  mode: 'add' | 'cut';
+  cutTargetId?: string;
+  pathSketchId: string;       // reference to path sketch
+}
+
+export type SketchOperation = ExtrudeParams | RevolveParams | SweepParams;
 
 export interface FilletParams {
   radius: number;
@@ -81,6 +102,25 @@ export interface ChamferParams {
   edges: EdgeSelector;
 }
 
+export interface ShellParams {
+  thickness: number;          // negative = inward
+  face: FaceSelector;         // which face to remove/open
+}
+
+export type HoleType = 'through' | 'blind' | 'counterbore' | 'countersink';
+
+export interface HoleParams {
+  holeType: HoleType;
+  diameter: number;
+  depth?: number;             // blind only
+  cboreDiameter?: number;     // counterbore
+  cboreDepth?: number;        // counterbore
+  cskDiameter?: number;       // countersink
+  cskAngle?: number;          // countersink (default 82)
+  position: [number, number]; // X,Y on target face
+  face: FaceSelector;
+}
+
 export interface Sketch {
   id: SketchId;
   name: string;
@@ -89,9 +129,11 @@ export interface Sketch {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   closed: boolean;
-  extrude?: ExtrudeParams;
+  operation?: SketchOperation;  // replaces extrude?: ExtrudeParams
   fillet?: FilletParams;
   chamfer?: ChamferParams;
+  shell?: ShellParams;
+  holes?: HoleParams[];
   suppressed?: boolean;
 }
 
@@ -145,6 +187,8 @@ export interface SceneObject {
   locked: boolean;
   fillet?: FilletParams;
   chamfer?: ChamferParams;
+  shell?: ShellParams;
+  holes?: HoleParams[];
   suppressed?: boolean;
 }
 

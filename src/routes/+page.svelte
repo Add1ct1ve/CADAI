@@ -200,10 +200,10 @@
       // E key: extrude selected sketch
       if (e.key.toLowerCase() === 'e') {
         const selectedSketch = sketchStore.selectedSketch;
-        if (selectedSketch && !selectedSketch.extrude && selectedSketch.entities.length > 0) {
+        if (selectedSketch && !selectedSketch.operation && selectedSketch.entities.length > 0) {
           e.preventDefault();
           history.pushSnapshot(captureFullSnapshot());
-          sketchStore.setExtrude(selectedSketch.id, { distance: 10, mode: 'add' });
+          sketchStore.setOperation(selectedSketch.id, { type: 'extrude', distance: 10, mode: 'add' });
           triggerPipeline(100);
           runPythonExecution();
           return;
