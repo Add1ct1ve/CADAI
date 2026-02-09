@@ -5,6 +5,8 @@ import type {
   SketchEntityId,
   SketchId,
   SketchToolId,
+  SketchConstraint,
+  ConstraintState,
   Point2D,
 } from '$lib/types/cad';
 import {
@@ -13,6 +15,7 @@ import {
   sketchToThreePos,
   threeToSketchPos,
 } from '$lib/services/sketch-plane-utils';
+import { getPointCoords } from '$lib/services/constraint-solver';
 
 const SKETCH_COLOR = 0xf9e2af; // yellow
 const INACTIVE_SKETCH_COLOR = 0xa6935c; // dimmer yellow for inactive sketches
@@ -21,6 +24,10 @@ const HOVERED_COLOR = 0x74c7ec; // teal
 const PREVIEW_COLOR = 0x6c7086; // gray
 const PLANE_COLOR = 0x89b4fa; // accent blue for plane overlay
 const GRID_COLOR = 0x45475a; // surface2
+const WELL_CONSTRAINED_COLOR = 0xa6e3a1; // green
+const OVER_CONSTRAINED_COLOR = 0xf38ba8; // red
+const CONSTRAINT_ICON_COLOR = '#cba6f7'; // mauve for constraint icons
+const DIMENSION_TEXT_COLOR = '#94e2d5'; // teal for dimension text
 
 const ARC_SEGMENTS = 64;
 const CIRCLE_SEGMENTS = 64;
@@ -33,6 +40,7 @@ export class SketchRenderer {
   private planeGrid: THREE.Group | null = null;
   private entityMeshes: Map<SketchEntityId, THREE.Line> = new Map();
   private inactiveMeshes: Map<SketchId, THREE.Group> = new Map();
+  private constraintGroup: THREE.Group;
   private previewLine: THREE.Line | null = null;
   private planeInfo: SketchPlaneInfo | null = null;
 
@@ -44,6 +52,9 @@ export class SketchRenderer {
     this.inactiveContainer = new THREE.Group();
     this.inactiveContainer.name = 'sketch-inactive';
     this.scene.add(this.inactiveContainer);
+    this.constraintGroup = new THREE.Group();
+    this.constraintGroup.name = 'sketch-constraints';
+    this.container.add(this.constraintGroup);
   }
 
   enterSketch(sketch: Sketch): void {
@@ -57,6 +68,7 @@ export class SketchRenderer {
     this.hidePlaneGrid();
     this.clearPreview();
     this.clearAllEntities();
+    this.clearConstraintVisuals();
     this.planeInfo = null;
   }
 
@@ -70,11 +82,17 @@ export class SketchRenderer {
     sketch: Sketch,
     selectedIds: SketchEntityId[],
     hoveredId: SketchEntityId | null,
+    cState: ConstraintState = 'under-constrained',
   ): void {
     if (!this.planeInfo) return;
 
     const currentEntityIds = new Set(sketch.entities.map((e) => e.id));
     const selectedSet = new Set(selectedIds);
+
+    // Choose default color based on constraint state
+    const defaultColor = cState === 'well-constrained' ? WELL_CONSTRAINED_COLOR
+      : cState === 'over-constrained' ? OVER_CONSTRAINED_COLOR
+      : SKETCH_COLOR;
 
     // Remove meshes for deleted entities
     for (const [id] of this.entityMeshes) {
@@ -87,7 +105,7 @@ export class SketchRenderer {
     for (const entity of sketch.entities) {
       const isSelected = selectedSet.has(entity.id);
       const isHovered = entity.id === hoveredId;
-      const color = isSelected ? SELECTED_COLOR : isHovered ? HOVERED_COLOR : SKETCH_COLOR;
+      const color = isSelected ? SELECTED_COLOR : isHovered ? HOVERED_COLOR : defaultColor;
 
       // Always recreate for simplicity (entities are lightweight lines)
       this.removeEntityMesh(entity.id);
@@ -274,6 +292,186 @@ export class SketchRenderer {
         }
       });
     }
+  }
+
+  // ── Constraint Rendering ────────────────────────
+
+  syncConstraints(sketch: Sketch, cState: ConstraintState): void {
+    this.clearConstraintVisuals();
+    if (!this.planeInfo) return;
+
+    const entityMap = new Map(sketch.entities.map(e => [e.id, e]));
+
+    for (const constraint of (sketch.constraints ?? [])) {
+      const sprite = this.createConstraintSprite(constraint, entityMap);
+      if (sprite) {
+        this.constraintGroup.add(sprite);
+      }
+    }
+  }
+
+  private clearConstraintVisuals(): void {
+    while (this.constraintGroup.children.length > 0) {
+      const child = this.constraintGroup.children[0];
+      this.constraintGroup.remove(child);
+      if (child instanceof THREE.Sprite) {
+        child.material.map?.dispose();
+        child.material.dispose();
+      }
+      if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+  }
+
+  private createConstraintSprite(
+    constraint: SketchConstraint,
+    entityMap: Map<string, SketchEntity>,
+  ): THREE.Object3D | null {
+    if (!this.planeInfo) return null;
+
+    switch (constraint.type) {
+      case 'coincident': {
+        const e1 = entityMap.get(constraint.point1.entityId);
+        if (!e1) return null;
+        const pt = getPointCoords(e1, constraint.point1.pointIndex);
+        const pos = sketchToThreePos(pt, this.planeInfo);
+        return this.makeIconSprite('\u25CF', pos, CONSTRAINT_ICON_COLOR, 0.3);
+      }
+      case 'horizontal': {
+        const entity = entityMap.get(constraint.entityId);
+        if (!entity || entity.type !== 'line') return null;
+        const mid = midpoint(entity.start, entity.end);
+        const offset: Point2D = [mid[0], mid[1] + 0.6];
+        const pos = sketchToThreePos(offset, this.planeInfo);
+        return this.makeIconSprite('H', pos, CONSTRAINT_ICON_COLOR);
+      }
+      case 'vertical': {
+        const entity = entityMap.get(constraint.entityId);
+        if (!entity || entity.type !== 'line') return null;
+        const mid = midpoint(entity.start, entity.end);
+        const offset: Point2D = [mid[0] + 0.6, mid[1]];
+        const pos = sketchToThreePos(offset, this.planeInfo);
+        return this.makeIconSprite('V', pos, CONSTRAINT_ICON_COLOR);
+      }
+      case 'parallel': {
+        const e1 = entityMap.get(constraint.entityId1);
+        const e2 = entityMap.get(constraint.entityId2);
+        if (!e1 || !e2) return null;
+        const mid1 = getEntityMidpoint(e1);
+        const mid2 = getEntityMidpoint(e2);
+        const between: Point2D = [(mid1[0] + mid2[0]) / 2, (mid1[1] + mid2[1]) / 2];
+        const pos = sketchToThreePos(between, this.planeInfo);
+        return this.makeIconSprite('//', pos, CONSTRAINT_ICON_COLOR);
+      }
+      case 'perpendicular': {
+        const e1 = entityMap.get(constraint.entityId1);
+        const e2 = entityMap.get(constraint.entityId2);
+        if (!e1 || !e2) return null;
+        const mid1 = getEntityMidpoint(e1);
+        const mid2 = getEntityMidpoint(e2);
+        const between: Point2D = [(mid1[0] + mid2[0]) / 2, (mid1[1] + mid2[1]) / 2];
+        const pos = sketchToThreePos(between, this.planeInfo);
+        return this.makeIconSprite('\u22A5', pos, CONSTRAINT_ICON_COLOR);
+      }
+      case 'equal': {
+        const e1 = entityMap.get(constraint.entityId1);
+        const e2 = entityMap.get(constraint.entityId2);
+        if (!e1 || !e2) return null;
+        const group = new THREE.Group();
+        const mid1 = getEntityMidpoint(e1);
+        const mid2 = getEntityMidpoint(e2);
+        const s1 = this.makeIconSprite('=', sketchToThreePos([mid1[0], mid1[1] + 0.5], this.planeInfo), CONSTRAINT_ICON_COLOR);
+        const s2 = this.makeIconSprite('=', sketchToThreePos([mid2[0], mid2[1] + 0.5], this.planeInfo), CONSTRAINT_ICON_COLOR);
+        if (s1) group.add(s1);
+        if (s2) group.add(s2);
+        return group;
+      }
+      case 'distance': {
+        const e1 = entityMap.get(constraint.point1.entityId);
+        const e2 = entityMap.get(constraint.point2.entityId);
+        if (!e1 || !e2) return null;
+        const c1 = getPointCoords(e1, constraint.point1.pointIndex);
+        const c2 = getPointCoords(e2, constraint.point2.pointIndex);
+        const mid: Point2D = [(c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2 + 0.5];
+        const pos = sketchToThreePos(mid, this.planeInfo);
+        const text = constraint.value.toFixed(1);
+        const group = new THREE.Group();
+        // Dashed leader line
+        const pts = [sketchToThreePos(c1, this.planeInfo), sketchToThreePos(c2, this.planeInfo)];
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = new THREE.LineDashedMaterial({ color: 0x94e2d5, dashSize: 0.2, gapSize: 0.1 });
+        const line = new THREE.Line(geo, mat);
+        line.computeLineDistances();
+        group.add(line);
+        const sprite = this.makeIconSprite(text, pos, DIMENSION_TEXT_COLOR, 0.6);
+        if (sprite) group.add(sprite);
+        return group;
+      }
+      case 'radius': {
+        const entity = entityMap.get(constraint.entityId);
+        if (!entity) return null;
+        const center = entity.type === 'circle' ? entity.center
+          : entity.type === 'arc' ? entity.start : null;
+        if (!center) return null;
+        const offset: Point2D = [center[0] + 0.5, center[1] + 0.5];
+        const pos = sketchToThreePos(offset, this.planeInfo);
+        return this.makeIconSprite(`R=${constraint.value.toFixed(1)}`, pos, DIMENSION_TEXT_COLOR, 0.6);
+      }
+      case 'angle': {
+        const e1 = entityMap.get(constraint.entityId1);
+        const e2 = entityMap.get(constraint.entityId2);
+        if (!e1 || !e2) return null;
+        const mid1 = getEntityMidpoint(e1);
+        const mid2 = getEntityMidpoint(e2);
+        const between: Point2D = [(mid1[0] + mid2[0]) / 2, (mid1[1] + mid2[1]) / 2 + 0.5];
+        const pos = sketchToThreePos(between, this.planeInfo);
+        return this.makeIconSprite(`${constraint.value.toFixed(1)}\u00B0`, pos, DIMENSION_TEXT_COLOR, 0.6);
+      }
+    }
+  }
+
+  private makeIconSprite(
+    text: string,
+    position: THREE.Vector3,
+    color: string,
+    scale = 0.5,
+  ): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    const size = 128;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+
+    // Background
+    ctx.fillStyle = 'rgba(30, 30, 46, 0.85)';
+    const pad = 8;
+    const textWidth = ctx.measureText(text).width;
+    ctx.beginPath();
+    ctx.roundRect(pad, pad, size - pad * 2, size - pad * 2, 8);
+    ctx.fill();
+
+    // Text
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(text, size / 2, size / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.copy(position);
+    sprite.scale.set(scale, scale, 1);
+    sprite.renderOrder = 10;
+    return sprite;
   }
 
   // ── Dispose ─────────────────────────────────────
@@ -558,4 +756,21 @@ function pointToSegmentDist(p: Point2D, a: Point2D, b: Point2D): number {
   const ex = p[0] - projX;
   const ey = p[1] - projY;
   return Math.sqrt(ex * ex + ey * ey);
+}
+
+function midpoint(a: Point2D, b: Point2D): Point2D {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+
+function getEntityMidpoint(entity: SketchEntity): Point2D {
+  switch (entity.type) {
+    case 'line':
+      return midpoint(entity.start, entity.end);
+    case 'rectangle':
+      return midpoint(entity.corner1, entity.corner2);
+    case 'circle':
+      return entity.center;
+    case 'arc':
+      return entity.mid;
+  }
 }

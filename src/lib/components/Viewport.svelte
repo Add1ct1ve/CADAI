@@ -8,9 +8,11 @@
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { handleSketchClick } from '$lib/services/sketch-interaction';
+  import { handleConstraintSelection } from '$lib/services/constraint-interaction';
   import { snapToSketchGrid } from '$lib/services/sketch-plane-utils';
   import ViewControls from '$lib/components/ViewControls.svelte';
-  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams } from '$lib/types/cad';
+  import DimensionInput from '$lib/components/DimensionInput.svelte';
+  import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint } from '$lib/types/cad';
   import type * as THREE from 'three';
   import { onMount } from 'svelte';
 
@@ -36,6 +38,14 @@
 
   // Track previous code mode for mode-switch detection
   let prevCodeMode: string | null = null;
+
+  // Dimension input state for constraint tools
+  let dimensionInputVisible = $state(false);
+  let dimensionInputPrompt = $state('');
+  let dimensionInputDefaultValue = $state(0);
+  let dimensionInputPosition = $state({ x: 0, y: 0 });
+  let pendingConstraint = $state<Partial<SketchConstraint> | null>(null);
+  let constraintStatusMessage = $state('');
 
   // ── Full snapshot helpers (scene + sketch) ──
   function captureFullSnapshot() {
@@ -375,7 +385,17 @@
 
     const sketch = sketchStore.activeSketch;
     if (sketch) {
-      engine.syncSketchEntities(sketch, sketchStore.selectedEntityIds, sketchStore.hoveredEntityId);
+      engine.syncSketchEntities(sketch, sketchStore.selectedEntityIds, sketchStore.hoveredEntityId, sketchStore.constraintState);
+    }
+  });
+
+  // ── Sketch mode: sync constraint visuals ──
+  $effect(() => {
+    if (!engine) return;
+
+    const sketch = sketchStore.activeSketch;
+    if (sketch) {
+      engine.syncSketchConstraints(sketch, sketchStore.constraintState);
     }
   });
 
@@ -423,15 +443,17 @@
       const pt = sketchStore.sketchSnap ? snapToSketchGrid(rawPt, sketchStore.sketchSnap) : rawPt;
       sketchStore.setPreviewPoint(pt);
 
-      // Hover detection for select tool
-      if (sketchStore.activeSketchTool === 'sketch-select') {
+      // Hover detection for select tool or constraint tools
+      const currentTool = sketchStore.activeSketchTool;
+      const isConstraintTool = currentTool.startsWith('sketch-constraint-');
+      if (currentTool === 'sketch-select' || isConstraintTool) {
         const hitId = engine.raycastSketchEntities(e, sketch);
         sketchStore.setHoveredEntity(hitId);
       }
 
       // Set cursor
       if (containerRef) {
-        if (sketchStore.activeSketchTool === 'sketch-select') {
+        if (currentTool === 'sketch-select' || isConstraintTool) {
           const hitId = engine.raycastSketchEntities(e, sketch);
           containerRef.style.cursor = hitId ? 'pointer' : '';
         } else {
@@ -483,6 +505,47 @@
       if (tool === 'sketch-select') {
         const hitId = engine.raycastSketchEntities(e, sketch);
         sketchStore.selectEntity(hitId, e.shiftKey);
+        return;
+      }
+
+      // Constraint tools: use additive entity selection, then check for constraint creation
+      if (tool.startsWith('sketch-constraint-')) {
+        const hitId = engine.raycastSketchEntities(e, sketch);
+        if (hitId) {
+          sketchStore.selectEntity(hitId, true);
+        }
+
+        // Check if we have enough selections for this constraint
+        const action = handleConstraintSelection(
+          tool,
+          sketchStore.selectedEntityIds,
+          sketch.entities,
+          () => sketchStore.newEntityId(),
+        );
+
+        constraintStatusMessage = '';
+        switch (action.type) {
+          case 'create':
+            history.pushSnapshot(captureFullSnapshot());
+            sketchStore.addConstraint(action.constraint);
+            sketchStore.selectEntity(null);
+            triggerPipeline(100);
+            break;
+          case 'need-value':
+            pendingConstraint = action.partial;
+            dimensionInputPrompt = action.prompt;
+            dimensionInputDefaultValue = action.defaultValue;
+            dimensionInputPosition = { x: e.clientX, y: e.clientY };
+            dimensionInputVisible = true;
+            break;
+          case 'need-more':
+            constraintStatusMessage = action.message;
+            break;
+          case 'invalid':
+            constraintStatusMessage = action.message;
+            sketchStore.selectEntity(null);
+            break;
+        }
         return;
       }
 
@@ -569,6 +632,24 @@
     triggerPipeline(100);
   }
 
+  function handleDimensionSubmit(value: number) {
+    if (pendingConstraint) {
+      const constraint = { ...pendingConstraint, value } as SketchConstraint;
+      history.pushSnapshot(captureFullSnapshot());
+      sketchStore.addConstraint(constraint);
+      sketchStore.selectEntity(null);
+      triggerPipeline(100);
+    }
+    dimensionInputVisible = false;
+    pendingConstraint = null;
+  }
+
+  function handleDimensionCancel() {
+    dimensionInputVisible = false;
+    pendingConstraint = null;
+    sketchStore.selectEntity(null);
+  }
+
   // Sketch tool hint text
   const sketchToolHints: Record<string, string> = {
     'sketch-select': 'Click to select entities, Shift+click for multi-select',
@@ -576,6 +657,15 @@
     'sketch-rect': 'Click first corner, then opposite corner',
     'sketch-circle': 'Click center, then drag to set radius',
     'sketch-arc': 'Click start point, end point, then mid point of arc',
+    'sketch-constraint-coincident': 'Click 2 entities to make endpoints coincident',
+    'sketch-constraint-horizontal': 'Click a line to make it horizontal',
+    'sketch-constraint-vertical': 'Click a line to make it vertical',
+    'sketch-constraint-parallel': 'Click 2 lines to make them parallel',
+    'sketch-constraint-perpendicular': 'Click 2 lines to make them perpendicular',
+    'sketch-constraint-equal': 'Click 2 entities to make them equal length/radius',
+    'sketch-constraint-distance': 'Click 2 entities to set distance between endpoints',
+    'sketch-constraint-radius': 'Click a circle or arc to set its radius',
+    'sketch-constraint-angle': 'Click 2 lines to set the angle between them',
   };
 </script>
 
@@ -616,7 +706,7 @@
   {#if sketchStore.isInSketchMode}
     <div class="sketch-overlay">
       <div class="sketch-hint">
-        {sketchToolHints[sketchStore.activeSketchTool] ?? ''}
+        {constraintStatusMessage || (sketchToolHints[sketchStore.activeSketchTool] ?? '')}
       </div>
       <button class="finish-sketch-btn" onclick={handleFinishSketch}>
         Finish Sketch
@@ -626,8 +716,28 @@
       Sketch: {sketchStore.activeSketch?.name ?? ''} ({sketchStore.activeSketch?.plane})
       {#if sketchStore.activeSketch}
         &middot; {sketchStore.activeSketch.entities.length} entit{sketchStore.activeSketch.entities.length !== 1 ? 'ies' : 'y'}
+        &middot; {(sketchStore.activeSketch.constraints ?? []).length} constraint{(sketchStore.activeSketch.constraints ?? []).length !== 1 ? 's' : ''}
       {/if}
     </div>
+    <!-- DOF / constraint state badge -->
+    {#if sketchStore.constraintState === 'well-constrained'}
+      <div class="constraint-badge well-constrained">FULLY CONSTRAINED</div>
+    {:else if sketchStore.constraintState === 'over-constrained'}
+      <div class="constraint-badge over-constrained">OVER-CONSTRAINED</div>
+    {:else if sketchStore.degreesOfFreedom >= 0}
+      <div class="constraint-badge under-constrained">DOF: {sketchStore.degreesOfFreedom}</div>
+    {/if}
+  {/if}
+
+  <!-- Dimension input overlay -->
+  {#if dimensionInputVisible}
+    <DimensionInput
+      prompt={dimensionInputPrompt}
+      defaultValue={dimensionInputDefaultValue}
+      position={dimensionInputPosition}
+      onSubmit={handleDimensionSubmit}
+      onCancel={handleDimensionCancel}
+    />
   {/if}
 </div>
 
@@ -738,5 +848,37 @@
 
   .finish-sketch-btn:hover {
     background: rgba(249, 226, 175, 0.25);
+  }
+
+  .constraint-badge {
+    position: absolute;
+    bottom: 28px;
+    left: 8px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .constraint-badge.well-constrained {
+    color: #a6e3a1;
+    background: rgba(166, 227, 161, 0.15);
+    border: 1px solid rgba(166, 227, 161, 0.4);
+  }
+
+  .constraint-badge.over-constrained {
+    color: #f38ba8;
+    background: rgba(243, 139, 168, 0.15);
+    border: 1px solid rgba(243, 139, 168, 0.4);
+  }
+
+  .constraint-badge.under-constrained {
+    color: #f9e2af;
+    background: rgba(249, 226, 175, 0.1);
+    border: 1px solid rgba(249, 226, 175, 0.3);
   }
 </style>

@@ -13,6 +13,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@salusoft89/planegcs": "^1.1.7",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",

@@ -33,9 +33,11 @@
   onMount(() => {
     settings.load();
     startAutosave();
+    sketchStore.initSolver().catch(console.error);
 
     return () => {
       stopAutosave();
+      sketchStore.destroySolver();
     };
   });
 
@@ -129,6 +131,15 @@
         r: 'sketch-rect',
         c: 'sketch-circle',
         a: 'sketch-arc',
+        o: 'sketch-constraint-coincident',
+        h: 'sketch-constraint-horizontal',
+        i: 'sketch-constraint-vertical',
+        p: 'sketch-constraint-parallel',
+        t: 'sketch-constraint-perpendicular',
+        e: 'sketch-constraint-equal',
+        d: 'sketch-constraint-distance',
+        q: 'sketch-constraint-radius',
+        n: 'sketch-constraint-angle',
       };
       const sketchTool = sketchToolMap[e.key.toLowerCase()];
       if (sketchTool) {

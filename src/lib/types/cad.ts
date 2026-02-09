@@ -38,6 +38,31 @@ export interface SketchArc {
 
 export type SketchEntity = SketchLine | SketchRectangle | SketchCircle | SketchArc;
 
+// ─── Sketch constraint types ─────────────────────
+export type SketchConstraintId = string;
+
+export interface PointRef {
+  entityId: SketchEntityId;
+  pointIndex: number;
+  // Line: 0=start, 1=end
+  // Rectangle: 0=corner1, 1=(c2x,c1y), 2=corner2, 3=(c1x,c2y)
+  // Circle: 0=center
+  // Arc: 0=start, 1=mid, 2=end
+}
+
+export type SketchConstraint =
+  | { type: 'coincident';     id: SketchConstraintId; point1: PointRef; point2: PointRef }
+  | { type: 'horizontal';     id: SketchConstraintId; entityId: SketchEntityId }
+  | { type: 'vertical';       id: SketchConstraintId; entityId: SketchEntityId }
+  | { type: 'parallel';       id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId }
+  | { type: 'perpendicular';  id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId }
+  | { type: 'equal';          id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId }
+  | { type: 'distance';       id: SketchConstraintId; point1: PointRef; point2: PointRef; value: number }
+  | { type: 'radius';         id: SketchConstraintId; entityId: SketchEntityId; value: number }
+  | { type: 'angle';          id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId; value: number };
+
+export type ConstraintState = 'under-constrained' | 'well-constrained' | 'over-constrained';
+
 export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical';
 
 export interface ExtrudeParams {
@@ -62,13 +87,18 @@ export interface Sketch {
   plane: SketchPlane;
   origin: [number, number, number];
   entities: SketchEntity[];
+  constraints: SketchConstraint[];
   closed: boolean;
   extrude?: ExtrudeParams;
   fillet?: FilletParams;
   chamfer?: ChamferParams;
 }
 
-export type SketchToolId = 'sketch-select' | 'sketch-line' | 'sketch-rect' | 'sketch-circle' | 'sketch-arc';
+export type SketchToolId =
+  | 'sketch-select' | 'sketch-line' | 'sketch-rect' | 'sketch-circle' | 'sketch-arc'
+  | 'sketch-constraint-coincident' | 'sketch-constraint-horizontal' | 'sketch-constraint-vertical'
+  | 'sketch-constraint-parallel'   | 'sketch-constraint-perpendicular' | 'sketch-constraint-equal'
+  | 'sketch-constraint-distance'   | 'sketch-constraint-radius'    | 'sketch-constraint-angle';
 
 export interface BoxParams {
   type: 'box';

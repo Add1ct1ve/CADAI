@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, Point2D } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 import { SketchRenderer } from '$lib/services/sketch-renderer';
@@ -756,8 +756,15 @@ export class ViewportEngine {
   /**
    * Sync sketch entity rendering.
    */
-  syncSketchEntities(sketch: Sketch, selectedIds: SketchEntityId[], hoveredId: SketchEntityId | null): void {
-    this.sketchRenderer.syncEntities(sketch, selectedIds, hoveredId);
+  syncSketchEntities(sketch: Sketch, selectedIds: SketchEntityId[], hoveredId: SketchEntityId | null, cState: ConstraintState = 'under-constrained'): void {
+    this.sketchRenderer.syncEntities(sketch, selectedIds, hoveredId, cState);
+  }
+
+  /**
+   * Sync sketch constraint rendering.
+   */
+  syncSketchConstraints(sketch: Sketch, cState: ConstraintState): void {
+    this.sketchRenderer.syncConstraints(sketch, cState);
   }
 
   /**

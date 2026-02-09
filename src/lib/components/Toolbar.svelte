@@ -175,6 +175,18 @@
     { id: 'sketch-circle', label: 'Circle', shortcut: 'C' },
     { id: 'sketch-arc', label: 'Arc', shortcut: 'A' },
   ];
+
+  const constraintToolButtons: { id: SketchToolId; label: string; shortcut: string }[] = [
+    { id: 'sketch-constraint-coincident',    label: 'Coinc',  shortcut: 'O' },
+    { id: 'sketch-constraint-horizontal',    label: 'Horiz',  shortcut: 'H' },
+    { id: 'sketch-constraint-vertical',      label: 'Vert',   shortcut: 'I' },
+    { id: 'sketch-constraint-parallel',      label: 'Para',   shortcut: 'P' },
+    { id: 'sketch-constraint-perpendicular', label: 'Perp',   shortcut: 'T' },
+    { id: 'sketch-constraint-equal',         label: 'Equal',  shortcut: 'E' },
+    { id: 'sketch-constraint-distance',      label: 'Dist',   shortcut: 'D' },
+    { id: 'sketch-constraint-radius',        label: 'Rad',    shortcut: 'Q' },
+    { id: 'sketch-constraint-angle',         label: 'Angle',  shortcut: 'N' },
+  ];
 </script>
 
 <div class="toolbar">
@@ -233,6 +245,20 @@
       {#each sketchToolButtons as btn}
         <button
           class="toolbar-btn tool-btn"
+          class:tool-active-sketch={sketchStore.activeSketchTool === btn.id}
+          onclick={() => setSketchTool(btn.id)}
+          title="{btn.label} ({btn.shortcut})"
+        >
+          {btn.label}
+        </button>
+      {/each}
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Constraint tools -->
+      {#each constraintToolButtons as btn}
+        <button
+          class="toolbar-btn tool-btn constraint-btn"
           class:tool-active-sketch={sketchStore.activeSketchTool === btn.id}
           onclick={() => setSketchTool(btn.id)}
           title="{btn.label} ({btn.shortcut})"
@@ -472,6 +498,18 @@
   .sketch-btn:hover {
     background: rgba(249, 226, 175, 0.1);
     border-color: #f9e2af;
+  }
+
+  .constraint-btn {
+    font-size: 10px;
+    padding: 3px 6px;
+    color: #cba6f7;
+    border: 1px solid rgba(203, 166, 247, 0.3);
+  }
+
+  .constraint-btn:hover {
+    background: rgba(203, 166, 247, 0.1);
+    border-color: #cba6f7;
   }
 
   .sketch-finish-btn {
