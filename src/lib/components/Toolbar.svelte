@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep, projectInsertComponent } from '$lib/services/project-actions';
+  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep, projectInsertComponent, projectExport3mf, projectMeshCheck, projectOrientForPrint, projectSheetMetalUnfold } from '$lib/services/project-actions';
+  import type { MeshCheckResult, OrientResult } from '$lib/services/tauri';
+  import MeshCheckPanel from './MeshCheckPanel.svelte';
+  import OrientationPanel from './OrientationPanel.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
   import { getMateStore } from '$lib/stores/mate.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
@@ -524,6 +527,90 @@
     showStatus('Note added');
   }
 
+  // ── Manufacturing ──
+
+  let meshCheckResult = $state<MeshCheckResult | null>(null);
+  let orientResult = $state<OrientResult | null>(null);
+
+  async function handleExport3mf() {
+    try {
+      isBusy = true;
+      showStatus('Exporting 3MF...');
+      const result = await projectExport3mf();
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`3MF export failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  async function handleMeshCheck() {
+    try {
+      isBusy = true;
+      showStatus('Checking mesh...');
+      const result = await projectMeshCheck();
+      meshCheckResult = result;
+      showStatus(result.issues.length === 0 ? 'Mesh check passed' : `${result.issues.length} issue(s) found`);
+    } catch (err) {
+      showStatus(`Mesh check failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  async function handleOrient() {
+    try {
+      isBusy = true;
+      showStatus('Analyzing orientation...');
+      const result = await projectOrientForPrint();
+      orientResult = result;
+      showStatus('Orientation analysis complete');
+    } catch (err) {
+      showStatus(`Orient failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  function handleApplyOrientation(rotation: [number, number, number]) {
+    const obj = scene.firstSelected ?? scene.objects[0];
+    if (!obj) {
+      showStatus('No object to rotate');
+      orientResult = null;
+      return;
+    }
+    history.pushSnapshot(captureSnapshot());
+    const current = obj.transform.rotation;
+    scene.updateObject(obj.id, {
+      transform: {
+        ...obj.transform,
+        rotation: [
+          current[0] + rotation[0],
+          current[1] + rotation[1],
+          current[2] + rotation[2],
+        ],
+      },
+    });
+    triggerPipeline(100);
+    runPythonExecution();
+    orientResult = null;
+    showStatus('Orientation applied');
+  }
+
+  async function handleUnfold() {
+    try {
+      isBusy = true;
+      showStatus('Computing flat pattern...');
+      const result = await projectSheetMetalUnfold();
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`Unfold failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
     { id: 'select', label: 'Select', shortcut: 'V', group: 'select' },
     { id: 'translate', label: 'Move', shortcut: 'G', group: 'select' },
@@ -947,6 +1034,26 @@
 
       <div class="toolbar-separator"></div>
 
+      <!-- Manufacturing -->
+      <button class="toolbar-btn mfg-btn"
+        onclick={handleExport3mf}
+        title="Export 3MF (with colors)"
+        disabled={isBusy || scene.codeMode !== 'parametric'}>3MF</button>
+      <button class="toolbar-btn mfg-btn"
+        onclick={handleMeshCheck}
+        title="Check Mesh Quality"
+        disabled={isBusy || scene.codeMode !== 'parametric'}>Check</button>
+      <button class="toolbar-btn mfg-btn"
+        onclick={handleOrient}
+        title="Optimize Print Orientation"
+        disabled={isBusy || scene.codeMode !== 'parametric'}>Orient</button>
+      <button class="toolbar-btn mfg-btn"
+        onclick={handleUnfold}
+        title="Sheet Metal Unfold (DXF)"
+        disabled={isBusy || scene.codeMode !== 'parametric'}>Unfold</button>
+
+      <div class="toolbar-separator"></div>
+
       <!-- Code mode toggle -->
       <button
         class="toolbar-btn mode-btn"
@@ -1014,6 +1121,18 @@
         <button class="datum-popup-cancel" onclick={() => datumPopup = null}>Cancel</button>
       </div>
     </div>
+  {/if}
+
+  {#if meshCheckResult}
+    <MeshCheckPanel result={meshCheckResult} onClose={() => meshCheckResult = null} />
+  {/if}
+
+  {#if orientResult}
+    <OrientationPanel
+      result={orientResult}
+      onApply={handleApplyOrientation}
+      onClose={() => orientResult = null}
+    />
   {/if}
 
   {#if datumPopup === 'axis'}
@@ -1544,6 +1663,17 @@
   .drawing-export-btn:hover:not(:disabled) {
     background: rgba(137, 220, 235, 0.1);
     border-color: #89dceb;
+  }
+
+  .mfg-btn {
+    font-size: 11px;
+    color: #f9e2af;
+    border: 1px solid rgba(249, 226, 175, 0.3);
+  }
+
+  .mfg-btn:hover:not(:disabled) {
+    background: rgba(249, 226, 175, 0.1);
+    border-color: #f9e2af;
   }
 
   @keyframes fadeIn {

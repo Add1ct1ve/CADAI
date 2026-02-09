@@ -47,6 +47,10 @@ pub fn run() {
             commands::drawing::generate_drawing_view,
             commands::drawing::export_drawing_pdf,
             commands::drawing::export_drawing_dxf,
+            commands::manufacturing::export_3mf,
+            commands::manufacturing::mesh_check,
+            commands::manufacturing::orient_for_print,
+            commands::manufacturing::sheet_metal_unfold,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

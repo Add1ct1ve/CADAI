@@ -308,6 +308,98 @@ export async function exportDrawingDxf(svgContent: string, outputPath: string): 
   }
 }
 
+// ── Manufacturing types ──
+
+export interface MeshCheckResult {
+  watertight: boolean;
+  winding_consistent: boolean;
+  degenerate_faces: number;
+  euler_number: number;
+  volume: number;
+  triangle_count: number;
+  issues: string[];
+}
+
+export interface OrientResult {
+  rotation: [number, number, number];
+  height: number;
+  overhang_pct: number;
+  base_area: number;
+  candidates_evaluated: number;
+}
+
+export interface UnfoldResult {
+  path: string;
+  face_count: number;
+  bend_count: number;
+  flat_width: number;
+  flat_height: number;
+}
+
+export interface ColorInfo {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+/**
+ * Export model as 3MF with optional colors
+ */
+export async function export3mf(code: string, outputPath: string, colors?: ColorInfo[]): Promise<string> {
+  try {
+    const result = await invoke<{ path: string; triangles: number }>('export_3mf', {
+      code,
+      outputPath,
+      colors: colors ?? null,
+    });
+    return `3MF exported (${result.triangles} triangles)`;
+  } catch (err) {
+    console.error('export_3mf failed:', err);
+    throw new Error(`Export 3MF failed: ${err}`);
+  }
+}
+
+/**
+ * Check mesh quality for manufacturing
+ */
+export async function meshCheck(code: string): Promise<MeshCheckResult> {
+  try {
+    return await invoke<MeshCheckResult>('mesh_check', { code });
+  } catch (err) {
+    console.error('mesh_check failed:', err);
+    throw new Error(`Mesh check failed: ${err}`);
+  }
+}
+
+/**
+ * Analyze optimal print orientation
+ */
+export async function orientForPrint(code: string): Promise<OrientResult> {
+  try {
+    return await invoke<OrientResult>('orient_for_print', { code });
+  } catch (err) {
+    console.error('orient_for_print failed:', err);
+    throw new Error(`Orient analysis failed: ${err}`);
+  }
+}
+
+/**
+ * Compute sheet metal flat pattern and export as DXF
+ */
+export async function sheetMetalUnfold(code: string, outputPath: string, thickness?: number): Promise<UnfoldResult> {
+  try {
+    return await invoke<UnfoldResult>('sheet_metal_unfold', {
+      code,
+      outputPath,
+      thickness: thickness ?? null,
+    });
+  } catch (err) {
+    console.error('sheet_metal_unfold failed:', err);
+    throw new Error(`Sheet metal unfold failed: ${err}`);
+  }
+}
+
 /**
  * Show a native open file dialog
  */

@@ -54,7 +54,7 @@ pub async fn export_stl(
         .ok_or(AppError::CadQueryError("Python environment not set up".into()))?;
 
     // Find runner script
-    let runner_script = crate::commands::cad::find_runner_script()?;
+    let runner_script = super::find_python_script("runner.py")?;
 
     // Execute CadQuery to generate STL
     let result = crate::python::runner::execute_cadquery(&venv_dir, &runner_script, &code)?;
@@ -75,7 +75,7 @@ pub async fn export_step(
     let venv_dir = venv_path
         .ok_or(AppError::CadQueryError("Python environment not set up".into()))?;
 
-    let runner_script = crate::commands::cad::find_runner_script()?;
+    let runner_script = super::find_python_script("runner.py")?;
 
     // The runner auto-detects .step extension and exports STEP format
     crate::python::runner::execute_cadquery_to_file(
