@@ -3,6 +3,7 @@ import { getProjectStore } from '$lib/stores/project.svelte';
 import { getChatStore } from '$lib/stores/chat.svelte';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getViewportStore } from '$lib/stores/viewport.svelte';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import type { RustChatMessage } from '$lib/types';
 
 const AUTOSAVE_INTERVAL = 60_000; // 60 seconds
@@ -48,6 +49,7 @@ async function performAutosave(): Promise<void> {
     const viewportStore = getViewportStore();
 
     const sceneData = scene.serialize();
+    const ftData = getFeatureTreeStore().serialize();
     const camera = viewportStore.getCameraState();
 
     const draftData = {
@@ -56,7 +58,7 @@ async function performAutosave(): Promise<void> {
       messages: toRustMessages(),
       version: 2,
       scene: camera
-        ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera }
+        ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, featureTree: ftData }
         : undefined,
     };
 

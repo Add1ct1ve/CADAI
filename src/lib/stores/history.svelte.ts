@@ -6,6 +6,11 @@ export interface SceneSnapshot {
   sketches?: Sketch[];
   activeSketchId?: SketchId | null;
   selectedSketchId?: SketchId | null;
+  featureTree?: {
+    featureOrder: string[];
+    suppressedIds: string[];
+    rollbackIndex: number | null;
+  };
 }
 
 const MAX_HISTORY = 50;

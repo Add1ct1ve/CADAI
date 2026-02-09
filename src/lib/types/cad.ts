@@ -92,6 +92,7 @@ export interface Sketch {
   extrude?: ExtrudeParams;
   fillet?: FilletParams;
   chamfer?: ChamferParams;
+  suppressed?: boolean;
 }
 
 export type SketchToolId =
@@ -142,6 +143,19 @@ export interface SceneObject {
   locked: boolean;
   fillet?: FilletParams;
   chamfer?: ChamferParams;
+  suppressed?: boolean;
+}
+
+// ─── Feature tree types ─────────────────────────
+export type FeatureKind = 'primitive' | 'sketch';
+
+export interface FeatureItem {
+  id: string;
+  kind: FeatureKind;
+  name: string;
+  icon: string;
+  suppressed: boolean;
+  detail: string;
 }
 
 export type CodeMode = 'parametric' | 'manual';
