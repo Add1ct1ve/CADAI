@@ -4,6 +4,7 @@ import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getDatumStore } from '$lib/stores/datum.svelte';
 import { getComponentStore } from '$lib/stores/component.svelte';
+import { getMateStore } from '$lib/stores/mate.svelte';
 import { getSettingsStore } from '$lib/stores/settings.svelte';
 import { unitSuffix } from '$lib/services/units';
 
@@ -150,6 +151,29 @@ function buildFeatureItem(
       icon: isDatumPlane(datum) ? '\u25C7' : '\u2195',
       suppressed: suppressedIds.has(datum.id),
       detail: isDatumPlane(datum) ? datumPlaneDetail(datum) : datumAxisDetail(datum as DatumAxis),
+      depth: 0,
+    };
+  }
+  const mate = getMateStore().getMateById(id);
+  if (mate) {
+    const compStore = getComponentStore();
+    const c1 = compStore.getComponentById(mate.ref1.componentId)?.name ?? '?';
+    const c2 = compStore.getComponentById(mate.ref2.componentId)?.name ?? '?';
+    let detail: string;
+    if (mate.type === 'distance') {
+      detail = `Distance ${mate.distance}: ${c1} \u2194 ${c2}`;
+    } else if (mate.type === 'angle') {
+      detail = `Angle ${mate.angle}\u00B0: ${c1} \u2194 ${c2}`;
+    } else {
+      detail = `${mate.type}: ${c1} \u2194 ${c2}`;
+    }
+    return {
+      id: mate.id,
+      kind: 'mate' as FeatureKind,
+      name: mate.name,
+      icon: '\u26D3', // ⛓
+      suppressed: suppressedIds.has(mate.id),
+      detail,
       depth: 0,
     };
   }
@@ -325,6 +349,7 @@ export function getFeatureTreeStore() {
       const sketchStore = getSketchStore();
       const datumStore = getDatumStore();
       const componentStore = getComponentStore();
+      const mateStore = getMateStore();
 
       const validIds = new Set<string>();
       for (const obj of scene.objects) validIds.add(obj.id);
@@ -333,6 +358,8 @@ export function getFeatureTreeStore() {
       for (const da of datumStore.datumAxes) validIds.add(da.id);
       // Component IDs are also valid in featureOrder
       for (const comp of componentStore.components) validIds.add(comp.id);
+      // Mate IDs
+      for (const m of mateStore.mates) validIds.add(m.id);
 
       // Remove orphans from order
       const filtered = featureOrder.filter((id) => validIds.has(id));
@@ -355,6 +382,10 @@ export function getFeatureTreeStore() {
       // Add missing component IDs
       for (const comp of componentStore.components) {
         if (!ordered.has(comp.id)) missing.push(comp.id);
+      }
+      // Add missing mate IDs
+      for (const m of mateStore.mates) {
+        if (!ordered.has(m.id)) missing.push(m.id);
       }
 
       featureOrder = [...filtered, ...missing];

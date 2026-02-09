@@ -3,6 +3,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
+  import { getMateStore } from '$lib/stores/mate.svelte';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
@@ -14,6 +15,7 @@
   const sketchStore = getSketchStore();
   const datumStore = getDatumStore();
   const componentStore = getComponentStore();
+  const mateStore = getMateStore();
   const featureTree = getFeatureTreeStore();
   const history = getHistoryStore();
 
@@ -61,6 +63,7 @@
     const sketchSnap = sketchStore.snapshot();
     const datumSnap = datumStore.snapshot();
     const compSnap = componentStore.snapshot();
+    const mateSnap = mateStore.snapshot();
     const ftSnap = featureTree.snapshot();
     return {
       ...sceneSnap,
@@ -74,6 +77,8 @@
       components: compSnap.components,
       componentNameCounter: compSnap.nameCounter,
       selectedComponentId: compSnap.selectedComponentId,
+      mates: mateSnap.mates,
+      selectedMateId: mateSnap.selectedMateId,
     };
   }
 
@@ -841,6 +846,47 @@
     const comp = componentStore.selectedComponent;
     if (!comp) return;
     componentStore.updateComponent(comp.id, { color: (e.target as HTMLInputElement).value });
+  }
+
+  // ── Mate properties ──
+
+  function updateMateName(e: Event) {
+    const mate = mateStore.selectedMate;
+    if (!mate) return;
+    mateStore.updateMate(mate.id, { name: (e.target as HTMLInputElement).value });
+  }
+
+  function updateMateDistance(value: number) {
+    const mate = mateStore.selectedMate;
+    if (!mate || mate.type !== 'distance') return;
+    captureOnce();
+    mateStore.updateMate(mate.id, { distance: value } as any);
+    triggerAndRun();
+  }
+
+  function updateMateAngle(value: number) {
+    const mate = mateStore.selectedMate;
+    if (!mate || mate.type !== 'angle') return;
+    captureOnce();
+    mateStore.updateMate(mate.id, { angle: value } as any);
+    triggerAndRun();
+  }
+
+  function toggleMateFlipped() {
+    const mate = mateStore.selectedMate;
+    if (!mate || mate.type !== 'coincident') return;
+    captureOnce();
+    mateStore.updateMate(mate.id, { flipped: !mate.flipped } as any);
+    triggerAndRun();
+  }
+
+  function deleteMate() {
+    const mate = mateStore.selectedMate;
+    if (!mate) return;
+    history.pushSnapshot(captureSnapshot());
+    mateStore.removeMate(mate.id);
+    triggerPipeline(100);
+    runPythonExecution();
   }
 
   // Build list of possible cut targets (other operated add-mode sketches + visible primitives)
@@ -1920,6 +1966,88 @@
     </div>
   </div>
 
+{:else if mateStore.selectedMate}
+  {@const mate = mateStore.selectedMate}
+  <div class="properties-panel">
+    <div class="prop-header">
+      <span class="prop-type-badge mate-badge">{mate.type}</span>
+      <input
+        class="prop-name-input"
+        type="text"
+        value={mate.name}
+        oninput={updateMateName}
+      />
+    </div>
+
+    <!-- Reference A -->
+    <div class="prop-section">
+      <div class="prop-section-title">Reference A</div>
+      <div class="prop-row">
+        <label>Component</label>
+        <span class="prop-value">{componentStore.getComponentById(mate.ref1.componentId)?.name ?? '?'}</span>
+      </div>
+      <div class="prop-row">
+        <label>Face</label>
+        <span class="prop-value">{mate.ref1.faceSelector}</span>
+      </div>
+    </div>
+
+    <!-- Reference B -->
+    <div class="prop-section">
+      <div class="prop-section-title">Reference B</div>
+      <div class="prop-row">
+        <label>Component</label>
+        <span class="prop-value">{componentStore.getComponentById(mate.ref2.componentId)?.name ?? '?'}</span>
+      </div>
+      <div class="prop-row">
+        <label>Face</label>
+        <span class="prop-value">{mate.ref2.faceSelector}</span>
+      </div>
+    </div>
+
+    <!-- Parameters -->
+    {#if mate.type === 'distance'}
+      <div class="prop-section">
+        <div class="prop-section-title">Parameters</div>
+        <div class="prop-row">
+          <label>Distance</label>
+          <input type="number" value={mate.distance} step="1"
+            oninput={(e) => numInput(e, (v) => updateMateDistance(v))} />
+        </div>
+      </div>
+    {/if}
+
+    {#if mate.type === 'angle'}
+      <div class="prop-section">
+        <div class="prop-section-title">Parameters</div>
+        <div class="prop-row">
+          <label>Angle</label>
+          <input type="number" value={mate.angle} step="5"
+            oninput={(e) => numInput(e, (v) => updateMateAngle(v))} />
+        </div>
+      </div>
+    {/if}
+
+    {#if mate.type === 'coincident'}
+      <div class="prop-section">
+        <div class="prop-section-title">Options</div>
+        <div class="prop-row">
+          <label>Flipped</label>
+          <button class="toggle-btn" class:active={mate.flipped} onclick={toggleMateFlipped}>
+            {mate.flipped ? 'Yes' : 'No'}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Actions -->
+    <div class="prop-actions">
+      <button class="delete-btn" onclick={deleteMate}>
+        Delete Mate
+      </button>
+    </div>
+  </div>
+
 {:else}
   <div class="no-selection">
     <span class="no-selection-text">No object selected</span>
@@ -1968,6 +2096,11 @@
   .prop-type-badge.component-badge {
     color: #94e2d5;
     background: rgba(148, 226, 213, 0.12);
+  }
+
+  .prop-type-badge.mate-badge {
+    color: #f2cdcd;
+    background: rgba(242, 205, 205, 0.12);
   }
 
   .source-path {

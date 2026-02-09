@@ -1,6 +1,8 @@
 import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp, DatumPlane, Component } from '$lib/types/cad';
 import { getDatumStore } from '$lib/stores/datum.svelte';
 import { getComponentStore } from '$lib/stores/component.svelte';
+import { getMateStore } from '$lib/stores/mate.svelte';
+import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -601,6 +603,9 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
     lines.push('# Assemble all objects');
     lines.push('assy = cq.Assembly()');
 
+    // Build compId→varName map for mate references
+    const compVarNameMap = new Map<string, string>();
+
     // Add component sub-assemblies
     for (const comp of allComponents) {
       if (!comp.visible) continue;
@@ -608,6 +613,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
       if (!names || names.length === 0) continue;
 
       const compVarName = comp.name.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+      compVarNameMap.set(comp.id, comp.name);
       lines.push('');
       lines.push(`# Component: ${comp.name}`);
       lines.push(`${compVarName}_assy = cq.Assembly()`);
@@ -637,6 +643,41 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         lines.push(`assy.add(${name}, name="${name}")`);
       }
     }
+
+    // ── Assembly Mates ──
+    const ftStore = getFeatureTreeStore();
+    const suppressedIdSet = ftStore.suppressedIds;
+    const activeMates = getMateStore().mates.filter((m) => !suppressedIdSet.has(m.id));
+    if (activeMates.length > 0 && compVarNameMap.size > 0) {
+      lines.push('');
+      lines.push('# --- Assembly Mates ---');
+      for (const mate of activeMates) {
+        const c1 = compVarNameMap.get(mate.ref1.componentId);
+        const c2 = compVarNameMap.get(mate.ref2.componentId);
+        if (!c1 || !c2) continue;
+        const r1 = `"${c1}@faces@${mate.ref1.faceSelector}"`;
+        const r2 = `"${c2}@faces@${mate.ref2.faceSelector}"`;
+        switch (mate.type) {
+          case 'coincident':
+            lines.push(`assy.constrain(${r1}, ${r2}, "Plane")`);
+            break;
+          case 'concentric':
+            lines.push(`assy.constrain("${c1}", "${c2}", "Axis", param=0)`);
+            break;
+          case 'distance':
+            lines.push(`assy.constrain(${r1}, ${r2}, "Plane", param=${mate.distance})`);
+            break;
+          case 'angle':
+            lines.push(`assy.constrain(${r1}, ${r2}, "Plane", param=${mate.angle})`);
+            break;
+        }
+      }
+      lines.push('try:');
+      lines.push('    assy.solve()');
+      lines.push('except Exception:');
+      lines.push('    pass  # Fallback to manual positioning if solve fails');
+    }
+
     lines.push('result = assy.toCompound()');
   }
 

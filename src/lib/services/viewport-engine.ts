@@ -1808,6 +1808,33 @@ export class ViewportEngine {
     this.renderer.setSize(w, h);
   }
 
+  // ── Explosion offsets ──
+  private explosionOffsets: Map<string, THREE.Vector3> = new Map();
+
+  applyExplosion(offsets: Map<string, THREE.Vector3>): void {
+    // First, reverse any existing offsets
+    this.clearExplosion();
+
+    // Apply new offsets
+    for (const [objectId, offset] of offsets) {
+      const group = this.objectMeshes.get(objectId);
+      if (group) {
+        group.position.add(offset);
+        this.explosionOffsets.set(objectId, offset.clone());
+      }
+    }
+  }
+
+  clearExplosion(): void {
+    for (const [objectId, offset] of this.explosionOffsets) {
+      const group = this.objectMeshes.get(objectId);
+      if (group) {
+        group.position.sub(offset);
+      }
+    }
+    this.explosionOffsets.clear();
+  }
+
   /**
    * Dispose all resources.
    */

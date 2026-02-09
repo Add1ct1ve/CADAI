@@ -4,6 +4,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
+  import { getMateStore } from '$lib/stores/mate.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import type { FeatureItem, ComponentId } from '$lib/types/cad';
@@ -13,6 +14,7 @@
   const sketchStore = getSketchStore();
   const datumStore = getDatumStore();
   const componentStore = getComponentStore();
+  const mateStore = getMateStore();
   const history = getHistoryStore();
 
   let dragIndex = $state<number | null>(null);
@@ -46,6 +48,7 @@
     const ftSnap = featureTree.snapshot();
     const datumSnap = datumStore.snapshot();
     const compSnap = componentStore.snapshot();
+    const mateSnap = mateStore.snapshot();
     history.pushSnapshot({
       ...sceneSnap,
       sketches: sketchSnap.sketches,
@@ -58,6 +61,8 @@
       components: compSnap.components,
       componentNameCounter: compSnap.nameCounter,
       selectedComponentId: compSnap.selectedComponentId,
+      mates: mateSnap.mates,
+      selectedMateId: mateSnap.selectedMateId,
     });
   }
 
@@ -66,11 +71,21 @@
       scene.clearSelection();
       sketchStore.selectSketch(null);
       datumStore.selectDatum(null);
+      mateStore.selectMate(null);
       componentStore.selectComponent(item.id);
       return;
     }
-    // Clear component selection when selecting other items
+    if (item.kind === 'mate') {
+      scene.clearSelection();
+      sketchStore.selectSketch(null);
+      datumStore.selectDatum(null);
+      componentStore.selectComponent(null);
+      mateStore.selectMate(item.id);
+      return;
+    }
+    // Clear component and mate selection when selecting other items
     componentStore.selectComponent(null);
+    mateStore.selectMate(null);
     if (item.kind === 'primitive') {
       scene.select(item.id);
       sketchStore.selectSketch(null);
@@ -115,6 +130,8 @@
       datumStore.removeDatumPlane(item.id);
     } else if (item.kind === 'datum-axis') {
       datumStore.removeDatumAxis(item.id);
+    } else if (item.kind === 'mate') {
+      mateStore.removeMate(item.id);
     }
     triggerPipeline(100);
     runPythonExecution();
@@ -220,6 +237,7 @@
 
   function isSelected(item: FeatureItem): boolean {
     if (item.kind === 'component') return componentStore.selectedComponentId === item.id;
+    if (item.kind === 'mate') return mateStore.selectedMateId === item.id;
     if (item.kind === 'primitive') return scene.selectedIds.includes(item.id);
     if (item.kind === 'sketch') return sketchStore.selectedSketchId === item.id;
     return datumStore.selectedDatumId === item.id;
@@ -333,6 +351,9 @@
                 >
                   {item.suppressed ? '\u25C9' : '\u25CE'}
                 </button>
+              {/if}
+              {#if item.kind === 'mate'}
+                <!-- Mates show as "mate" kind with chain icon -->
               {/if}
               <button
                 class="action-btn delete-btn"
