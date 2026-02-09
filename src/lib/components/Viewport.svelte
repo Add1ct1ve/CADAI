@@ -4,6 +4,7 @@
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
+  import { getDatumStore } from '$lib/stores/datum.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
@@ -11,11 +12,13 @@
   import { handleConstraintSelection } from '$lib/services/constraint-interaction';
   import { handleSketchOp, handleTrim } from '$lib/services/sketch-operations';
   import type { PendingSketchOp, SketchOpAction } from '$lib/services/sketch-operations';
-  import { snapToSketchGrid } from '$lib/services/sketch-plane-utils';
+  import { snapToSketchGrid, computeDatumPlaneInfo } from '$lib/services/sketch-plane-utils';
+  import { isDatumPlane } from '$lib/types/cad';
+  import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import ViewControls from '$lib/components/ViewControls.svelte';
   import DimensionInput from '$lib/components/DimensionInput.svelte';
   import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint, SketchToolId } from '$lib/types/cad';
-  import type * as THREE from 'three';
+  import * as THREE from 'three';
   import { onMount } from 'svelte';
 
   let containerRef = $state<HTMLElement | null>(null);
@@ -24,6 +27,8 @@
   const scene = getSceneStore();
   const tools = getToolStore();
   const sketchStore = getSketchStore();
+  const datumStore = getDatumStore();
+  const featureTree = getFeatureTreeStore();
   const history = getHistoryStore();
 
   // Tracking for diff-based preview mesh sync
@@ -50,15 +55,19 @@
   let pendingSketchOp = $state<PendingSketchOp | null>(null);
   let constraintStatusMessage = $state('');
 
-  // ── Full snapshot helpers (scene + sketch) ──
+  // ── Full snapshot helpers (scene + sketch + datum) ──
   function captureFullSnapshot() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
+    const datumSnap = datumStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     };
   }
 
@@ -69,6 +78,13 @@
         sketches: snapshot.sketches,
         activeSketchId: snapshot.activeSketchId ?? null,
         selectedSketchId: snapshot.selectedSketchId ?? null,
+      });
+    }
+    if (snapshot.datumPlanes !== undefined || snapshot.datumAxes !== undefined) {
+      datumStore.restoreSnapshot({
+        datumPlanes: snapshot.datumPlanes ?? [],
+        datumAxes: snapshot.datumAxes ?? [],
+        selectedDatumId: snapshot.selectedDatumId ?? null,
       });
     }
   }
@@ -217,6 +233,7 @@
     if (viewportStore.pendingClear && engine) {
       engine.clearModel();
       engine.removeAllObjects();
+      engine.removeAllDatums();
       engine.exitSketchMode();
       prevObjectMap = new Map();
       viewportStore.setPendingClear(false);
@@ -429,6 +446,32 @@
   $effect(() => {
     if (!engine) return;
     engine.highlightInactiveSketch(sketchStore.selectedSketchId);
+  });
+
+  // ── Sync datum plane/axis visualizations ──
+  $effect(() => {
+    if (!engine) return;
+
+    // Access reactive properties to trigger re-runs
+    const planes = datumStore.datumPlanes;
+    const axes = datumStore.datumAxes;
+    const suppressedIds = featureTree.suppressedIds;
+
+    engine.removeAllDatums();
+
+    for (const dp of planes) {
+      if (!dp.visible || suppressedIds.has(dp.id)) continue;
+      const info = computeDatumPlaneInfo(dp);
+      engine.addDatumPlane(dp.id, info.origin, info.normal, info.u, info.v, dp.color);
+    }
+
+    for (const da of axes) {
+      if (!da.visible || suppressedIds.has(da.id)) continue;
+      // Convert CQ coords to Three.js: (x, y, z) -> (x, z, -y)
+      const origin = new THREE.Vector3(da.origin[0], da.origin[2], -da.origin[1]);
+      const direction = new THREE.Vector3(da.direction[0], da.direction[2], -da.direction[1]);
+      engine.addDatumAxis(da.id, origin, direction, da.color);
+    }
   });
 
   function handlePointerMove(e: PointerEvent) {

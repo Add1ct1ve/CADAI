@@ -1,4 +1,5 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp, DatumPlane } from '$lib/types/cad';
+import { getDatumStore } from '$lib/stores/datum.svelte';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -110,7 +111,7 @@ function revolveAxis(plane: SketchPlane, op: RevolveParams): string {
 function generatePathWire(varName: string, pathSketch: Sketch): string[] {
   const lines: string[] = [];
   lines.push(`${varName} = (`);
-  lines.push(`    cq.Workplane("${pathSketch.plane}")`);
+  lines.push(`    ${workplaneString(pathSketch.plane, pathSketch.origin)}`);
   for (const entity of pathSketch.entities) {
     lines.push(...generateSketchEntity(entity));
   }
@@ -147,6 +148,36 @@ function generateSketchEntity(entity: SketchEntity): string[] {
   return lines;
 }
 
+/**
+ * Generate CadQuery workplane string for a sketch plane (standard or datum).
+ */
+function workplaneString(plane: SketchPlane, origin: [number, number, number]): string {
+  // Standard planes at origin
+  if (plane === 'XY' || plane === 'XZ' || plane === 'YZ') {
+    return `cq.Workplane("${plane}")`;
+  }
+
+  // Datum plane reference
+  const datumPlane = getDatumStore().getDatumPlaneById(plane);
+  if (!datumPlane) return `cq.Workplane("XY")`;
+
+  if (datumPlane.definition.type === 'offset') {
+    return `cq.Workplane("${datumPlane.definition.basePlane}").workplane(offset=${fmt(datumPlane.definition.offset)})`;
+  }
+
+  // 3-point plane: compute normal from cross product
+  const { p1, p2, p3 } = datumPlane.definition;
+  const ab = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+  const ac = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
+  const nx = ab[1] * ac[2] - ab[2] * ac[1];
+  const ny = ab[2] * ac[0] - ab[0] * ac[2];
+  const nz = ab[0] * ac[1] - ab[1] * ac[0];
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  const normal = len > 1e-10 ? [nx / len, ny / len, nz / len] : [0, 0, 1];
+
+  return `cq.Workplane(cq.Plane(origin=(${fmt(p1[0])}, ${fmt(p1[1])}, ${fmt(p1[2])}), normal=(${fmt(normal[0])}, ${fmt(normal[1])}, ${fmt(normal[2])})))`;
+}
+
 function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
   const lines: string[] = [];
   const constraintCount = (sketch.constraints ?? []).length;
@@ -165,7 +196,7 @@ function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
   }
 
   lines.push(`${varName} = (`);
-  lines.push(`    cq.Workplane("${sketch.plane}")`);
+  lines.push(`    ${workplaneString(sketch.plane, sketch.origin)}`);
 
   for (const entity of sketch.entities) {
     lines.push(...generateSketchEntity(entity));

@@ -1,12 +1,15 @@
 <script lang="ts">
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
+  import { getDatumStore } from '$lib/stores/datum.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane, PatternOp, PatternType } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane, PatternOp, PatternType, DatumPlaneDefinition } from '$lib/types/cad';
+  import { isDatumPlane, isDatumAxis } from '$lib/types/cad';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
+  const datumStore = getDatumStore();
   const history = getHistoryStore();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -51,11 +54,15 @@
   function captureSnapshot() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
+    const datumSnap = datumStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     };
   }
 
@@ -656,6 +663,73 @@
     history.pushSnapshot(captureSnapshot());
     sketchStore.removeSketch(sketch.id);
     triggerAndRun();
+  }
+
+  // ── Datum properties ──
+
+  function updateDatumPlaneDefinition(partial: Partial<DatumPlaneDefinition>) {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumPlane(datum)) return;
+    captureOnce();
+    datumStore.updateDatumPlane(datum.id, {
+      definition: { ...datum.definition, ...partial } as DatumPlaneDefinition,
+    });
+    debounced(() => triggerPipeline(100));
+  }
+
+  function updateDatumPlaneColor(e: Event) {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumPlane(datum)) return;
+    datumStore.updateDatumPlane(datum.id, { color: (e.target as HTMLInputElement).value });
+  }
+
+  function toggleDatumPlaneVisible() {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumPlane(datum)) return;
+    datumStore.updateDatumPlane(datum.id, { visible: !datum.visible });
+  }
+
+  function deleteDatumPlane() {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumPlane(datum)) return;
+    history.pushSnapshot(captureSnapshot());
+    datumStore.removeDatumPlane(datum.id);
+    triggerPipeline(100);
+  }
+
+  function updateDatumAxis(key: string, value: any) {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumAxis(datum)) return;
+    captureOnce();
+    datumStore.updateDatumAxis(datum.id, { [key]: value });
+    debounced(() => triggerPipeline(100));
+  }
+
+  function updateDatumAxisColor(e: Event) {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumAxis(datum)) return;
+    datumStore.updateDatumAxis(datum.id, { color: (e.target as HTMLInputElement).value });
+  }
+
+  function toggleDatumAxisVisible() {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumAxis(datum)) return;
+    datumStore.updateDatumAxis(datum.id, { visible: !datum.visible });
+  }
+
+  function deleteDatumAxis() {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumAxis(datum)) return;
+    history.pushSnapshot(captureSnapshot());
+    datumStore.removeDatumAxis(datum.id);
+    triggerPipeline(100);
+  }
+
+  function sketchOnDatumPlane() {
+    const datum = datumStore.selectedDatum;
+    if (!datum || !isDatumPlane(datum)) return;
+    sketchStore.enterSketchMode(datum.id);
+    datumStore.selectDatum(null);
   }
 
   // Build list of possible cut targets (other operated add-mode sketches + visible primitives)
@@ -1468,6 +1542,145 @@
     </div>
   </div>
 
+{:else if datumStore.selectedDatum && isDatumPlane(datumStore.selectedDatum)}
+  {@const datum = datumStore.selectedDatum}
+  <div class="properties-panel">
+    <div class="prop-header">
+      <span class="prop-type-badge datum-badge">datum plane</span>
+      <span class="prop-name-text">{datum.name}</span>
+    </div>
+
+    <div class="prop-section">
+      <div class="prop-section-title">Definition</div>
+      {#if datum.definition.type === 'offset'}
+        <div class="prop-row">
+          <label>Base</label>
+          <select class="prop-select" value={datum.definition.basePlane}
+            onchange={(e) => updateDatumPlaneDefinition({ basePlane: (e.target as HTMLSelectElement).value as 'XY' | 'XZ' | 'YZ' })}>
+            <option value="XY">XY</option>
+            <option value="XZ">XZ</option>
+            <option value="YZ">YZ</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Offset</label>
+          <input type="number" value={datum.definition.offset} step="1"
+            oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ offset: v }))} />
+        </div>
+      {:else}
+        {#each [{ label: 'P1', val: datum.definition.p1, key: 'p1' },
+                 { label: 'P2', val: datum.definition.p2, key: 'p2' },
+                 { label: 'P3', val: datum.definition.p3, key: 'p3' }] as pt}
+          <div class="prop-row">
+            <label>{pt.label} X</label>
+            <input type="number" value={pt.val[0]} step="1"
+              oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [v, pt.val[1], pt.val[2]] }))} />
+          </div>
+          <div class="prop-row">
+            <label>{pt.label} Y</label>
+            <input type="number" value={pt.val[1]} step="1"
+              oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [pt.val[0], v, pt.val[2]] }))} />
+          </div>
+          <div class="prop-row">
+            <label>{pt.label} Z</label>
+            <input type="number" value={pt.val[2]} step="1"
+              oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [pt.val[0], pt.val[1], v] }))} />
+          </div>
+        {/each}
+      {/if}
+    </div>
+
+    <div class="prop-section">
+      <div class="prop-section-title">Appearance</div>
+      <div class="prop-row">
+        <label>Color</label>
+        <input type="color" value={datum.color} oninput={updateDatumPlaneColor} class="color-picker" />
+      </div>
+      <div class="prop-row">
+        <label>Visible</label>
+        <button class="toggle-btn" class:active={datum.visible} onclick={toggleDatumPlaneVisible}>
+          {datum.visible ? 'Yes' : 'No'}
+        </button>
+      </div>
+    </div>
+
+    <div class="prop-actions">
+      <button class="apply-btn full-width" onclick={sketchOnDatumPlane}>
+        Sketch on this Plane
+      </button>
+      <button class="delete-btn" onclick={deleteDatumPlane}>
+        Delete
+      </button>
+    </div>
+  </div>
+
+{:else if datumStore.selectedDatum && isDatumAxis(datumStore.selectedDatum)}
+  {@const datum = datumStore.selectedDatum}
+  <div class="properties-panel">
+    <div class="prop-header">
+      <span class="prop-type-badge datum-badge">datum axis</span>
+      <span class="prop-name-text">{datum.name}</span>
+    </div>
+
+    <div class="prop-section">
+      <div class="prop-section-title">Origin</div>
+      <div class="prop-row">
+        <label>X</label>
+        <input type="number" value={datum.origin[0]} step="1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [v, datum.origin[1], datum.origin[2]]))} />
+      </div>
+      <div class="prop-row">
+        <label>Y</label>
+        <input type="number" value={datum.origin[1]} step="1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [datum.origin[0], v, datum.origin[2]]))} />
+      </div>
+      <div class="prop-row">
+        <label>Z</label>
+        <input type="number" value={datum.origin[2]} step="1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [datum.origin[0], datum.origin[1], v]))} />
+      </div>
+    </div>
+
+    <div class="prop-section">
+      <div class="prop-section-title">Direction</div>
+      <div class="prop-row">
+        <label>X</label>
+        <input type="number" value={datum.direction[0]} step="0.1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [v, datum.direction[1], datum.direction[2]]))} />
+      </div>
+      <div class="prop-row">
+        <label>Y</label>
+        <input type="number" value={datum.direction[1]} step="0.1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [datum.direction[0], v, datum.direction[2]]))} />
+      </div>
+      <div class="prop-row">
+        <label>Z</label>
+        <input type="number" value={datum.direction[2]} step="0.1"
+          oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [datum.direction[0], datum.direction[1], v]))} />
+      </div>
+    </div>
+
+    <div class="prop-section">
+      <div class="prop-section-title">Appearance</div>
+      <div class="prop-row">
+        <label>Color</label>
+        <input type="color" value={datum.color} oninput={updateDatumAxisColor} class="color-picker" />
+      </div>
+      <div class="prop-row">
+        <label>Visible</label>
+        <button class="toggle-btn" class:active={datum.visible} onclick={toggleDatumAxisVisible}>
+          {datum.visible ? 'Yes' : 'No'}
+        </button>
+      </div>
+    </div>
+
+    <div class="prop-actions">
+      <button class="delete-btn" onclick={deleteDatumAxis}>
+        Delete
+      </button>
+    </div>
+  </div>
+
 {:else}
   <div class="no-selection">
     <span class="no-selection-text">No object selected</span>
@@ -1506,6 +1719,11 @@
   .prop-type-badge.sketch-badge {
     color: #f9e2af;
     background: rgba(249, 226, 175, 0.12);
+  }
+
+  .prop-type-badge.datum-badge {
+    color: #f5c2e7;
+    background: rgba(245, 194, 231, 0.12);
   }
 
   .prop-name-input {

@@ -17,9 +17,10 @@ import {
 import { getHistoryStore } from '$lib/stores/history.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
+import { getDatumStore } from '$lib/stores/datum.svelte';
 import { clearDraft } from '$lib/services/autosave';
 import type { RustChatMessage, ChatMessage } from '$lib/types';
-import type { SceneObject, CodeMode, CameraState, Sketch } from '$lib/types/cad';
+import type { SceneObject, CodeMode, CameraState, Sketch, DatumPlane, DatumAxis } from '$lib/types/cad';
 import type { FeatureTreeSnapshot } from '$lib/stores/feature-tree.svelte';
 
 /**
@@ -49,6 +50,7 @@ export async function projectNew(): Promise<string> {
   chatStore.clear();
   scene.clearAll();
   sketchStore.clearAll();
+  getDatumStore().clearAll();
   getFeatureTreeStore().clearAll();
   scene.setCodeMode('parametric');
   getHistoryStore().clear();
@@ -86,7 +88,7 @@ export async function projectOpen(): Promise<string> {
   const sketchStore = getSketchStore();
   const ftStore = getFeatureTreeStore();
   if (file.scene) {
-    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot };
+    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot; datumPlanes?: DatumPlane[]; datumAxes?: DatumAxis[] };
     scene.restore({ objects: sceneData.objects, codeMode: sceneData.codeMode });
     // Restore sketches if present
     if (sceneData.sketches) {
@@ -101,6 +103,12 @@ export async function projectOpen(): Promise<string> {
       ftStore.clearAll();
       ftStore.syncFromStores();
     }
+    // Restore datum geometry if present
+    if (sceneData.datumPlanes || sceneData.datumAxes) {
+      getDatumStore().restore({ datumPlanes: sceneData.datumPlanes ?? [], datumAxes: sceneData.datumAxes ?? [] });
+    } else {
+      getDatumStore().clearAll();
+    }
     // Clear viewport first so meshes get rebuilt from restored objects
     viewportStore.setPendingClear(true);
     // Restore camera after a tick to allow viewport to process
@@ -111,6 +119,7 @@ export async function projectOpen(): Promise<string> {
     // V1 file: just clear scene, keep manual mode
     scene.clearAll();
     sketchStore.clearAll();
+    getDatumStore().clearAll();
     ftStore.clearAll();
     scene.setCodeMode('manual');
     viewportStore.setPendingClear(true);
@@ -139,9 +148,10 @@ export async function projectSave(): Promise<string> {
   const sceneData = scene.serialize();
   const sketchData = getSketchStore().serialize();
   const ftData = getFeatureTreeStore().serialize();
+  const datumData = getDatumStore().serialize();
   const camera = viewportStore.getCameraState();
   const scenePayload = camera
-    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData }
+    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData, datumPlanes: datumData.datumPlanes, datumAxes: datumData.datumAxes }
     : undefined;
 
   await saveProject(project.name, project.code, rustMessages, path, scenePayload);

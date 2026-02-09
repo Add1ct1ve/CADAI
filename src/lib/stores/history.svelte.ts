@@ -1,4 +1,4 @@
-import type { SceneObject, ObjectId, Sketch, SketchId } from '$lib/types/cad';
+import type { SceneObject, ObjectId, Sketch, SketchId, DatumPlane, DatumAxis, DatumId } from '$lib/types/cad';
 
 export interface SceneSnapshot {
   objects: SceneObject[];
@@ -11,6 +11,9 @@ export interface SceneSnapshot {
     suppressedIds: string[];
     rollbackIndex: number | null;
   };
+  datumPlanes?: DatumPlane[];
+  datumAxes?: DatumAxis[];
+  selectedDatumId?: DatumId | null;
 }
 
 const MAX_HISTORY = 50;
