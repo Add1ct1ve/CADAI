@@ -3,7 +3,7 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
-  import type { PrimitiveParams, EdgeSelector, ExtrudeParams, FilletParams, ChamferParams } from '$lib/types/cad';
+  import type { PrimitiveParams, EdgeSelector, ExtrudeParams, FilletParams, ChamferParams, SketchConstraint } from '$lib/types/cad';
 
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
@@ -297,6 +297,26 @@
     captureOnce();
     sketchStore.setSketchChamfer(sketch.id, undefined);
     triggerAndRun();
+  }
+
+  function removeConstraint(constraintId: string) {
+    captureOnce();
+    sketchStore.removeConstraint(constraintId);
+    triggerPipeline(100);
+  }
+
+  function constraintLabel(c: SketchConstraint): string {
+    switch (c.type) {
+      case 'coincident': return 'Coincident';
+      case 'horizontal': return 'Horizontal';
+      case 'vertical': return 'Vertical';
+      case 'parallel': return 'Parallel';
+      case 'perpendicular': return 'Perpendicular';
+      case 'equal': return 'Equal';
+      case 'distance': return `Distance: ${c.value}`;
+      case 'radius': return `Radius: ${c.value}`;
+      case 'angle': return `Angle: ${c.value}\u00B0`;
+    }
   }
 
   function editSketch() {
@@ -651,6 +671,20 @@
       </div>
     {/if}
 
+    <!-- Constraints -->
+    {#if (sketch.constraints ?? []).length > 0}
+      <div class="prop-section">
+        <div class="prop-section-title">Constraints ({(sketch.constraints ?? []).length})</div>
+        {#each (sketch.constraints ?? []) as constraint}
+          <div class="prop-row constraint-row">
+            <span class="constraint-label">{constraintLabel(constraint)}</span>
+            <button class="constraint-remove-btn" onclick={() => removeConstraint(constraint.id)}
+              title="Remove constraint">&times;</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     <!-- Actions -->
     <div class="prop-actions">
       <button class="apply-btn full-width" onclick={editSketch}>
@@ -904,5 +938,32 @@
   .no-selection-hint {
     font-size: 11px;
     color: var(--text-muted);
+  }
+
+  .constraint-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 0;
+  }
+
+  .constraint-label {
+    font-size: 11px;
+    color: #cba6f7;
+  }
+
+  .constraint-remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.12s ease;
+  }
+
+  .constraint-remove-btn:hover {
+    color: var(--error);
   }
 </style>

@@ -91,7 +91,9 @@ function generateSketchEntity(entity: SketchEntity): string[] {
 
 function generateSketchBase(sketch: Sketch): string[] {
   const lines: string[] = [];
-  lines.push(`# --- ${sketch.name} (${sketch.plane} plane) ---`);
+  const constraintCount = (sketch.constraints ?? []).length;
+  const constraintInfo = constraintCount > 0 ? ` [${constraintCount} constraint${constraintCount !== 1 ? 's' : ''}]` : '';
+  lines.push(`# --- ${sketch.name} (${sketch.plane} plane) ---${constraintInfo}`);
 
   const varName = sketch.extrude?.mode === 'cut' ? `${sketch.name}_cutter` : sketch.name;
 
