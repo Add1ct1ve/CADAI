@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep } from '$lib/services/project-actions';
+  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep, projectInsertComponent } from '$lib/services/project-actions';
+  import { getComponentStore } from '$lib/stores/component.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
@@ -23,6 +24,7 @@
   const history = getHistoryStore();
   const featureTree = getFeatureTreeStore();
   const datumStore = getDatumStore();
+  const componentStore = getComponentStore();
   const settingsStore = getSettingsStore();
 
   let isBusy = $state(false);
@@ -204,6 +206,7 @@
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
     const datumSnap = datumStore.snapshot();
+    const compSnap = componentStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
@@ -213,6 +216,9 @@
       datumPlanes: datumSnap.datumPlanes,
       datumAxes: datumSnap.datumAxes,
       selectedDatumId: datumSnap.selectedDatumId,
+      components: compSnap.components,
+      componentNameCounter: compSnap.nameCounter,
+      selectedComponentId: compSnap.selectedComponentId,
     };
   }
 
@@ -308,6 +314,56 @@
     datumStore.addDatumAxis([...datumAxisOrigin], [...datumAxisDir]);
     datumPopup = null;
     triggerPipeline(100);
+  }
+
+  // ── Component / Assembly ──
+
+  let canCreateComponent = $derived(
+    scene.codeMode === 'parametric' &&
+    !sketchStore.isInSketchMode &&
+    (scene.selectedIds.length > 0 || sketchStore.selectedSketchId !== null || datumStore.selectedDatumId !== null) &&
+    // Check none of the selected features are already in a component
+    (() => {
+      const selectedFeatureIds: string[] = [
+        ...scene.selectedIds,
+        ...(sketchStore.selectedSketchId ? [sketchStore.selectedSketchId] : []),
+        ...(datumStore.selectedDatumId ? [datumStore.selectedDatumId] : []),
+      ];
+      return selectedFeatureIds.every((id) => !componentStore.getComponentForFeature(id));
+    })()
+  );
+
+  function handleCreateComponent() {
+    if (!canCreateComponent) return;
+    const featureIds: string[] = [
+      ...scene.selectedIds,
+      ...(sketchStore.selectedSketchId ? [sketchStore.selectedSketchId] : []),
+      ...(datumStore.selectedDatumId ? [datumStore.selectedDatumId] : []),
+    ];
+    if (featureIds.length === 0) return;
+    history.pushSnapshot(captureSnapshot());
+    const comp = componentStore.createComponent(featureIds);
+    featureTree.registerComponent(comp.id);
+    scene.clearSelection();
+    sketchStore.selectSketch(null);
+    datumStore.selectDatum(null);
+    componentStore.selectComponent(comp.id);
+    triggerPipeline(100);
+  }
+
+  async function handleInsertComponent() {
+    try {
+      isBusy = true;
+      showStatus('Inserting component...');
+      const result = await projectInsertComponent();
+      if (result) showStatus(result);
+      triggerPipeline(100);
+      runPythonExecution();
+    } catch (err) {
+      showStatus(`Insert failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
   }
 
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
@@ -599,6 +655,18 @@
         onclick={() => { datumPopup = datumPopup === 'axis' ? null : 'axis'; }}
         title="Datum Axis"
         disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>Datum Axis</button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Assembly / Components -->
+      <button class="toolbar-btn component-btn"
+        onclick={handleCreateComponent}
+        title="Group selected features into Component"
+        disabled={!canCreateComponent}>Group</button>
+      <button class="toolbar-btn component-btn"
+        onclick={handleInsertComponent}
+        title="Insert Component from .cadai file"
+        disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode || isBusy}>Insert</button>
 
       <div class="toolbar-separator"></div>
 
@@ -930,6 +998,17 @@
     border-color: #94e2d5;
     color: #94e2d5;
     font-weight: 600;
+  }
+
+  .component-btn {
+    font-size: 11px;
+    color: #89dceb;
+    border: 1px solid rgba(137, 220, 235, 0.3);
+  }
+
+  .component-btn:hover:not(:disabled) {
+    background: rgba(137, 220, 235, 0.1);
+    border-color: #89dceb;
   }
 
   .datum-btn {

@@ -18,9 +18,10 @@ import { getHistoryStore } from '$lib/stores/history.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import { getDatumStore } from '$lib/stores/datum.svelte';
+import { getComponentStore } from '$lib/stores/component.svelte';
 import { clearDraft } from '$lib/services/autosave';
 import type { RustChatMessage, ChatMessage } from '$lib/types';
-import type { SceneObject, CodeMode, CameraState, Sketch, DatumPlane, DatumAxis, DisplayMode } from '$lib/types/cad';
+import type { SceneObject, CodeMode, CameraState, Sketch, DatumPlane, DatumAxis, DisplayMode, Component, SketchEntity, SketchConstraint } from '$lib/types/cad';
 import type { FeatureTreeSnapshot } from '$lib/stores/feature-tree.svelte';
 
 /**
@@ -51,6 +52,7 @@ export async function projectNew(): Promise<string> {
   scene.clearAll();
   sketchStore.clearAll();
   getDatumStore().clearAll();
+  getComponentStore().clearAll();
   getFeatureTreeStore().clearAll();
   scene.setCodeMode('parametric');
   getHistoryStore().clear();
@@ -89,7 +91,7 @@ export async function projectOpen(): Promise<string> {
   const sketchStore = getSketchStore();
   const ftStore = getFeatureTreeStore();
   if (file.scene) {
-    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot; datumPlanes?: DatumPlane[]; datumAxes?: DatumAxis[]; displayMode?: DisplayMode };
+    const sceneData = file.scene as { objects: SceneObject[]; codeMode: CodeMode; camera: CameraState; sketches?: Sketch[]; featureTree?: FeatureTreeSnapshot; datumPlanes?: DatumPlane[]; datumAxes?: DatumAxis[]; displayMode?: DisplayMode; components?: Component[]; componentNameCounter?: number };
     scene.restore({ objects: sceneData.objects, codeMode: sceneData.codeMode });
     // Restore sketches if present
     if (sceneData.sketches) {
@@ -110,6 +112,12 @@ export async function projectOpen(): Promise<string> {
     } else {
       getDatumStore().clearAll();
     }
+    // Restore components if present
+    if (sceneData.components) {
+      getComponentStore().restore({ components: sceneData.components, nameCounter: sceneData.componentNameCounter });
+    } else {
+      getComponentStore().clearAll();
+    }
     // Clear viewport first so meshes get rebuilt from restored objects
     viewportStore.setPendingClear(true);
     // Restore camera after a tick to allow viewport to process
@@ -125,6 +133,7 @@ export async function projectOpen(): Promise<string> {
     scene.clearAll();
     sketchStore.clearAll();
     getDatumStore().clearAll();
+    getComponentStore().clearAll();
     ftStore.clearAll();
     scene.setCodeMode('manual');
     viewportStore.setPendingClear(true);
@@ -154,9 +163,10 @@ export async function projectSave(): Promise<string> {
   const sketchData = getSketchStore().serialize();
   const ftData = getFeatureTreeStore().serialize();
   const datumData = getDatumStore().serialize();
+  const compData = getComponentStore().serialize();
   const camera = viewportStore.getCameraState();
   const scenePayload = camera
-    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData, datumPlanes: datumData.datumPlanes, datumAxes: datumData.datumAxes, displayMode: viewportStore.displayMode }
+    ? { objects: sceneData.objects, codeMode: sceneData.codeMode, camera, sketches: sketchData.sketches, featureTree: ftData, datumPlanes: datumData.datumPlanes, datumAxes: datumData.datumAxes, displayMode: viewportStore.displayMode, components: compData.components, componentNameCounter: compData.nameCounter }
     : undefined;
 
   await saveProject(project.name, project.code, rustMessages, path, scenePayload);
@@ -164,6 +174,152 @@ export async function projectSave(): Promise<string> {
   project.setModified(false);
   clearDraft().catch(() => {}); // Best-effort draft cleanup
   return 'Project saved';
+}
+
+// ─── Insert Component from .cadai file ─────────
+
+function reIdImportData(
+  objects: SceneObject[],
+  sketches: Sketch[],
+  datumPlanes: DatumPlane[],
+  datumAxes: DatumAxis[],
+) {
+  const prefix = Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + '_';
+  const idMap = new Map<string, string>();
+
+  // Build ID map for all entities
+  for (const obj of objects) idMap.set(obj.id, prefix + obj.id);
+  for (const sk of sketches) {
+    idMap.set(sk.id, prefix + sk.id);
+    for (const e of sk.entities) idMap.set(e.id, prefix + e.id);
+    for (const c of (sk.constraints ?? [])) idMap.set(c.id, prefix + c.id);
+  }
+  for (const dp of datumPlanes) idMap.set(dp.id, prefix + dp.id);
+  for (const da of datumAxes) idMap.set(da.id, prefix + da.id);
+
+  const remap = (id: string) => idMap.get(id) ?? id;
+
+  // Remap objects
+  const newObjects: SceneObject[] = objects.map((obj) => ({
+    ...structuredClone(obj),
+    id: remap(obj.id),
+    booleanOp: obj.booleanOp
+      ? { ...obj.booleanOp, targetId: remap(obj.booleanOp.targetId) }
+      : undefined,
+  }));
+
+  // Remap sketches
+  const newSketches: Sketch[] = sketches.map((sk) => {
+    const newSk = structuredClone(sk);
+    newSk.id = remap(sk.id);
+    newSk.entities = newSk.entities.map((e: SketchEntity) => ({ ...e, id: remap(e.id) }));
+    newSk.constraints = (newSk.constraints ?? []).map((c: SketchConstraint) => {
+      const nc = { ...c, id: remap(c.id) } as any;
+      // Remap entity references in constraints
+      if ('entityId' in nc) nc.entityId = remap(nc.entityId);
+      if ('entityId1' in nc) nc.entityId1 = remap(nc.entityId1);
+      if ('entityId2' in nc) nc.entityId2 = remap(nc.entityId2);
+      if ('point1' in nc && nc.point1?.entityId) nc.point1 = { ...nc.point1, entityId: remap(nc.point1.entityId) };
+      if ('point2' in nc && nc.point2?.entityId) nc.point2 = { ...nc.point2, entityId: remap(nc.point2.entityId) };
+      return nc as SketchConstraint;
+    });
+    // Remap operation references
+    if (newSk.operation) {
+      if ('cutTargetId' in newSk.operation && newSk.operation.cutTargetId) {
+        (newSk.operation as any).cutTargetId = remap(newSk.operation.cutTargetId!);
+      }
+      if ('pathSketchId' in newSk.operation && (newSk.operation as any).pathSketchId) {
+        (newSk.operation as any).pathSketchId = remap((newSk.operation as any).pathSketchId);
+      }
+    }
+    return newSk;
+  });
+
+  // Remap datums
+  const newDatumPlanes: DatumPlane[] = datumPlanes.map((dp) => ({
+    ...structuredClone(dp),
+    id: remap(dp.id),
+  }));
+
+  const newDatumAxes: DatumAxis[] = datumAxes.map((da) => ({
+    ...structuredClone(da),
+    id: remap(da.id),
+  }));
+
+  const featureIds = [
+    ...newObjects.map((o) => o.id),
+    ...newSketches.map((s) => s.id),
+    ...newDatumPlanes.map((d) => d.id),
+    ...newDatumAxes.map((d) => d.id),
+  ];
+
+  return { objects: newObjects, sketches: newSketches, datumPlanes: newDatumPlanes, datumAxes: newDatumAxes, featureIds };
+}
+
+export async function projectInsertComponent(): Promise<string> {
+  const scene = getSceneStore();
+  const sketchStore = getSketchStore();
+  const datumStore = getDatumStore();
+  const componentStore = getComponentStore();
+  const featureTree = getFeatureTreeStore();
+  const history = getHistoryStore();
+
+  const path = await showOpenDialog('cadai');
+  if (!path) return '';
+
+  const file = await loadProject(path);
+  if (!file.scene) return 'File has no scene data';
+
+  const sceneData = file.scene as {
+    objects?: SceneObject[];
+    sketches?: Sketch[];
+    datumPlanes?: DatumPlane[];
+    datumAxes?: DatumAxis[];
+  };
+
+  // Re-ID everything to avoid collisions
+  const { objects, sketches, datumPlanes, datumAxes, featureIds } = reIdImportData(
+    sceneData.objects ?? [],
+    sceneData.sketches ?? [],
+    sceneData.datumPlanes ?? [],
+    sceneData.datumAxes ?? [],
+  );
+
+  if (featureIds.length === 0) return 'File has no features to import';
+
+  // Push undo snapshot
+  const sceneSnap = scene.snapshot();
+  const sketchSnap = sketchStore.snapshot();
+  const ftSnap = featureTree.snapshot();
+  const datumSnap = datumStore.snapshot();
+  const compSnap = componentStore.snapshot();
+  history.pushSnapshot({
+    ...sceneSnap,
+    sketches: sketchSnap.sketches,
+    activeSketchId: sketchSnap.activeSketchId,
+    selectedSketchId: sketchSnap.selectedSketchId,
+    featureTree: ftSnap,
+    datumPlanes: datumSnap.datumPlanes,
+    datumAxes: datumSnap.datumAxes,
+    selectedDatumId: datumSnap.selectedDatumId,
+    components: compSnap.components,
+    componentNameCounter: compSnap.nameCounter,
+    selectedComponentId: compSnap.selectedComponentId,
+  });
+
+  // Add all entities to their respective stores
+  if (objects.length > 0) scene.addObjects(objects);
+  if (sketches.length > 0) sketchStore.addSketches(sketches);
+  if (datumPlanes.length > 0 || datumAxes.length > 0) datumStore.addDatums(datumPlanes, datumAxes);
+
+  // Create component with featureIds
+  const fileName = path.split(/[\\/]/).pop()?.replace('.cadai', '') ?? 'Imported';
+  const comp = componentStore.createComponent(featureIds, fileName);
+  comp.sourceFile = path;
+  componentStore.updateComponent(comp.id, { sourceFile: path });
+  featureTree.registerComponent(comp.id);
+
+  return `Inserted component: ${comp.name} (${featureIds.length} features)`;
 }
 
 export async function projectExportStl(): Promise<string> {

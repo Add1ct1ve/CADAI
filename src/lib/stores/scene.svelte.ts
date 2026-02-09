@@ -76,6 +76,15 @@ export function getSceneStore() {
       return obj;
     },
 
+    /** Bulk insert pre-built objects (for component import — does not auto-name) */
+    addObjects(objs: SceneObject[]) {
+      objects = [...objects, ...objs];
+      const ft = getFeatureTreeStore();
+      for (const obj of objs) {
+        ft.registerFeature(obj.id);
+      }
+    },
+
     removeObject(id: ObjectId) {
       // Orphan any boolean tools that reference this target
       objects = objects.map((o) =>

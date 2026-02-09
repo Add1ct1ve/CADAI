@@ -1,8 +1,9 @@
-import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation, SceneObject, DatumPlane, DatumAxis } from '$lib/types/cad';
+import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation, SceneObject, DatumPlane, DatumAxis, Component } from '$lib/types/cad';
 import { isDatumPlane, isDatumAxis } from '$lib/types/cad';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getDatumStore } from '$lib/stores/datum.svelte';
+import { getComponentStore } from '$lib/stores/component.svelte';
 import { getSettingsStore } from '$lib/stores/settings.svelte';
 import { unitSuffix } from '$lib/services/units';
 
@@ -110,6 +111,51 @@ function datumAxisDetail(datum: DatumAxis): string {
   return `Axis [${dx},${dy},${dz}] at (${ox},${oy},${oz})`;
 }
 
+/** Build a single FeatureItem from a feature ID (shared by root and component children) */
+function buildFeatureItem(
+  id: string,
+  scene: ReturnType<typeof getSceneStore>,
+  sketchStore: ReturnType<typeof getSketchStore>,
+): FeatureItem | null {
+  const obj = scene.getObjectById(id);
+  if (obj) {
+    return {
+      id: obj.id,
+      kind: 'primitive' as FeatureKind,
+      name: obj.name,
+      icon: primitiveIcon(obj),
+      suppressed: suppressedIds.has(obj.id),
+      detail: primitiveDetail(obj),
+      depth: 0,
+    };
+  }
+  const sketch = sketchStore.getSketchById(id);
+  if (sketch) {
+    return {
+      id: sketch.id,
+      kind: 'sketch' as FeatureKind,
+      name: sketch.name,
+      icon: sketchIcon(sketch.operation),
+      suppressed: suppressedIds.has(sketch.id),
+      detail: sketchDetail(sketch),
+      depth: 0,
+    };
+  }
+  const datum = getDatumStore().getDatumById(id);
+  if (datum) {
+    return {
+      id: datum.id,
+      kind: isDatumPlane(datum) ? 'datum-plane' : 'datum-axis',
+      name: datum.name,
+      icon: isDatumPlane(datum) ? '\u25C7' : '\u2195',
+      suppressed: suppressedIds.has(datum.id),
+      detail: isDatumPlane(datum) ? datumPlaneDetail(datum) : datumAxisDetail(datum as DatumAxis),
+      depth: 0,
+    };
+  }
+  return null;
+}
+
 // ─── Serialization types ────────────────────────
 export interface FeatureTreeSnapshot {
   featureOrder: string[];
@@ -130,47 +176,63 @@ export function getFeatureTreeStore() {
       return rollbackIndex;
     },
 
-    /** Build display items from scene/sketch stores + ordering */
+    /** Build display items from scene/sketch/component stores + ordering */
     get features(): FeatureItem[] {
       const scene = getSceneStore();
       const sketchStore = getSketchStore();
+      const componentStore = getComponentStore();
       const items: FeatureItem[] = [];
 
+      // Build set of IDs belonging to any component
+      const componentFeatureIds = new Set<string>();
+      for (const comp of componentStore.components) {
+        for (const fid of comp.featureIds) {
+          componentFeatureIds.add(fid);
+        }
+      }
+
       for (const id of featureOrder) {
-        const obj = scene.getObjectById(id);
-        if (obj) {
+        // Check if this is a component ID
+        const comp = componentStore.getComponentById(id);
+        if (comp) {
+          const count = comp.featureIds.length;
+          let detail = `${count} feature${count !== 1 ? 's' : ''}`;
+          if (comp.grounded) detail += ' [grounded]';
+          if (!comp.visible) detail += ' [hidden]';
+          if (comp.sourceFile) detail += ' [imported]';
+
           items.push({
-            id: obj.id,
-            kind: 'primitive' as FeatureKind,
-            name: obj.name,
-            icon: primitiveIcon(obj),
-            suppressed: suppressedIds.has(obj.id),
-            detail: primitiveDetail(obj),
+            id: comp.id,
+            kind: 'component' as FeatureKind,
+            name: comp.name,
+            icon: '\u229E', // ⊞ squared plus
+            suppressed: suppressedIds.has(comp.id),
+            detail,
+            depth: 0,
+            color: comp.color,
           });
+
+          // Append child features
+          for (const fid of comp.featureIds) {
+            const childItem = buildFeatureItem(fid, scene, sketchStore);
+            if (childItem) {
+              items.push({
+                ...childItem,
+                componentId: comp.id,
+                depth: 1,
+              });
+            }
+          }
           continue;
         }
-        const sketch = sketchStore.getSketchById(id);
-        if (sketch) {
-          items.push({
-            id: sketch.id,
-            kind: 'sketch' as FeatureKind,
-            name: sketch.name,
-            icon: sketchIcon(sketch.operation),
-            suppressed: suppressedIds.has(sketch.id),
-            detail: sketchDetail(sketch),
-          });
-          continue;
-        }
-        const datum = getDatumStore().getDatumById(id);
-        if (datum) {
-          items.push({
-            id: datum.id,
-            kind: isDatumPlane(datum) ? 'datum-plane' : 'datum-axis',
-            name: datum.name,
-            icon: isDatumPlane(datum) ? '\u25C7' : '\u2195', // ◇ or ↕
-            suppressed: suppressedIds.has(datum.id),
-            detail: isDatumPlane(datum) ? datumPlaneDetail(datum) : datumAxisDetail(datum as DatumAxis),
-          });
+
+        // Skip features that belong to a component (rendered as children above)
+        if (componentFeatureIds.has(id)) continue;
+
+        // Root-level feature
+        const item = buildFeatureItem(id, scene, sketchStore);
+        if (item) {
+          items.push(item);
         }
       }
 
@@ -201,6 +263,21 @@ export function getFeatureTreeStore() {
     registerFeature(id: string) {
       if (!featureOrder.includes(id)) {
         featureOrder = [...featureOrder, id];
+      }
+    },
+
+    registerComponent(id: string) {
+      if (!featureOrder.includes(id)) {
+        featureOrder = [...featureOrder, id];
+      }
+    },
+
+    unregisterComponent(id: string) {
+      featureOrder = featureOrder.filter((fid) => fid !== id);
+      if (suppressedIds.has(id)) {
+        const next = new Set(suppressedIds);
+        next.delete(id);
+        suppressedIds = next;
       }
     },
 
@@ -247,12 +324,15 @@ export function getFeatureTreeStore() {
       const scene = getSceneStore();
       const sketchStore = getSketchStore();
       const datumStore = getDatumStore();
+      const componentStore = getComponentStore();
 
       const validIds = new Set<string>();
       for (const obj of scene.objects) validIds.add(obj.id);
       for (const sk of sketchStore.sketches) validIds.add(sk.id);
       for (const dp of datumStore.datumPlanes) validIds.add(dp.id);
       for (const da of datumStore.datumAxes) validIds.add(da.id);
+      // Component IDs are also valid in featureOrder
+      for (const comp of componentStore.components) validIds.add(comp.id);
 
       // Remove orphans from order
       const filtered = featureOrder.filter((id) => validIds.has(id));
@@ -271,6 +351,10 @@ export function getFeatureTreeStore() {
       }
       for (const da of datumStore.datumAxes) {
         if (!ordered.has(da.id)) missing.push(da.id);
+      }
+      // Add missing component IDs
+      for (const comp of componentStore.components) {
+        if (!ordered.has(comp.id)) missing.push(comp.id);
       }
 
       featureOrder = [...filtered, ...missing];

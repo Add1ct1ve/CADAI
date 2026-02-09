@@ -176,6 +176,15 @@ export function getSketchStore() {
       previewPoint = null;
     },
 
+    /** Bulk insert pre-built sketches (for component import — does not auto-name) */
+    addSketches(newSketches: Sketch[]) {
+      sketches = [...sketches, ...newSketches];
+      const ft = getFeatureTreeStore();
+      for (const sk of newSketches) {
+        ft.registerFeature(sk.id);
+      }
+    },
+
     enterSketchMode(plane: SketchPlane) {
       const id = nanoid(10);
       sketchNameCounter++;
