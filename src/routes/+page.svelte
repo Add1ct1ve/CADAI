@@ -5,6 +5,7 @@
   import Chat from '$lib/components/Chat.svelte';
   import FeatureTree from '$lib/components/FeatureTree.svelte';
   import Viewport from '$lib/components/Viewport.svelte';
+  import DrawingViewer from '$lib/components/DrawingViewer.svelte';
   import RightPanel from '$lib/components/RightPanel.svelte';
   import Settings from '$lib/components/Settings.svelte';
   import ShortcutsPanel from '$lib/components/ShortcutsPanel.svelte';
@@ -23,6 +24,7 @@
   import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
   import { getMateStore } from '$lib/stores/mate.svelte';
+  import { getDrawingStore } from '$lib/stores/drawing.svelte';
   import type { ToolId, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
   import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
@@ -38,6 +40,7 @@
   const datumStore = getDatumStore();
   const componentStore = getComponentStore();
   const mateStore = getMateStore();
+  const drawingStore = getDrawingStore();
 
   let settingsOpen = $state(false);
   let shortcutsOpen = $state(false);
@@ -208,6 +211,33 @@
       if (key === 'M') { e.preventDefault(); applyPatternFromPage('mirror'); return; }
       if (key === 'L') { e.preventDefault(); applyPatternFromPage('linear'); return; }
       if (key === 'O') { e.preventDefault(); applyPatternFromPage('circular'); return; }
+    }
+
+    // ── Drawing mode shortcuts ──
+    if (scene.drawingMode) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (drawingStore.selectedViewId || drawingStore.selectedDimensionId || drawingStore.selectedNoteId) {
+          drawingStore.clearSelection();
+        } else {
+          scene.setDrawingMode(false);
+          drawingStore.clearSelection();
+          drawingStore.setDrawingTool('select');
+        }
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
+        e.preventDefault();
+        drawingStore.deleteSelected();
+        return;
+      }
+      if (ctrl && e.shiftKey && e.key.toUpperCase() === 'E') {
+        e.preventDefault();
+        // Export PDF shortcut - handled by toolbar
+        return;
+      }
+      // Block other shortcuts in drawing mode
+      return;
     }
 
     // Tool shortcuts (only when not focused on an input)
@@ -403,7 +433,11 @@
             {/snippet}
           </SplitPane>
         {:else if index === 1}
-          <Viewport />
+          {#if scene.drawingMode}
+            <DrawingViewer />
+          {:else}
+            <Viewport />
+          {/if}
         {:else}
           <RightPanel />
         {/if}
