@@ -2,6 +2,7 @@
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
+  import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import type { FeatureItem } from '$lib/types/cad';
@@ -9,6 +10,7 @@
   const featureTree = getFeatureTreeStore();
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
+  const datumStore = getDatumStore();
   const history = getHistoryStore();
 
   let dragIndex = $state<number | null>(null);
@@ -23,12 +25,16 @@
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
+    const datumSnap = datumStore.snapshot();
     history.pushSnapshot({
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
       featureTree: ftSnap,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     });
   }
 
@@ -36,9 +42,16 @@
     if (item.kind === 'primitive') {
       scene.select(item.id);
       sketchStore.selectSketch(null);
-    } else {
+      datumStore.selectDatum(null);
+    } else if (item.kind === 'sketch') {
       scene.clearSelection();
       sketchStore.selectSketch(item.id);
+      datumStore.selectDatum(null);
+    } else {
+      // datum-plane or datum-axis
+      scene.clearSelection();
+      sketchStore.selectSketch(null);
+      datumStore.selectDatum(item.id);
     }
   }
 
@@ -60,8 +73,12 @@
     pushUndo();
     if (item.kind === 'primitive') {
       scene.removeObject(item.id);
-    } else {
+    } else if (item.kind === 'sketch') {
       sketchStore.removeSketch(item.id);
+    } else if (item.kind === 'datum-plane') {
+      datumStore.removeDatumPlane(item.id);
+    } else if (item.kind === 'datum-axis') {
+      datumStore.removeDatumAxis(item.id);
     }
     triggerPipeline(100);
     runPythonExecution();
@@ -148,7 +165,8 @@
 
   function isSelected(item: FeatureItem): boolean {
     if (item.kind === 'primitive') return scene.selectedIds.includes(item.id);
-    return sketchStore.selectedSketchId === item.id;
+    if (item.kind === 'sketch') return sketchStore.selectedSketchId === item.id;
+    return datumStore.selectedDatumId === item.id;
   }
 
   function isPastRollback(index: number): boolean {

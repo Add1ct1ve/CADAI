@@ -7,6 +7,7 @@
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import type { ToolId, SketchPlane, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
+  import { getDatumStore } from '$lib/stores/datum.svelte';
   import { runPythonExecution } from '$lib/services/execution-pipeline';
 
   interface Props {
@@ -20,6 +21,7 @@
   const sketchStore = getSketchStore();
   const history = getHistoryStore();
   const featureTree = getFeatureTreeStore();
+  const datumStore = getDatumStore();
 
   let isBusy = $state(false);
   let statusMessage = $state('');
@@ -94,12 +96,16 @@
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
+    const datumSnap = datumStore.snapshot();
     const current = {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
       featureTree: ftSnap,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     };
     const snapshot = history.undo(current);
     if (snapshot) {
@@ -109,6 +115,13 @@
           sketches: snapshot.sketches,
           activeSketchId: snapshot.activeSketchId ?? null,
           selectedSketchId: snapshot.selectedSketchId ?? null,
+        });
+      }
+      if (snapshot.datumPlanes !== undefined || snapshot.datumAxes !== undefined) {
+        datumStore.restoreSnapshot({
+          datumPlanes: snapshot.datumPlanes ?? [],
+          datumAxes: snapshot.datumAxes ?? [],
+          selectedDatumId: snapshot.selectedDatumId ?? null,
         });
       }
       if (snapshot.featureTree) {
@@ -124,12 +137,16 @@
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
+    const datumSnap = datumStore.snapshot();
     const current = {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
       featureTree: ftSnap,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     };
     const snapshot = history.redo(current);
     if (snapshot) {
@@ -139,6 +156,13 @@
           sketches: snapshot.sketches,
           activeSketchId: snapshot.activeSketchId ?? null,
           selectedSketchId: snapshot.selectedSketchId ?? null,
+        });
+      }
+      if (snapshot.datumPlanes !== undefined || snapshot.datumAxes !== undefined) {
+        datumStore.restoreSnapshot({
+          datumPlanes: snapshot.datumPlanes ?? [],
+          datumAxes: snapshot.datumAxes ?? [],
+          selectedDatumId: snapshot.selectedDatumId ?? null,
         });
       }
       if (snapshot.featureTree) {
@@ -177,12 +201,16 @@
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
+    const datumSnap = datumStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
       featureTree: ftSnap,
+      datumPlanes: datumSnap.datumPlanes,
+      datumAxes: datumSnap.datumAxes,
+      selectedDatumId: datumSnap.selectedDatumId,
     };
   }
 
@@ -246,6 +274,38 @@
     scene.setPatternOp(obj.id, op);
     triggerPipeline(100);
     runPythonExecution();
+  }
+
+  // ── Datum reference geometry ──
+
+  let datumPopup = $state<'offset' | '3pt' | 'axis' | null>(null);
+  let datumOffsetBase = $state<'XY' | 'XZ' | 'YZ'>('XY');
+  let datumOffsetVal = $state(10);
+  let datum3ptP1 = $state<[number, number, number]>([0, 0, 0]);
+  let datum3ptP2 = $state<[number, number, number]>([10, 0, 0]);
+  let datum3ptP3 = $state<[number, number, number]>([0, 10, 0]);
+  let datumAxisOrigin = $state<[number, number, number]>([0, 0, 0]);
+  let datumAxisDir = $state<[number, number, number]>([0, 0, 1]);
+
+  function createOffsetPlane() {
+    history.pushSnapshot(captureSnapshot());
+    datumStore.addOffsetPlane(datumOffsetBase, datumOffsetVal);
+    datumPopup = null;
+    triggerPipeline(100);
+  }
+
+  function createThreePointPlane() {
+    history.pushSnapshot(captureSnapshot());
+    datumStore.addThreePointPlane([...datum3ptP1], [...datum3ptP2], [...datum3ptP3]);
+    datumPopup = null;
+    triggerPipeline(100);
+  }
+
+  function createDatumAxis() {
+    history.pushSnapshot(captureSnapshot());
+    datumStore.addDatumAxis([...datumAxisOrigin], [...datumAxisDir]);
+    datumPopup = null;
+    triggerPipeline(100);
   }
 
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
@@ -524,6 +584,22 @@
 
       <div class="toolbar-separator"></div>
 
+      <!-- Datum / Reference Geometry -->
+      <button class="toolbar-btn datum-btn"
+        onclick={() => { datumPopup = datumPopup === 'offset' ? null : 'offset'; }}
+        title="Offset Plane"
+        disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>Offset Plane</button>
+      <button class="toolbar-btn datum-btn"
+        onclick={() => { datumPopup = datumPopup === '3pt' ? null : '3pt'; }}
+        title="3-Point Plane"
+        disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>3-Pt Plane</button>
+      <button class="toolbar-btn datum-btn"
+        onclick={() => { datumPopup = datumPopup === 'axis' ? null : 'axis'; }}
+        title="Datum Axis"
+        disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>Datum Axis</button>
+
+      <div class="toolbar-separator"></div>
+
       <!-- Code mode toggle -->
       <button
         class="toolbar-btn mode-btn"
@@ -546,6 +622,80 @@
       &#9881;
     </button>
   </div>
+
+  <!-- Datum popup dialogs -->
+  {#if datumPopup === 'offset'}
+    <div class="datum-popup">
+      <div class="datum-popup-title">Offset Plane</div>
+      <div class="datum-popup-row">
+        <label>Base</label>
+        <select class="datum-popup-select" bind:value={datumOffsetBase}>
+          <option value="XY">XY</option>
+          <option value="XZ">XZ</option>
+          <option value="YZ">YZ</option>
+        </select>
+      </div>
+      <div class="datum-popup-row">
+        <label>Offset</label>
+        <input type="number" class="datum-popup-input" bind:value={datumOffsetVal} step="1" />
+      </div>
+      <div class="datum-popup-actions">
+        <button class="datum-popup-create" onclick={createOffsetPlane}>Create</button>
+        <button class="datum-popup-cancel" onclick={() => datumPopup = null}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+
+  {#if datumPopup === '3pt'}
+    <div class="datum-popup datum-popup-wide">
+      <div class="datum-popup-title">3-Point Plane</div>
+      {#each [{ label: 'P1', val: datum3ptP1, set: (v: [number,number,number]) => datum3ptP1 = v },
+               { label: 'P2', val: datum3ptP2, set: (v: [number,number,number]) => datum3ptP2 = v },
+               { label: 'P3', val: datum3ptP3, set: (v: [number,number,number]) => datum3ptP3 = v }] as pt}
+        <div class="datum-popup-row">
+          <label>{pt.label}</label>
+          <input type="number" class="datum-popup-input" value={pt.val[0]} step="1"
+            oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; pt.set([v, pt.val[1], pt.val[2]]); }} />
+          <input type="number" class="datum-popup-input" value={pt.val[1]} step="1"
+            oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; pt.set([pt.val[0], v, pt.val[2]]); }} />
+          <input type="number" class="datum-popup-input" value={pt.val[2]} step="1"
+            oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; pt.set([pt.val[0], pt.val[1], v]); }} />
+        </div>
+      {/each}
+      <div class="datum-popup-actions">
+        <button class="datum-popup-create" onclick={createThreePointPlane}>Create</button>
+        <button class="datum-popup-cancel" onclick={() => datumPopup = null}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+
+  {#if datumPopup === 'axis'}
+    <div class="datum-popup datum-popup-wide">
+      <div class="datum-popup-title">Datum Axis</div>
+      <div class="datum-popup-row">
+        <label>Origin</label>
+        <input type="number" class="datum-popup-input" value={datumAxisOrigin[0]} step="1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisOrigin = [v, datumAxisOrigin[1], datumAxisOrigin[2]]; }} />
+        <input type="number" class="datum-popup-input" value={datumAxisOrigin[1]} step="1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisOrigin = [datumAxisOrigin[0], v, datumAxisOrigin[2]]; }} />
+        <input type="number" class="datum-popup-input" value={datumAxisOrigin[2]} step="1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisOrigin = [datumAxisOrigin[0], datumAxisOrigin[1], v]; }} />
+      </div>
+      <div class="datum-popup-row">
+        <label>Dir</label>
+        <input type="number" class="datum-popup-input" value={datumAxisDir[0]} step="0.1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisDir = [v, datumAxisDir[1], datumAxisDir[2]]; }} />
+        <input type="number" class="datum-popup-input" value={datumAxisDir[1]} step="0.1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisDir = [datumAxisDir[0], v, datumAxisDir[2]]; }} />
+        <input type="number" class="datum-popup-input" value={datumAxisDir[2]} step="0.1"
+          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value) || 0; datumAxisDir = [datumAxisDir[0], datumAxisDir[1], v]; }} />
+      </div>
+      <div class="datum-popup-actions">
+        <button class="datum-popup-create" onclick={createDatumAxis}>Create</button>
+        <button class="datum-popup-cancel" onclick={() => datumPopup = null}>Cancel</button>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -751,6 +901,128 @@
     background: var(--bg-overlay);
     border-radius: 3px;
     animation: fadeIn 0.2s ease;
+  }
+
+  .datum-btn {
+    font-size: 11px;
+    color: #f5c2e7;
+    border: 1px solid rgba(245, 194, 231, 0.3);
+  }
+
+  .datum-btn:hover:not(:disabled) {
+    background: rgba(245, 194, 231, 0.1);
+    border-color: #f5c2e7;
+  }
+
+  .datum-popup {
+    position: absolute;
+    top: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-mantle);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 200px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .datum-popup-wide {
+    min-width: 300px;
+  }
+
+  .datum-popup-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #f5c2e7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+  }
+
+  .datum-popup-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .datum-popup-row label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    width: 42px;
+    flex-shrink: 0;
+  }
+
+  .datum-popup-select {
+    flex: 1;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+
+  .datum-popup-input {
+    flex: 1;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    min-width: 0;
+    width: 50px;
+  }
+
+  .datum-popup-input:focus,
+  .datum-popup-select:focus {
+    border-color: #f5c2e7;
+    outline: none;
+  }
+
+  .datum-popup-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .datum-popup-create {
+    flex: 1;
+    background: rgba(245, 194, 231, 0.15);
+    border: 1px solid #f5c2e7;
+    color: #f5c2e7;
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .datum-popup-create:hover {
+    background: rgba(245, 194, 231, 0.25);
+  }
+
+  .datum-popup-cancel {
+    background: none;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .datum-popup-cancel:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-secondary);
   }
 
   @keyframes fadeIn {

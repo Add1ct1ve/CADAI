@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 import { SketchRenderer } from '$lib/services/sketch-renderer';
@@ -43,6 +43,9 @@ export class ViewportEngine {
 
   // Placement preview ghost
   private ghostMesh: THREE.Group | null = null;
+
+  // Datum geometry meshes
+  private datumMeshes: Map<DatumId, THREE.Group> = new Map();
 
   // Sketch support
   private sketchRenderer: SketchRenderer;
@@ -867,6 +870,139 @@ export class ViewportEngine {
     return this.sketchRenderer.raycastSketchEntities(intersection, sketch, threshold);
   }
 
+  // ─── Public API: Datum Geometry ─────────────────
+
+  /**
+   * Add a datum plane visualization (semi-transparent quad with border).
+   */
+  addDatumPlane(
+    id: DatumId,
+    origin: THREE.Vector3,
+    normal: THREE.Vector3,
+    u: THREE.Vector3,
+    v: THREE.Vector3,
+    color: string,
+    size = 20,
+  ): void {
+    this.removeDatum(id);
+
+    const group = new THREE.Group();
+    group.userData.datumId = id;
+
+    const halfSize = size / 2;
+    const threeColor = new THREE.Color(color);
+
+    // Semi-transparent quad
+    const planeGeo = new THREE.PlaneGeometry(size, size);
+    const planeMat = new THREE.MeshBasicMaterial({
+      color: threeColor,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+
+    // Orient the plane to match the datum basis vectors
+    const m = new THREE.Matrix4();
+    m.makeBasis(u, v, normal);
+    planeMesh.quaternion.setFromRotationMatrix(m);
+    planeMesh.position.copy(origin);
+
+    group.add(planeMesh);
+
+    // Border lines
+    const corners = [
+      new THREE.Vector3().copy(origin).addScaledVector(u, -halfSize).addScaledVector(v, -halfSize),
+      new THREE.Vector3().copy(origin).addScaledVector(u, halfSize).addScaledVector(v, -halfSize),
+      new THREE.Vector3().copy(origin).addScaledVector(u, halfSize).addScaledVector(v, halfSize),
+      new THREE.Vector3().copy(origin).addScaledVector(u, -halfSize).addScaledVector(v, halfSize),
+      new THREE.Vector3().copy(origin).addScaledVector(u, -halfSize).addScaledVector(v, -halfSize),
+    ];
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(corners);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: threeColor,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const borderLine = new THREE.Line(lineGeo, lineMat);
+    group.add(borderLine);
+
+    this.datumMeshes.set(id, group);
+    this.scene.add(group);
+  }
+
+  /**
+   * Add a datum axis visualization (arrow in both directions).
+   */
+  addDatumAxis(
+    id: DatumId,
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    color: string,
+    length = 30,
+  ): void {
+    this.removeDatum(id);
+
+    const group = new THREE.Group();
+    group.userData.datumId = id;
+
+    const threeColor = new THREE.Color(color);
+    const halfLength = length / 2;
+
+    // Forward arrow
+    const arrowPos = new THREE.ArrowHelper(
+      direction.clone().normalize(),
+      origin.clone().addScaledVector(direction, -halfLength),
+      length,
+      threeColor,
+      length * 0.06,
+      length * 0.03,
+    );
+    group.add(arrowPos);
+
+    this.datumMeshes.set(id, group);
+    this.scene.add(group);
+  }
+
+  /**
+   * Remove a datum visualization from the scene.
+   */
+  removeDatum(id: DatumId): void {
+    const group = this.datumMeshes.get(id);
+    if (!group) return;
+
+    this.scene.remove(group);
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else {
+          (child.material as THREE.Material).dispose();
+        }
+      }
+    });
+    this.datumMeshes.delete(id);
+  }
+
+  /**
+   * Remove all datum visualizations.
+   */
+  removeAllDatums(): void {
+    for (const id of [...this.datumMeshes.keys()]) {
+      this.removeDatum(id);
+    }
+  }
+
+  /**
+   * Toggle visibility of a datum visualization.
+   */
+  setDatumVisible(id: DatumId, visible: boolean): void {
+    const group = this.datumMeshes.get(id);
+    if (group) group.visible = visible;
+  }
+
   // ─── Public API: Geometry Creation ───────────────
 
   private createGeometry(params: PrimitiveParams): THREE.BufferGeometry {
@@ -1026,6 +1162,7 @@ export class ViewportEngine {
     this.controls.dispose();
     this.clearGhost();
     this.sketchRenderer.dispose();
+    this.removeAllDatums();
     this.removeAllObjects();
     this.clearModel();
     this.renderer.dispose();

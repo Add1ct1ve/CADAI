@@ -23,6 +23,8 @@ import {
   isSolverReady,
 } from '$lib/services/constraint-solver';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
+import { getDatumStore } from '$lib/stores/datum.svelte';
+import { computeOffsetOriginCQ } from '$lib/services/sketch-plane-utils';
 
 let sketches = $state<Sketch[]>([]);
 let activeSketchId = $state<SketchId | null>(null);
@@ -177,11 +179,25 @@ export function getSketchStore() {
     enterSketchMode(plane: SketchPlane) {
       const id = nanoid(10);
       sketchNameCounter++;
+
+      // Resolve origin for datum planes
+      let origin: [number, number, number] = [0, 0, 0];
+      if (plane !== 'XY' && plane !== 'XZ' && plane !== 'YZ') {
+        const datumPlane = getDatumStore().getDatumPlaneById(plane);
+        if (datumPlane) {
+          if (datumPlane.definition.type === 'offset') {
+            origin = computeOffsetOriginCQ(datumPlane.definition.basePlane, datumPlane.definition.offset);
+          } else {
+            origin = datumPlane.definition.p1;
+          }
+        }
+      }
+
       const sketch: Sketch = {
         id,
         name: `sketch_${sketchNameCounter}`,
         plane,
-        origin: [0, 0, 0],
+        origin,
         entities: [],
         constraints: [],
         closed: false,

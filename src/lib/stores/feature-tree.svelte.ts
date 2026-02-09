@@ -1,6 +1,8 @@
-import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation, SceneObject } from '$lib/types/cad';
+import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation, SceneObject, DatumPlane, DatumAxis } from '$lib/types/cad';
+import { isDatumPlane, isDatumAxis } from '$lib/types/cad';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
+import { getDatumStore } from '$lib/stores/datum.svelte';
 
 // ─── State ──────────────────────────────────────
 let featureOrder = $state<string[]>([]);
@@ -87,6 +89,21 @@ function sketchDetail(sketch: { plane: string; entities: unknown[]; operation?: 
   return detail;
 }
 
+function datumPlaneDetail(datum: DatumPlane): string {
+  if (datum.definition.type === 'offset') {
+    const sign = datum.definition.offset >= 0 ? '+' : '';
+    return `Offset ${datum.definition.basePlane} ${sign}${datum.definition.offset}mm`;
+  }
+  const { p1 } = datum.definition;
+  return `3-Point (${p1[0]},${p1[1]},${p1[2]})...`;
+}
+
+function datumAxisDetail(datum: DatumAxis): string {
+  const [dx, dy, dz] = datum.direction;
+  const [ox, oy, oz] = datum.origin;
+  return `Axis [${dx},${dy},${dz}] at (${ox},${oy},${oz})`;
+}
+
 // ─── Serialization types ────────────────────────
 export interface FeatureTreeSnapshot {
   featureOrder: string[];
@@ -135,6 +152,18 @@ export function getFeatureTreeStore() {
             icon: sketchIcon(sketch.operation),
             suppressed: suppressedIds.has(sketch.id),
             detail: sketchDetail(sketch),
+          });
+          continue;
+        }
+        const datum = getDatumStore().getDatumById(id);
+        if (datum) {
+          items.push({
+            id: datum.id,
+            kind: isDatumPlane(datum) ? 'datum-plane' : 'datum-axis',
+            name: datum.name,
+            icon: isDatumPlane(datum) ? '\u25C7' : '\u2195', // ◇ or ↕
+            suppressed: suppressedIds.has(datum.id),
+            detail: isDatumPlane(datum) ? datumPlaneDetail(datum) : datumAxisDetail(datum as DatumAxis),
           });
         }
       }
@@ -211,10 +240,13 @@ export function getFeatureTreeStore() {
     syncFromStores() {
       const scene = getSceneStore();
       const sketchStore = getSketchStore();
+      const datumStore = getDatumStore();
 
       const validIds = new Set<string>();
       for (const obj of scene.objects) validIds.add(obj.id);
       for (const sk of sketchStore.sketches) validIds.add(sk.id);
+      for (const dp of datumStore.datumPlanes) validIds.add(dp.id);
+      for (const da of datumStore.datumAxes) validIds.add(da.id);
 
       // Remove orphans from order
       const filtered = featureOrder.filter((id) => validIds.has(id));
@@ -227,6 +259,12 @@ export function getFeatureTreeStore() {
       }
       for (const sk of sketchStore.sketches) {
         if (!ordered.has(sk.id)) missing.push(sk.id);
+      }
+      for (const dp of datumStore.datumPlanes) {
+        if (!ordered.has(dp.id)) missing.push(dp.id);
+      }
+      for (const da of datumStore.datumAxes) {
+        if (!ordered.has(da.id)) missing.push(da.id);
       }
 
       featureOrder = [...filtered, ...missing];

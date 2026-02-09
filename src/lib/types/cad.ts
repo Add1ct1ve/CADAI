@@ -4,7 +4,7 @@ export type PrimitiveType = 'box' | 'cylinder' | 'sphere' | 'cone';
 // ─── Sketch types ────────────────────────────────
 export type SketchId = string;
 export type SketchEntityId = string;
-export type SketchPlane = 'XY' | 'XZ' | 'YZ';
+export type SketchPlane = 'XY' | 'XZ' | 'YZ' | string; // string = DatumId referencing a datum plane
 export type Point2D = [number, number];
 
 export interface SketchLine {
@@ -163,6 +163,37 @@ export interface CircularPattern {
 
 export type PatternOp = MirrorPattern | LinearPattern | CircularPattern;
 
+// ─── Datum / Reference geometry types ───────────
+export type DatumId = string;
+
+export type DatumPlaneDefinition =
+  | { type: 'offset'; basePlane: 'XY' | 'XZ' | 'YZ'; offset: number }
+  | { type: 'threePoint'; p1: [number, number, number]; p2: [number, number, number]; p3: [number, number, number] };
+
+export interface DatumPlane {
+  id: DatumId;
+  name: string;
+  definition: DatumPlaneDefinition;
+  color: string;
+  visible: boolean;
+}
+
+export interface DatumAxis {
+  id: DatumId;
+  name: string;
+  origin: [number, number, number];
+  direction: [number, number, number]; // unit vector
+  color: string;
+  visible: boolean;
+}
+
+export function isDatumPlane(d: DatumPlane | DatumAxis): d is DatumPlane {
+  return 'definition' in d;
+}
+export function isDatumAxis(d: DatumPlane | DatumAxis): d is DatumAxis {
+  return 'direction' in d && !('definition' in d);
+}
+
 export interface Sketch {
   id: SketchId;
   name: string;
@@ -238,7 +269,7 @@ export interface SceneObject {
 }
 
 // ─── Feature tree types ─────────────────────────
-export type FeatureKind = 'primitive' | 'sketch';
+export type FeatureKind = 'primitive' | 'sketch' | 'datum-plane' | 'datum-axis';
 
 export interface FeatureItem {
   id: string;
