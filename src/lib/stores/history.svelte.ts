@@ -1,4 +1,4 @@
-import type { SceneObject, ObjectId, Sketch, SketchId, DatumPlane, DatumAxis, DatumId, Component, ComponentId } from '$lib/types/cad';
+import type { SceneObject, ObjectId, Sketch, SketchId, DatumPlane, DatumAxis, DatumId, Component, ComponentId, AssemblyMate, MateId } from '$lib/types/cad';
 
 export interface SceneSnapshot {
   objects: SceneObject[];
@@ -17,6 +17,8 @@ export interface SceneSnapshot {
   components?: Component[];
   componentNameCounter?: number;
   selectedComponentId?: ComponentId | null;
+  mates?: AssemblyMate[];
+  selectedMateId?: MateId | null;
 }
 
 const MAX_HISTORY = 50;

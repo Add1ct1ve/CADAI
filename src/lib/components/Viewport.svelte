@@ -6,7 +6,8 @@
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
-  import { triggerPipeline } from '$lib/services/execution-pipeline';
+  import { getMateStore } from '$lib/stores/mate.svelte';
+  import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { handleSketchClick } from '$lib/services/sketch-interaction';
@@ -16,6 +17,7 @@
   import { snapToSketchGrid, computeDatumPlaneInfo } from '$lib/services/sketch-plane-utils';
   import { isDatumPlane } from '$lib/types/cad';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
+  import { normalToFaceSelector } from '$lib/services/mate-utils';
   import ViewControls from '$lib/components/ViewControls.svelte';
   import DimensionInput from '$lib/components/DimensionInput.svelte';
   import MeasurePanel from '$lib/components/MeasurePanel.svelte';
@@ -39,6 +41,7 @@
   const measureStore = getMeasureStore();
   const settingsStore = getSettingsStore();
   const componentStore = getComponentStore();
+  const mateStore = getMateStore();
 
   // Tracking for diff-based preview mesh sync
   type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean; metalness: number; roughness: number; opacity: number };
@@ -64,11 +67,13 @@
   let pendingSketchOp = $state<PendingSketchOp | null>(null);
   let constraintStatusMessage = $state('');
 
-  // ── Full snapshot helpers (scene + sketch + datum) ──
+  // ── Full snapshot helpers (scene + sketch + datum + mate) ──
   function captureFullSnapshot() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const datumSnap = datumStore.snapshot();
+    const compSnap = componentStore.snapshot();
+    const mateSnap = mateStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
@@ -77,6 +82,11 @@
       datumPlanes: datumSnap.datumPlanes,
       datumAxes: datumSnap.datumAxes,
       selectedDatumId: datumSnap.selectedDatumId,
+      components: compSnap.components,
+      componentNameCounter: compSnap.nameCounter,
+      selectedComponentId: compSnap.selectedComponentId,
+      mates: mateSnap.mates,
+      selectedMateId: mateSnap.selectedMateId,
     };
   }
 
@@ -94,6 +104,12 @@
         datumPlanes: snapshot.datumPlanes ?? [],
         datumAxes: snapshot.datumAxes ?? [],
         selectedDatumId: snapshot.selectedDatumId ?? null,
+      });
+    }
+    if (snapshot.mates !== undefined) {
+      mateStore.restoreSnapshot({
+        mates: snapshot.mates,
+        selectedMateId: snapshot.selectedMateId ?? null,
       });
     }
   }
@@ -602,6 +618,74 @@
     }
   });
 
+  // ── Exploded view effect ──
+  $effect(() => {
+    if (!engine) return;
+
+    const factor = viewportStore.explodeFactor;
+    const enabled = viewportStore.explodeEnabled;
+
+    if (!enabled || factor === 0) {
+      engine.clearExplosion();
+      return;
+    }
+
+    // Compute assembly centroid from all component objects
+    const compStore = componentStore;
+    const allComps = compStore.components.filter((c) => c.visible);
+    if (allComps.length < 2) {
+      engine.clearExplosion();
+      return;
+    }
+
+    // Compute centroid of all component bounding boxes
+    const centroid = new THREE.Vector3();
+    let count = 0;
+    for (const comp of allComps) {
+      for (const fid of comp.featureIds) {
+        const bbox = engine.getObjectBBox(fid);
+        if (bbox) {
+          const center = new THREE.Vector3();
+          bbox.getCenter(center);
+          centroid.add(center);
+          count++;
+        }
+      }
+    }
+    if (count === 0) return;
+    centroid.divideScalar(count);
+
+    // Compute explosion offsets per component
+    const explosionScale = 50;
+    const offsets = new Map<string, THREE.Vector3>();
+    for (const comp of allComps) {
+      const compCenter = new THREE.Vector3();
+      let compCount = 0;
+      for (const fid of comp.featureIds) {
+        const bbox = engine.getObjectBBox(fid);
+        if (bbox) {
+          const center = new THREE.Vector3();
+          bbox.getCenter(center);
+          compCenter.add(center);
+          compCount++;
+        }
+      }
+      if (compCount === 0) continue;
+      compCenter.divideScalar(compCount);
+
+      const dir = compCenter.clone().sub(centroid);
+      if (dir.length() < 0.01) dir.set(1, 0, 0); // fallback direction
+      dir.normalize();
+      const offset = dir.multiplyScalar(factor * explosionScale);
+
+      for (const fid of comp.featureIds) {
+        offsets.set(fid, offset);
+      }
+    }
+
+    engine.applyExplosion(offsets);
+  });
+
   function handlePointerMove(e: PointerEvent) {
     if (!engine) return;
 
@@ -670,10 +754,73 @@
     }
   }
 
+  // Mate creation dimension input state
+  let mateDimInputVisible = $state(false);
+  let mateDimInputPrompt = $state('');
+  let mateDimInputDefault = $state(10);
+  let mateDimInputPosition = $state({ x: 0, y: 0 });
+  let pendingMateRef2 = $state<{ componentId: string; featureId: string; faceSelector: import('$lib/types/cad').FaceSelector } | null>(null);
+
+  function handleMateDimSubmit(value: number) {
+    if (!pendingMateRef2) return;
+    const mateType = mateStore.mateCreationMode;
+    history.pushSnapshot(captureFullSnapshot());
+    if (mateType === 'distance') {
+      mateStore.completeMateCreation(pendingMateRef2, { distance: value });
+    } else if (mateType === 'angle') {
+      mateStore.completeMateCreation(pendingMateRef2, { angle: value });
+    }
+    mateDimInputVisible = false;
+    pendingMateRef2 = null;
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
+  function handleMateDimCancel() {
+    mateDimInputVisible = false;
+    pendingMateRef2 = null;
+    mateStore.cancelMateCreation();
+  }
+
   function handlePointerDown(e: PointerEvent) {
     if (!engine) return;
     // Only handle left-click
     if (e.button !== 0) return;
+
+    // ── Mate creation mode ──
+    if (mateStore.mateCreationMode) {
+      const hit = engine.raycastSurface(e);
+      if (hit?.objectId && hit.normal) {
+        const comp = componentStore.getComponentForFeature(hit.objectId);
+        if (!comp) return;
+        const faceSelector = normalToFaceSelector(hit.normal);
+        const ref = { componentId: comp.id, featureId: hit.objectId, faceSelector };
+
+        if (!mateStore.pendingRef1) {
+          mateStore.setPendingRef1(ref);
+          constraintStatusMessage = `Face on ${comp.name} selected. Now select second face on a different component.`;
+        } else {
+          if (ref.componentId === mateStore.pendingRef1.componentId) return; // same component
+          const mateType = mateStore.mateCreationMode;
+          if (mateType === 'distance' || mateType === 'angle') {
+            // Show dimension input for distance/angle mates
+            pendingMateRef2 = ref;
+            mateDimInputPrompt = mateType === 'distance' ? 'Distance:' : 'Angle (degrees):';
+            mateDimInputDefault = mateType === 'distance' ? 10 : 90;
+            mateDimInputPosition = { x: e.clientX, y: e.clientY };
+            mateDimInputVisible = true;
+          } else {
+            // Coincident / concentric: complete immediately
+            history.pushSnapshot(captureFullSnapshot());
+            mateStore.completeMateCreation(ref);
+            constraintStatusMessage = '';
+            triggerPipeline(100);
+            runPythonExecution();
+          }
+        }
+      }
+      return; // consume click
+    }
 
     // ── Sketch mode pointer down ──
     if (sketchStore.isInSketchMode) {
@@ -1041,7 +1188,16 @@
   {/if}
 
   <!-- Tool hint overlay (3D mode) -->
-  {#if tools.isAddTool && !sketchStore.isInSketchMode}
+  {#if mateStore.mateCreationMode && !sketchStore.isInSketchMode}
+    <div class="tool-hint mate-hint">
+      {#if !mateStore.pendingRef1}
+        Select first face on a component ({mateStore.mateCreationMode} mate)
+      {:else}
+        Select second face on a different component
+      {/if}
+      <button class="cancel-mate-btn" onclick={() => { mateStore.cancelMateCreation(); constraintStatusMessage = ''; }}>Cancel</button>
+    </div>
+  {:else if tools.isAddTool && !sketchStore.isInSketchMode}
     <div class="tool-hint">
       Click on the grid to place {tools.activeTool.replace('add-', '')}
     </div>
@@ -1082,6 +1238,17 @@
       position={dimensionInputPosition}
       onSubmit={handleDimensionSubmit}
       onCancel={handleDimensionCancel}
+    />
+  {/if}
+
+  <!-- Mate dimension input overlay -->
+  {#if mateDimInputVisible}
+    <DimensionInput
+      prompt={mateDimInputPrompt}
+      defaultValue={mateDimInputDefault}
+      position={mateDimInputPosition}
+      onSubmit={handleMateDimSubmit}
+      onCancel={handleMateDimCancel}
     />
   {/if}
 </div>
@@ -1225,5 +1392,28 @@
     color: #f9e2af;
     background: rgba(249, 226, 175, 0.1);
     border: 1px solid rgba(249, 226, 175, 0.3);
+  }
+
+  .mate-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-color: #f2cdcd;
+    color: #f2cdcd;
+  }
+
+  .cancel-mate-btn {
+    background: rgba(243, 139, 168, 0.15);
+    border: 1px solid #f38ba8;
+    color: #f38ba8;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .cancel-mate-btn:hover {
+    background: rgba(243, 139, 168, 0.25);
   }
 </style>

@@ -74,7 +74,7 @@ export type SketchConstraint =
 export type ConstraintState = 'under-constrained' | 'well-constrained' | 'over-constrained';
 
 export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical';
-export type FaceSelector = '>Z' | '<Z' | '>X' | '<X' | '>Y' | '<Y';
+export type FaceSelector = '>Z' | '<Z' | '>X' | '<X' | '>Y' | '<Y' | '%Cylinder';
 
 export interface ExtrudeParams {
   type: 'extrude';
@@ -296,8 +296,62 @@ export interface Component {
   sourceFile?: string;            // path if imported from .cadai file
 }
 
+// ─── Assembly Mate types ────────────────────────
+export type MateId = string;
+export type MateType = 'coincident' | 'concentric' | 'distance' | 'angle';
+
+export interface MateReference {
+  componentId: ComponentId;
+  featureId: string;          // ObjectId within the component
+  faceSelector: FaceSelector;
+}
+
+export interface CoincidentMate {
+  type: 'coincident';
+  id: MateId;
+  name: string;
+  ref1: MateReference;
+  ref2: MateReference;
+  flipped: boolean;
+}
+
+export interface ConcentricMate {
+  type: 'concentric';
+  id: MateId;
+  name: string;
+  ref1: MateReference;
+  ref2: MateReference;
+}
+
+export interface DistanceMate {
+  type: 'distance';
+  id: MateId;
+  name: string;
+  ref1: MateReference;
+  ref2: MateReference;
+  distance: number;
+}
+
+export interface AngleMate {
+  type: 'angle';
+  id: MateId;
+  name: string;
+  ref1: MateReference;
+  ref2: MateReference;
+  angle: number;
+}
+
+export type AssemblyMate = CoincidentMate | ConcentricMate | DistanceMate | AngleMate;
+
+export interface InterferenceResult {
+  componentA: ComponentId;
+  componentB: ComponentId;
+  hasInterference: boolean;
+  volume?: number;
+}
+
 // ─── Feature tree types ─────────────────────────
-export type FeatureKind = 'primitive' | 'sketch' | 'datum-plane' | 'datum-axis' | 'component';
+export type FeatureKind = 'primitive' | 'sketch' | 'datum-plane' | 'datum-axis' | 'component' | 'mate';
 
 export interface FeatureItem {
   id: string;

@@ -14,6 +14,8 @@ let displayMode = $state<DisplayMode>('shaded');
 let sectionPlane = $state<SectionPlaneConfig>({ enabled: false, normal: [0, 1, 0], offset: 0 });
 let gridSize = $state(100);
 let gridSpacing = $state(1);
+let explodeFactor = $state(0);
+let explodeEnabled = $state(false);
 
 export function getViewportStore() {
   return {
@@ -105,6 +107,21 @@ export function getViewportStore() {
     setThemeColors(theme: 'dark' | 'light') {
       engineRef?.setThemeColors(theme);
     },
+    // ── Exploded View ──
+    get explodeFactor() { return explodeFactor; },
+    get explodeEnabled() { return explodeEnabled; },
+    setExplodeFactor(f: number) {
+      explodeFactor = Math.max(0, Math.min(1, f));
+    },
+    setExplodeEnabled(b: boolean) {
+      explodeEnabled = b;
+      if (!b) explodeFactor = 0;
+    },
+    toggleExplode() {
+      explodeEnabled = !explodeEnabled;
+      if (!explodeEnabled) explodeFactor = 0;
+    },
+
     getState(): ViewportState {
       return { isLoading, hasModel, error };
     },
