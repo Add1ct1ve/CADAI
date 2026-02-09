@@ -6,7 +6,7 @@
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
-  import type { ToolId, SketchPlane, SketchToolId, BooleanOpType } from '$lib/types/cad';
+  import type { ToolId, SketchPlane, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
   import { runPythonExecution } from '$lib/services/execution-pipeline';
 
   interface Props {
@@ -218,6 +218,32 @@
     const obj = scene.firstSelected!;
     history.pushSnapshot(captureSnapshot());
     scene.setSplitOp(obj.id, { plane: 'XY', offset: 0, keepSide: 'both' });
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
+  // ── Pattern ──
+
+  let canPattern = $derived(
+    scene.codeMode === 'parametric' &&
+    !sketchStore.isInSketchMode &&
+    scene.selectedIds.length === 1 &&
+    scene.firstSelected !== null &&
+    !scene.firstSelected.booleanOp &&
+    !scene.firstSelected.splitOp
+  );
+
+  function applyPattern(type: PatternType) {
+    if (!canPattern) return;
+    const obj = scene.firstSelected!;
+    history.pushSnapshot(captureSnapshot());
+    let op: PatternOp;
+    switch (type) {
+      case 'mirror': op = { type: 'mirror', plane: 'XY', offset: 0, keepOriginal: true }; break;
+      case 'linear': op = { type: 'linear', direction: 'X', spacing: 20, count: 3 }; break;
+      case 'circular': op = { type: 'circular', axis: 'Z', count: 6, fullAngle: 360 }; break;
+    }
+    scene.setPatternOp(obj.id, op);
     triggerPipeline(100);
     runPythonExecution();
   }
@@ -482,6 +508,22 @@
 
       <div class="toolbar-separator"></div>
 
+      <!-- Pattern operations -->
+      <button class="toolbar-btn pattern-btn"
+        onclick={() => applyPattern('mirror')}
+        title="Mirror Body (Ctrl+Shift+M)"
+        disabled={!canPattern}>Mirror</button>
+      <button class="toolbar-btn pattern-btn"
+        onclick={() => applyPattern('linear')}
+        title="Linear Pattern (Ctrl+Shift+L)"
+        disabled={!canPattern}>Lin Pattern</button>
+      <button class="toolbar-btn pattern-btn"
+        onclick={() => applyPattern('circular')}
+        title="Circular Pattern (Ctrl+Shift+O)"
+        disabled={!canPattern}>Circ Pattern</button>
+
+      <div class="toolbar-separator"></div>
+
       <!-- Code mode toggle -->
       <button
         class="toolbar-btn mode-btn"
@@ -609,6 +651,17 @@
   .boolean-btn:hover:not(:disabled) {
     background: rgba(250, 179, 135, 0.1);
     border-color: #fab387;
+  }
+
+  .pattern-btn {
+    font-size: 11px;
+    color: #a6e3a1;
+    border: 1px solid rgba(166, 227, 161, 0.3);
+  }
+
+  .pattern-btn:hover:not(:disabled) {
+    background: rgba(166, 227, 161, 0.1);
+    border-color: #a6e3a1;
   }
 
   .sketch-btn {
