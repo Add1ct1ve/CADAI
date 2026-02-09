@@ -1,4 +1,5 @@
 export type ObjectId = string;
+export type ComponentId = string;
 export type PrimitiveType = 'box' | 'cylinder' | 'sphere' | 'cone';
 
 // ─── Display modes ───────────────────────────────
@@ -283,8 +284,20 @@ export interface SceneObject {
   suppressed?: boolean;
 }
 
+// ─── Component types ────────────────────────────
+export interface Component {
+  id: ComponentId;
+  name: string;
+  featureIds: string[];           // IDs of objects, sketches, datums in this component
+  transform: CadTransform;        // component-level position in assembly
+  visible: boolean;               // hide/show all children
+  grounded: boolean;              // lock transform (cannot be moved)
+  color: string;                  // badge color in tree
+  sourceFile?: string;            // path if imported from .cadai file
+}
+
 // ─── Feature tree types ─────────────────────────
-export type FeatureKind = 'primitive' | 'sketch' | 'datum-plane' | 'datum-axis';
+export type FeatureKind = 'primitive' | 'sketch' | 'datum-plane' | 'datum-axis' | 'component';
 
 export interface FeatureItem {
   id: string;
@@ -293,6 +306,9 @@ export interface FeatureItem {
   icon: string;
   suppressed: boolean;
   detail: string;
+  componentId?: ComponentId;  // which component this belongs to (undefined = root)
+  depth: number;              // 0 = root, 1 = child of component
+  color?: string;             // component badge color
 }
 
 export type CodeMode = 'parametric' | 'manual';

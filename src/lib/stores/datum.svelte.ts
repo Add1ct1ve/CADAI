@@ -48,6 +48,19 @@ export function getDatumStore() {
       return datumAxes.find((a) => a.id === selectedDatumId) ?? null;
     },
 
+    /** Bulk insert pre-built datum planes and axes (for component import) */
+    addDatums(planes: DatumPlane[], axes: DatumAxis[]) {
+      const ft = getFeatureTreeStore();
+      if (planes.length > 0) {
+        datumPlanes = [...datumPlanes, ...planes];
+        for (const dp of planes) ft.registerFeature(dp.id);
+      }
+      if (axes.length > 0) {
+        datumAxes = [...datumAxes, ...axes];
+        for (const da of axes) ft.registerFeature(da.id);
+      }
+    },
+
     // ── CRUD: Datum Planes ──
 
     addOffsetPlane(basePlane: 'XY' | 'XZ' | 'YZ', offset: number): DatumPlane {

@@ -3,14 +3,16 @@
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
+  import { getComponentStore } from '$lib/stores/component.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
-  import type { FeatureItem } from '$lib/types/cad';
+  import type { FeatureItem, ComponentId } from '$lib/types/cad';
 
   const featureTree = getFeatureTreeStore();
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
   const datumStore = getDatumStore();
+  const componentStore = getComponentStore();
   const history = getHistoryStore();
 
   let dragIndex = $state<number | null>(null);
@@ -19,6 +21,23 @@
   let treeRef = $state<HTMLElement | null>(null);
   let rollbackDebounce: ReturnType<typeof setTimeout> | null = null;
 
+  // Expand/collapse state for components
+  let collapsedComponents = $state<Set<ComponentId>>(new Set());
+
+  function toggleComponentExpand(compId: ComponentId) {
+    const next = new Set(collapsedComponents);
+    if (next.has(compId)) {
+      next.delete(compId);
+    } else {
+      next.add(compId);
+    }
+    collapsedComponents = next;
+  }
+
+  function isComponentCollapsed(compId: ComponentId): boolean {
+    return collapsedComponents.has(compId);
+  }
+
   // Capture snapshot for undo (delegates to page-level helper via store snapshots)
   function pushUndo() {
     // We access stores directly to build a snapshot matching SceneSnapshot shape
@@ -26,6 +45,7 @@
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
     const datumSnap = datumStore.snapshot();
+    const compSnap = componentStore.snapshot();
     history.pushSnapshot({
       ...sceneSnap,
       sketches: sketchSnap.sketches,
@@ -35,10 +55,22 @@
       datumPlanes: datumSnap.datumPlanes,
       datumAxes: datumSnap.datumAxes,
       selectedDatumId: datumSnap.selectedDatumId,
+      components: compSnap.components,
+      componentNameCounter: compSnap.nameCounter,
+      selectedComponentId: compSnap.selectedComponentId,
     });
   }
 
   function handleClick(item: FeatureItem) {
+    if (item.kind === 'component') {
+      scene.clearSelection();
+      sketchStore.selectSketch(null);
+      datumStore.selectDatum(null);
+      componentStore.selectComponent(item.id);
+      return;
+    }
+    // Clear component selection when selecting other items
+    componentStore.selectComponent(null);
     if (item.kind === 'primitive') {
       scene.select(item.id);
       sketchStore.selectSketch(null);
@@ -71,7 +103,11 @@
   function handleDelete(e: MouseEvent, item: FeatureItem) {
     e.stopPropagation();
     pushUndo();
-    if (item.kind === 'primitive') {
+    if (item.kind === 'component') {
+      // Dissolve: remove component grouping, features become root-level
+      featureTree.unregisterComponent(item.id);
+      componentStore.removeComponent(item.id);
+    } else if (item.kind === 'primitive') {
       scene.removeObject(item.id);
     } else if (item.kind === 'sketch') {
       sketchStore.removeSketch(item.id);
@@ -82,6 +118,25 @@
     }
     triggerPipeline(100);
     runPythonExecution();
+  }
+
+  function handleToggleVisibility(e: MouseEvent, item: FeatureItem) {
+    e.stopPropagation();
+    if (item.kind === 'component') {
+      pushUndo();
+      const comp = componentStore.getComponentById(item.id);
+      if (comp) componentStore.setVisible(item.id, !comp.visible);
+      triggerPipeline(100);
+    }
+  }
+
+  function handleToggleGrounded(e: MouseEvent, item: FeatureItem) {
+    e.stopPropagation();
+    if (item.kind === 'component') {
+      pushUndo();
+      const comp = componentStore.getComponentById(item.id);
+      if (comp) componentStore.setGrounded(item.id, !comp.grounded);
+    }
   }
 
   // ── Drag and drop ──
@@ -164,9 +219,23 @@
   }
 
   function isSelected(item: FeatureItem): boolean {
+    if (item.kind === 'component') return componentStore.selectedComponentId === item.id;
     if (item.kind === 'primitive') return scene.selectedIds.includes(item.id);
     if (item.kind === 'sketch') return sketchStore.selectedSketchId === item.id;
     return datumStore.selectedDatumId === item.id;
+  }
+
+  /** Check if a child feature's parent component is collapsed */
+  function isHiddenByCollapse(item: FeatureItem): boolean {
+    if (!item.componentId) return false;
+    return isComponentCollapsed(item.componentId);
+  }
+
+  /** Check if item belongs to a hidden component (for dimming) */
+  function isInHiddenComponent(item: FeatureItem): boolean {
+    if (!item.componentId) return false;
+    const comp = componentStore.getComponentById(item.componentId);
+    return comp !== null && !comp.visible;
   }
 
   function isPastRollback(index: number): boolean {
@@ -197,48 +266,84 @@
         No features yet. Add primitives or sketches using the toolbar.
       </div>
     {:else}
-      {#each featureTree.features as item, index (item.id)}
-        <div
-          class="tree-item"
-          role="treeitem"
-          class:selected={isSelected(item)}
-          class:suppressed={item.suppressed}
-          class:past-rollback={isPastRollback(index)}
-          class:dragging={dragIndex === index}
-          class:drop-target={dropIndex === index && dragIndex !== index}
-          class:focused={focusedIndex === index}
-          draggable="true"
-          onclick={() => handleClick(item)}
-          ondblclick={() => handleDoubleClick(item)}
-          ondragstart={(e) => handleDragStart(e, index)}
-          ondragover={(e) => handleDragOver(e, index)}
-          ondragleave={handleDragLeave}
-          ondrop={(e) => handleDrop(e, index)}
-          ondragend={handleDragEnd}
-        >
-          <span class="item-icon">{item.icon}</span>
-          <div class="item-content">
-            <span class="item-name">{item.name}</span>
-            <span class="item-detail">{item.detail}</span>
+      {#each featureTree.features as item, index (item.id + (item.componentId ?? ''))}
+        {#if !isHiddenByCollapse(item)}
+          <div
+            class="tree-item"
+            role="treeitem"
+            class:selected={isSelected(item)}
+            class:suppressed={item.suppressed}
+            class:past-rollback={isPastRollback(index)}
+            class:dragging={dragIndex === index}
+            class:drop-target={dropIndex === index && dragIndex !== index}
+            class:focused={focusedIndex === index}
+            class:component-item={item.kind === 'component'}
+            class:component-child={item.depth > 0}
+            class:hidden-component={isInHiddenComponent(item)}
+            style:padding-left="{12 + item.depth * 16}px"
+            style:border-left-color={item.kind === 'component' ? item.color : undefined}
+            draggable={item.depth === 0 ? 'true' : 'false'}
+            onclick={() => handleClick(item)}
+            ondblclick={() => handleDoubleClick(item)}
+            ondragstart={(e) => item.depth === 0 ? handleDragStart(e, index) : null}
+            ondragover={(e) => item.depth === 0 ? handleDragOver(e, index) : null}
+            ondragleave={item.depth === 0 ? handleDragLeave : undefined}
+            ondrop={(e) => item.depth === 0 ? handleDrop(e, index) : null}
+            ondragend={item.depth === 0 ? handleDragEnd : undefined}
+          >
+            {#if item.kind === 'component'}
+              <button
+                class="expand-btn"
+                onclick={(e) => { e.stopPropagation(); toggleComponentExpand(item.id); }}
+                title={isComponentCollapsed(item.id) ? 'Expand' : 'Collapse'}
+              >
+                {isComponentCollapsed(item.id) ? '\u25B6' : '\u25BC'}
+              </button>
+            {/if}
+            <span class="item-icon">{item.icon}</span>
+            <div class="item-content">
+              <span class="item-name">{item.name}</span>
+              <span class="item-detail">{item.detail}</span>
+            </div>
+            <div class="item-actions">
+              {#if item.kind === 'component'}
+                <button
+                  class="action-btn visibility-btn"
+                  class:hidden-eye={!componentStore.getComponentById(item.id)?.visible}
+                  title={componentStore.getComponentById(item.id)?.visible ? 'Hide' : 'Show'}
+                  onclick={(e) => handleToggleVisibility(e, item)}
+                >
+                  {componentStore.getComponentById(item.id)?.visible ? '\u{1F441}' : '\u{1F441}\u{FE0E}'}
+                </button>
+                <button
+                  class="action-btn ground-btn"
+                  class:grounded={componentStore.getComponentById(item.id)?.grounded}
+                  title={componentStore.getComponentById(item.id)?.grounded ? 'Unground' : 'Ground'}
+                  onclick={(e) => handleToggleGrounded(e, item)}
+                >
+                  {componentStore.getComponentById(item.id)?.grounded ? '\u{1F4CC}' : '\u{1F4CC}'}
+                </button>
+              {/if}
+              {#if item.kind !== 'component'}
+                <button
+                  class="action-btn"
+                  class:active={item.suppressed}
+                  title={item.suppressed ? 'Unsuppress' : 'Suppress'}
+                  onclick={(e) => handleSuppress(e, item)}
+                >
+                  {item.suppressed ? '\u25C9' : '\u25CE'}
+                </button>
+              {/if}
+              <button
+                class="action-btn delete-btn"
+                title={item.kind === 'component' ? 'Dissolve Component' : 'Delete'}
+                onclick={(e) => handleDelete(e, item)}
+              >
+                \u2715
+              </button>
+            </div>
           </div>
-          <div class="item-actions">
-            <button
-              class="action-btn"
-              class:active={item.suppressed}
-              title={item.suppressed ? 'Unsuppress' : 'Suppress'}
-              onclick={(e) => handleSuppress(e, item)}
-            >
-              {item.suppressed ? '\u25C9' : '\u25CE'}
-            </button>
-            <button
-              class="action-btn delete-btn"
-              title="Delete"
-              onclick={(e) => handleDelete(e, item)}
-            >
-              \u2715
-            </button>
-          </div>
-        </div>
+        {/if}
       {/each}
     {/if}
   </div>
@@ -369,6 +474,55 @@
   .tree-item.focused {
     outline: 1px solid var(--accent);
     outline-offset: -1px;
+  }
+
+  .tree-item.component-item {
+    border-left-width: 3px;
+    border-left-style: solid;
+  }
+
+  .tree-item.component-child {
+    font-size: 11px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .tree-item.hidden-component {
+    opacity: 0.35;
+  }
+
+  .expand-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 8px;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    transition: color 0.1s ease;
+  }
+
+  .expand-btn:hover {
+    color: var(--text-primary);
+  }
+
+  .visibility-btn {
+    font-size: 10px;
+  }
+
+  .visibility-btn.hidden-eye {
+    opacity: 0.4;
+  }
+
+  .ground-btn {
+    font-size: 10px;
+  }
+
+  .ground-btn.grounded {
+    color: var(--warning);
   }
 
   .item-icon {

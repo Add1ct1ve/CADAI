@@ -1,5 +1,6 @@
-import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp, DatumPlane } from '$lib/types/cad';
+import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp, DatumPlane, Component } from '$lib/types/cad';
 import { getDatumStore } from '$lib/stores/datum.svelte';
+import { getComponentStore } from '$lib/stores/component.svelte';
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -429,7 +430,18 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const patternOps: Array<{ name: string; pattern: PatternOp }> = [];
   const booleanToolIds = new Set<string>();
 
+  // Build feature→component map for visibility checks
+  const compStore = getComponentStore();
+  const featureCompMap = compStore.getFeatureComponentMap();
+
   for (const id of activeFeatureIds) {
+    // Skip features in hidden components
+    const fCompId = featureCompMap.get(id);
+    if (fCompId) {
+      const fComp = compStore.getComponentById(fCompId);
+      if (fComp && !fComp.visible) continue;
+    }
+
     const obj = objMap.get(id);
     if (obj && obj.visible) {
       if (obj.booleanOp) {
@@ -545,10 +557,39 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
     }
   }
 
-  // ── Assembly ──
+  // ── Assembly (with component grouping) ──
+  const componentStore = getComponentStore();
+  const allComponents = componentStore.components;
+  const activeIdSet = new Set(activeFeatureIds);
+
+  // Build map: componentId → feature names in that component
+  const compFeatureNames = new Map<string, string[]>();
+  const featuresInComponents = new Set<string>();
+  for (const comp of allComponents) {
+    if (!comp.visible) continue; // Skip hidden components entirely
+    const names: string[] = [];
+    for (const fid of comp.featureIds) {
+      if (!activeIdSet.has(fid)) continue;
+      const fObj = objMap.get(fid);
+      const fSketch = sketchMap.get(fid);
+      const name = fObj?.name ?? fSketch?.name;
+      if (name && assemblyNames.includes(name)) {
+        names.push(name);
+        featuresInComponents.add(name);
+      }
+    }
+    if (names.length > 0) {
+      compFeatureNames.set(comp.id, names);
+    }
+  }
+
+  // Root features = assembly names not in any component
+  const rootNames = assemblyNames.filter((n) => !featuresInComponents.has(n));
+
   if (assemblyNames.length === 0) {
     lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
-  } else if (assemblyNames.length === 1) {
+  } else if (compFeatureNames.size === 0 && assemblyNames.length === 1) {
+    // Simple case: single result, no components
     const name = assemblyNames[0];
     const obj = allVisibleObjects.find((o) => o.name === name);
     if (obj && obj.params.type === 'cone') {
@@ -559,7 +600,36 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   } else {
     lines.push('# Assemble all objects');
     lines.push('assy = cq.Assembly()');
-    for (const name of assemblyNames) {
+
+    // Add component sub-assemblies
+    for (const comp of allComponents) {
+      if (!comp.visible) continue;
+      const names = compFeatureNames.get(comp.id);
+      if (!names || names.length === 0) continue;
+
+      const compVarName = comp.name.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+      lines.push('');
+      lines.push(`# Component: ${comp.name}`);
+      lines.push(`${compVarName}_assy = cq.Assembly()`);
+      for (const name of names) {
+        const obj = allVisibleObjects.find((o) => o.name === name);
+        if (obj && obj.params.type === 'cone') {
+          lines.push(`${compVarName}_assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
+        } else {
+          lines.push(`${compVarName}_assy.add(${name}, name="${name}")`);
+        }
+      }
+      // Component transform
+      const [tx, ty, tz] = comp.transform.position;
+      if (comp.grounded || (tx === 0 && ty === 0 && tz === 0)) {
+        lines.push(`assy.add(${compVarName}_assy, name="${comp.name}")`);
+      } else {
+        lines.push(`assy.add(${compVarName}_assy, name="${comp.name}", loc=cq.Location(cq.Vector(${fmt(tx)}, ${fmt(ty)}, ${fmt(tz)})))`);
+      }
+    }
+
+    // Add root features (not in any component)
+    for (const name of rootNames) {
       const obj = allVisibleObjects.find((o) => o.name === name);
       if (obj && obj.params.type === 'cone') {
         lines.push(`assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);

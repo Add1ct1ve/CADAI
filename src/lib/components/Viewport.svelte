@@ -5,6 +5,7 @@
   import { getToolStore } from '$lib/stores/tools.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
+  import { getComponentStore } from '$lib/stores/component.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
   import { threeToCadPos, threeToCadRot } from '$lib/services/coord-utils';
   import { getHistoryStore } from '$lib/stores/history.svelte';
@@ -37,6 +38,7 @@
   const history = getHistoryStore();
   const measureStore = getMeasureStore();
   const settingsStore = getSettingsStore();
+  const componentStore = getComponentStore();
 
   // Tracking for diff-based preview mesh sync
   type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean; metalness: number; roughness: number; opacity: number };
@@ -288,10 +290,16 @@
       }
     }
 
+    // Build component feature map once per sync cycle
+    const compFeatureMap = componentStore.getFeatureComponentMap();
+
     // Add/update meshes
     for (const obj of currentObjects) {
-      // Skip invisible objects
-      if (!obj.visible) {
+      // Skip invisible objects (including those in hidden components)
+      const compId = compFeatureMap.get(obj.id);
+      const comp = compId ? componentStore.getComponentById(compId) : null;
+      const effectivelyVisible = obj.visible && (!comp || comp.visible);
+      if (!effectivelyVisible) {
         if (prevObjectMap.has(obj.id)) {
           engine.removeObject(obj.id);
           prevObjectMap.delete(obj.id);
@@ -373,7 +381,14 @@
     const isTransformTool = tool === 'translate' || tool === 'rotate' || tool === 'scale';
 
     if (isTransformTool && scene.selectedIds.length === 1) {
-      engine.attachTransformToObject(scene.selectedIds[0]);
+      // Don't attach gizmo if the feature is in a grounded component
+      const selId = scene.selectedIds[0];
+      const selComp = componentStore.getComponentForFeature(selId);
+      if (selComp?.grounded) {
+        engine.attachTransformToObject(null);
+      } else {
+        engine.attachTransformToObject(selId);
+      }
     } else {
       engine.attachTransformToObject(null);
     }
@@ -494,14 +509,22 @@
 
     engine.removeAllDatums();
 
+    const datumCompMap = componentStore.getFeatureComponentMap();
+
     for (const dp of planes) {
       if (!dp.visible || suppressedIds.has(dp.id)) continue;
+      const dpCompId = datumCompMap.get(dp.id);
+      const dpComp = dpCompId ? componentStore.getComponentById(dpCompId) : null;
+      if (dpComp && !dpComp.visible) continue;
       const info = computeDatumPlaneInfo(dp);
       engine.addDatumPlane(dp.id, info.origin, info.normal, info.u, info.v, dp.color);
     }
 
     for (const da of axes) {
       if (!da.visible || suppressedIds.has(da.id)) continue;
+      const daCompId = datumCompMap.get(da.id);
+      const daComp = daCompId ? componentStore.getComponentById(daCompId) : null;
+      if (daComp && !daComp.visible) continue;
       // Convert CQ coords to Three.js: (x, y, z) -> (x, z, -y)
       const origin = new THREE.Vector3(da.origin[0], da.origin[2], -da.origin[1]);
       const direction = new THREE.Vector3(da.direction[0], da.direction[2], -da.direction[1]);

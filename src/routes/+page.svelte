@@ -21,6 +21,7 @@
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
+  import { getComponentStore } from '$lib/stores/component.svelte';
   import type { ToolId, SketchToolId, BooleanOpType, PatternOp, PatternType } from '$lib/types/cad';
   import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
@@ -34,6 +35,7 @@
   const viewport = getViewportStore();
   const featureTree = getFeatureTreeStore();
   const datumStore = getDatumStore();
+  const componentStore = getComponentStore();
 
   let settingsOpen = $state(false);
   let shortcutsOpen = $state(false);
@@ -64,6 +66,7 @@
     const sketchSnap = sketchStore.snapshot();
     const ftSnap = featureTree.snapshot();
     const datumSnap = datumStore.snapshot();
+    const compSnap = componentStore.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
@@ -73,6 +76,9 @@
       datumPlanes: datumSnap.datumPlanes,
       datumAxes: datumSnap.datumAxes,
       selectedDatumId: datumSnap.selectedDatumId,
+      components: compSnap.components,
+      componentNameCounter: compSnap.nameCounter,
+      selectedComponentId: compSnap.selectedComponentId,
     };
   }
 
@@ -90,6 +96,13 @@
         datumPlanes: snapshot.datumPlanes ?? [],
         datumAxes: snapshot.datumAxes ?? [],
         selectedDatumId: snapshot.selectedDatumId ?? null,
+      });
+    }
+    if (snapshot.components) {
+      componentStore.restoreSnapshot({
+        components: snapshot.components,
+        nameCounter: snapshot.componentNameCounter ?? 0,
+        selectedComponentId: snapshot.selectedComponentId ?? null,
       });
     }
     if (snapshot.featureTree) {

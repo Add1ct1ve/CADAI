@@ -2,6 +2,8 @@
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { getSketchStore } from '$lib/stores/sketch.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
+  import { getComponentStore } from '$lib/stores/component.svelte';
+  import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import type { PrimitiveParams, EdgeSelector, FaceSelector, FilletParams, ChamferParams, SketchConstraint, SketchOperation, ShellParams, HoleParams, HoleType, BooleanOpType, SplitPlane, PatternOp, PatternType, DatumPlaneDefinition } from '$lib/types/cad';
@@ -11,6 +13,8 @@
   const scene = getSceneStore();
   const sketchStore = getSketchStore();
   const datumStore = getDatumStore();
+  const componentStore = getComponentStore();
+  const featureTree = getFeatureTreeStore();
   const history = getHistoryStore();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,14 +60,20 @@
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
     const datumSnap = datumStore.snapshot();
+    const compSnap = componentStore.snapshot();
+    const ftSnap = featureTree.snapshot();
     return {
       ...sceneSnap,
       sketches: sketchSnap.sketches,
       activeSketchId: sketchSnap.activeSketchId,
       selectedSketchId: sketchSnap.selectedSketchId,
+      featureTree: ftSnap,
       datumPlanes: datumSnap.datumPlanes,
       datumAxes: datumSnap.datumAxes,
       selectedDatumId: datumSnap.selectedDatumId,
+      components: compSnap.components,
+      componentNameCounter: compSnap.nameCounter,
+      selectedComponentId: compSnap.selectedComponentId,
     };
   }
 
@@ -774,6 +784,63 @@
     if (!datum || !isDatumPlane(datum)) return;
     sketchStore.enterSketchMode(datum.id);
     datumStore.selectDatum(null);
+  }
+
+  // ── Component properties ──
+
+  function updateComponentName(e: Event) {
+    const comp = componentStore.selectedComponent;
+    if (!comp) return;
+    const value = (e.target as HTMLInputElement).value;
+    componentStore.updateComponent(comp.id, { name: value });
+  }
+
+  function updateComponentPosition(axis: 0 | 1 | 2, value: number) {
+    const comp = componentStore.selectedComponent;
+    if (!comp || comp.grounded) return;
+    captureOnce();
+    const pos = [...comp.transform.position] as [number, number, number];
+    pos[axis] = value;
+    componentStore.updateComponent(comp.id, { transform: { ...comp.transform, position: pos } });
+    debounced(() => triggerPipeline());
+  }
+
+  function updateComponentRotation(axis: 0 | 1 | 2, value: number) {
+    const comp = componentStore.selectedComponent;
+    if (!comp || comp.grounded) return;
+    captureOnce();
+    const rot = [...comp.transform.rotation] as [number, number, number];
+    rot[axis] = value;
+    componentStore.updateComponent(comp.id, { transform: { ...comp.transform, rotation: rot } });
+    debounced(() => triggerPipeline());
+  }
+
+  function toggleComponentGrounded() {
+    const comp = componentStore.selectedComponent;
+    if (!comp) return;
+    captureOnce();
+    componentStore.setGrounded(comp.id, !comp.grounded);
+  }
+
+  function toggleComponentVisible() {
+    const comp = componentStore.selectedComponent;
+    if (!comp) return;
+    captureOnce();
+    componentStore.setVisible(comp.id, !comp.visible);
+    debounced(() => triggerPipeline());
+  }
+
+  function dissolveComponent() {
+    const comp = componentStore.selectedComponent;
+    if (!comp) return;
+    history.pushSnapshot(captureSnapshot());
+    componentStore.removeComponent(comp.id);
+  }
+
+  function updateComponentColor(e: Event) {
+    const comp = componentStore.selectedComponent;
+    if (!comp) return;
+    componentStore.updateComponent(comp.id, { color: (e.target as HTMLInputElement).value });
   }
 
   // Build list of possible cut targets (other operated add-mode sketches + visible primitives)
@@ -1756,6 +1823,103 @@
     </div>
   </div>
 
+{:else if componentStore.selectedComponent}
+  {@const comp = componentStore.selectedComponent}
+  <div class="properties-panel">
+    <div class="prop-header">
+      <span class="prop-type-badge component-badge">component</span>
+      <input
+        class="prop-name-input"
+        type="text"
+        value={comp.name}
+        oninput={updateComponentName}
+      />
+    </div>
+
+    <!-- Info -->
+    <div class="prop-section">
+      <div class="prop-section-title">Info</div>
+      <div class="prop-row">
+        <label>Features</label>
+        <span class="prop-value">{comp.featureIds.length}</span>
+      </div>
+      {#if comp.sourceFile}
+        <div class="prop-row">
+          <label>Source</label>
+          <span class="prop-value source-path" title={comp.sourceFile}>{comp.sourceFile.split(/[\\/]/).pop()}</span>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Position -->
+    <div class="prop-section">
+      <div class="prop-section-title">Position {comp.grounded ? '(locked)' : ''}</div>
+      <div class="prop-row">
+        <label>X</label>
+        <input type="number" value={comp.transform.position[0]} step="1" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentPosition(0, v))} />
+      </div>
+      <div class="prop-row">
+        <label>Y</label>
+        <input type="number" value={comp.transform.position[1]} step="1" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentPosition(1, v))} />
+      </div>
+      <div class="prop-row">
+        <label>Z</label>
+        <input type="number" value={comp.transform.position[2]} step="1" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentPosition(2, v))} />
+      </div>
+    </div>
+
+    <!-- Rotation -->
+    <div class="prop-section">
+      <div class="prop-section-title">Rotation {comp.grounded ? '(locked)' : ''}</div>
+      <div class="prop-row">
+        <label>X</label>
+        <input type="number" value={comp.transform.rotation[0]} step="5" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentRotation(0, v))} />
+      </div>
+      <div class="prop-row">
+        <label>Y</label>
+        <input type="number" value={comp.transform.rotation[1]} step="5" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentRotation(1, v))} />
+      </div>
+      <div class="prop-row">
+        <label>Z</label>
+        <input type="number" value={comp.transform.rotation[2]} step="5" disabled={comp.grounded}
+          oninput={(e) => numInput(e, (v) => updateComponentRotation(2, v))} />
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="prop-section">
+      <div class="prop-section-title">Options</div>
+      <div class="prop-row">
+        <label>Grounded</label>
+        <button class="toggle-btn" class:active={comp.grounded} onclick={toggleComponentGrounded}>
+          {comp.grounded ? 'Yes' : 'No'}
+        </button>
+      </div>
+      <div class="prop-row">
+        <label>Visible</label>
+        <button class="toggle-btn" class:active={comp.visible} onclick={toggleComponentVisible}>
+          {comp.visible ? 'Yes' : 'No'}
+        </button>
+      </div>
+      <div class="prop-row">
+        <label>Color</label>
+        <input type="color" value={comp.color} oninput={updateComponentColor} class="color-picker" />
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="prop-actions">
+      <button class="apply-btn full-width" onclick={dissolveComponent}>
+        Dissolve Component
+      </button>
+    </div>
+  </div>
+
 {:else}
   <div class="no-selection">
     <span class="no-selection-text">No object selected</span>
@@ -1799,6 +1963,19 @@
   .prop-type-badge.datum-badge {
     color: #f5c2e7;
     background: rgba(245, 194, 231, 0.12);
+  }
+
+  .prop-type-badge.component-badge {
+    color: #94e2d5;
+    background: rgba(148, 226, 213, 0.12);
+  }
+
+  .source-path {
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 120px;
   }
 
   .prop-name-input {
