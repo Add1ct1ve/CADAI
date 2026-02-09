@@ -14,6 +14,10 @@
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import { runPythonExecution } from '$lib/services/execution-pipeline';
   import { checkInterference } from '$lib/services/interference-check';
+  import { getDrawingStore } from '$lib/stores/drawing.svelte';
+  import { addAndGenerateView, exportPdf, exportDxf } from '$lib/services/drawing-service';
+  import type { ViewDirection } from '$lib/types/drawing';
+  import { nanoid } from 'nanoid';
 
   interface Props {
     onSettingsClick: () => void;
@@ -31,6 +35,7 @@
   const mateStore = getMateStore();
   const viewportStore = getViewportStore();
   const settingsStore = getSettingsStore();
+  const drawingStore = getDrawingStore();
 
   let isBusy = $state(false);
   let statusMessage = $state('');
@@ -417,6 +422,108 @@
     }
   }
 
+  // ── Drawing Mode ──
+
+  function enterDrawingMode() {
+    if (scene.codeMode !== 'parametric' || sketchStore.isInSketchMode) return;
+    // Create a drawing if none exists
+    if (drawingStore.drawings.length === 0) {
+      drawingStore.createDrawing();
+    } else if (!drawingStore.activeDrawingId) {
+      drawingStore.setActiveDrawing(drawingStore.drawings[0].id);
+    }
+    scene.setDrawingMode(true);
+  }
+
+  function exitDrawingMode() {
+    scene.setDrawingMode(false);
+    drawingStore.clearSelection();
+    drawingStore.setDrawingTool('select');
+  }
+
+  async function handleAddView(direction: ViewDirection) {
+    const drawingId = drawingStore.activeDrawingId;
+    if (!drawingId) return;
+    isBusy = true;
+    showStatus(`Generating ${direction} view...`);
+    try {
+      await addAndGenerateView(drawingId, direction);
+      showStatus(`${direction} view added`);
+    } catch (err) {
+      showStatus(`Failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  async function handleExportDrawingPdf() {
+    const drawingId = drawingStore.activeDrawingId;
+    if (!drawingId) return;
+    isBusy = true;
+    showStatus('Exporting PDF...');
+    try {
+      const result = await exportPdf(drawingId);
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`PDF export failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  async function handleExportDrawingDxf() {
+    const drawingId = drawingStore.activeDrawingId;
+    if (!drawingId) return;
+    isBusy = true;
+    showStatus('Exporting DXF...');
+    try {
+      const result = await exportDxf(drawingId);
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`DXF export failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  function addDimensionToDrawing(type: 'linear' | 'angular' | 'radial') {
+    const drawingId = drawingStore.activeDrawingId;
+    if (!drawingId) return;
+    const drawing = drawingStore.activeDrawing;
+    if (!drawing || drawing.views.length === 0) {
+      showStatus('Add a view first');
+      return;
+    }
+    // Add a sample dimension in the center of the first view
+    const view = drawing.views[0];
+    drawingStore.addDimension(drawingId, {
+      id: nanoid(10),
+      type,
+      viewId: view.id,
+      x1: view.x - 15,
+      y1: view.y + 10,
+      x2: view.x + 15,
+      y2: view.y + 10,
+      value: 30,
+      offsetDistance: 8,
+    });
+    showStatus(`${type} dimension added - drag to position`);
+  }
+
+  function addNoteToDrawing() {
+    const drawingId = drawingStore.activeDrawingId;
+    if (!drawingId) return;
+    drawingStore.addNote(drawingId, {
+      id: nanoid(10),
+      text: 'Note',
+      x: 30,
+      y: 30,
+      fontSize: 10,
+      bold: false,
+    });
+    showStatus('Note added');
+  }
+
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
     { id: 'select', label: 'Select', shortcut: 'V', group: 'select' },
     { id: 'translate', label: 'Move', shortcut: 'G', group: 'select' },
@@ -506,7 +613,61 @@
 
     <div class="toolbar-separator"></div>
 
-    {#if sketchStore.isInSketchMode}
+    {#if scene.drawingMode}
+      <!-- Drawing mode toolbar -->
+      <button class="toolbar-btn drawing-back-btn" onclick={exitDrawingMode} title="Back to 3D (Escape)">
+        Back to 3D
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Add views -->
+      <button class="toolbar-btn drawing-view-btn" onclick={() => handleAddView('front')} disabled={isBusy} title="Add Front View">
+        Front
+      </button>
+      <button class="toolbar-btn drawing-view-btn" onclick={() => handleAddView('top')} disabled={isBusy} title="Add Top View">
+        Top
+      </button>
+      <button class="toolbar-btn drawing-view-btn" onclick={() => handleAddView('right')} disabled={isBusy} title="Add Right View">
+        Right
+      </button>
+      <button class="toolbar-btn drawing-view-btn" onclick={() => handleAddView('iso')} disabled={isBusy} title="Add Isometric View">
+        Iso
+      </button>
+      <button class="toolbar-btn drawing-view-btn" onclick={() => handleAddView('section')} disabled={isBusy} title="Add Section View">
+        Section
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Dimensions & Notes -->
+      <button class="toolbar-btn drawing-dim-btn" onclick={() => addDimensionToDrawing('linear')} title="Add Linear Dimension">
+        Dim Linear
+      </button>
+      <button class="toolbar-btn drawing-dim-btn" onclick={() => addDimensionToDrawing('angular')} title="Add Angular Dimension">
+        Dim Angular
+      </button>
+      <button class="toolbar-btn drawing-dim-btn" onclick={() => addDimensionToDrawing('radial')} title="Add Radial Dimension">
+        Dim Radial
+      </button>
+      <button class="toolbar-btn drawing-note-btn" onclick={addNoteToDrawing} title="Add Note">
+        Note
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Export -->
+      <button class="toolbar-btn drawing-export-btn" onclick={handleExportDrawingPdf} disabled={isBusy} title="Export PDF (Ctrl+Shift+E)">
+        PDF
+      </button>
+      <button class="toolbar-btn drawing-export-btn" onclick={handleExportDrawingDxf} disabled={isBusy} title="Export DXF">
+        DXF
+      </button>
+
+      {#if drawingStore.isGenerating}
+        <span class="toolbar-status">Generating view...</span>
+      {/if}
+    {:else if sketchStore.isInSketchMode}
       <!-- Sketch mode tools -->
       <button class="toolbar-btn sketch-finish-btn" onclick={handleFinishSketch} title="Finish Sketch (Escape)">
         Finish
@@ -775,6 +936,14 @@
         onclick={() => setTool('measure')}
         title="Measurement Tools"
         disabled={sketchStore.isInSketchMode}>Measure</button>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Drawing mode -->
+      <button class="toolbar-btn drawing-enter-btn"
+        onclick={enterDrawingMode}
+        title="2D Drawing Mode"
+        disabled={scene.codeMode !== 'parametric' || sketchStore.isInSketchMode}>Drawing</button>
 
       <div class="toolbar-separator"></div>
 
@@ -1308,6 +1477,73 @@
   .datum-popup-cancel:hover {
     border-color: var(--text-secondary);
     color: var(--text-secondary);
+  }
+
+  .drawing-enter-btn {
+    font-size: 11px;
+    color: #eba0ac;
+    border: 1px solid rgba(235, 160, 172, 0.3);
+  }
+
+  .drawing-enter-btn:hover:not(:disabled) {
+    background: rgba(235, 160, 172, 0.1);
+    border-color: #eba0ac;
+  }
+
+  .drawing-back-btn {
+    font-weight: 600;
+    font-size: 11px;
+    color: #eba0ac;
+    border: 1px solid #eba0ac;
+    background: rgba(235, 160, 172, 0.1);
+  }
+
+  .drawing-back-btn:hover {
+    background: rgba(235, 160, 172, 0.2);
+  }
+
+  .drawing-view-btn {
+    font-size: 11px;
+    color: #89b4fa;
+    border: 1px solid rgba(137, 180, 250, 0.3);
+  }
+
+  .drawing-view-btn:hover:not(:disabled) {
+    background: rgba(137, 180, 250, 0.1);
+    border-color: #89b4fa;
+  }
+
+  .drawing-dim-btn {
+    font-size: 11px;
+    color: #f9e2af;
+    border: 1px solid rgba(249, 226, 175, 0.3);
+  }
+
+  .drawing-dim-btn:hover:not(:disabled) {
+    background: rgba(249, 226, 175, 0.1);
+    border-color: #f9e2af;
+  }
+
+  .drawing-note-btn {
+    font-size: 11px;
+    color: #a6e3a1;
+    border: 1px solid rgba(166, 227, 161, 0.3);
+  }
+
+  .drawing-note-btn:hover:not(:disabled) {
+    background: rgba(166, 227, 161, 0.1);
+    border-color: #a6e3a1;
+  }
+
+  .drawing-export-btn {
+    font-size: 11px;
+    color: #89dceb;
+    border: 1px solid rgba(137, 220, 235, 0.3);
+  }
+
+  .drawing-export-btn:hover:not(:disabled) {
+    background: rgba(137, 220, 235, 0.1);
+    border-color: #89dceb;
   }
 
   @keyframes fadeIn {

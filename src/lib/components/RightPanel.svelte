@@ -1,6 +1,7 @@
 <script lang="ts">
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PropertiesPanel from '$lib/components/PropertiesPanel.svelte';
+  import DrawingProperties from '$lib/components/DrawingProperties.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
   import { onMount } from 'svelte';
 
@@ -16,33 +17,42 @@
 </script>
 
 <div class="right-panel">
-  <div class="panel-tabs">
-    <button
-      class="tab-btn"
-      class:active={activeTab === 'code'}
-      onclick={() => activeTab = 'code'}
-    >
-      Code
-    </button>
-    <button
-      class="tab-btn"
-      class:active={activeTab === 'properties'}
-      onclick={() => activeTab = 'properties'}
-    >
-      Properties
-      {#if scene.selectedIds.length > 0}
-        <span class="tab-badge">{scene.selectedIds.length}</span>
-      {/if}
-    </button>
-  </div>
+  {#if scene.drawingMode}
+    <div class="panel-tabs">
+      <button class="tab-btn active">Drawing</button>
+    </div>
+    <div class="panel-body">
+      <DrawingProperties />
+    </div>
+  {:else}
+    <div class="panel-tabs">
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'code'}
+        onclick={() => activeTab = 'code'}
+      >
+        Code
+      </button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'properties'}
+        onclick={() => activeTab = 'properties'}
+      >
+        Properties
+        {#if scene.selectedIds.length > 0}
+          <span class="tab-badge">{scene.selectedIds.length}</span>
+        {/if}
+      </button>
+    </div>
 
-  <div class="panel-body">
-    {#if activeTab === 'code'}
-      <CodeEditor readonly={scene.codeMode === 'parametric'} />
-    {:else}
-      <PropertiesPanel />
-    {/if}
-  </div>
+    <div class="panel-body">
+      {#if activeTab === 'code'}
+        <CodeEditor readonly={scene.codeMode === 'parametric'} />
+      {:else}
+        <PropertiesPanel />
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>

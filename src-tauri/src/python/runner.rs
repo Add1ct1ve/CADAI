@@ -81,6 +81,46 @@ pub fn execute_cadquery(
     })
 }
 
+/// Result of running a generic Python script
+pub struct ScriptResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+/// Execute an arbitrary Python script from the venv with given arguments.
+/// Returns stdout, stderr, and exit code.
+pub fn execute_python_script(
+    venv_dir: &Path,
+    script: &Path,
+    args: &[&str],
+) -> Result<ScriptResult, AppError> {
+    let python = venv::get_venv_python(venv_dir);
+
+    if !python.exists() {
+        return Err(AppError::PythonNotFound);
+    }
+
+    let mut cmd_args: Vec<String> = vec![script.to_string_lossy().to_string()];
+    for arg in args {
+        cmd_args.push(arg.to_string());
+    }
+
+    let output = Command::new(&python)
+        .args(&cmd_args)
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    Ok(ScriptResult {
+        stdout,
+        stderr,
+        exit_code,
+    })
+}
+
 /// Execute CadQuery Python code and export directly to a specific file path.
 ///
 /// The runner script auto-detects the export format based on the output file extension

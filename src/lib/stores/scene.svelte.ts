@@ -21,6 +21,7 @@ let objects = $state<SceneObject[]>([]);
 let selectedIds = $state<ObjectId[]>([]);
 let hoveredId = $state<ObjectId | null>(null);
 let codeMode = $state<CodeMode>('parametric');
+let drawingMode = $state(false);
 
 // Counter for naming objects (box_1, box_2, etc.)
 const nameCounts: Record<string, number> = {};
@@ -43,6 +44,9 @@ export function getSceneStore() {
     },
     get codeMode() {
       return codeMode;
+    },
+    get drawingMode() {
+      return drawingMode;
     },
 
     get selectedObjects(): SceneObject[] {
@@ -230,10 +234,15 @@ export function getSceneStore() {
       codeMode = mode;
     },
 
+    setDrawingMode(enabled: boolean) {
+      drawingMode = enabled;
+    },
+
     clearAll() {
       objects = [];
       selectedIds = [];
       hoveredId = null;
+      drawingMode = false;
       // Reset name counters
       for (const key of Object.keys(nameCounts)) {
         delete nameCounts[key];

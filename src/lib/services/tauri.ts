@@ -262,6 +262,53 @@ export async function showSaveDialog(defaultName: string, extension: string): Pr
 }
 
 /**
+ * Generate an SVG orthographic projection view of a CadQuery model
+ */
+export async function generateDrawingView(
+  code: string,
+  projX: number,
+  projY: number,
+  projZ: number,
+  showHidden: boolean,
+  sectionPlane?: string,
+  sectionOffset?: number,
+): Promise<{ svgContent: string; width: number; height: number }> {
+  try {
+    return await invoke<{ svgContent: string; width: number; height: number }>(
+      'generate_drawing_view',
+      { code, projX, projY, projZ, showHidden, sectionPlane: sectionPlane ?? null, sectionOffset: sectionOffset ?? null },
+    );
+  } catch (err) {
+    console.error('generate_drawing_view failed:', err);
+    throw new Error(`Generate drawing view failed: ${err}`);
+  }
+}
+
+/**
+ * Export a composed drawing SVG to PDF
+ */
+export async function exportDrawingPdf(svgContent: string, outputPath: string): Promise<string> {
+  try {
+    return await invoke<string>('export_drawing_pdf', { svgContent, outputPath });
+  } catch (err) {
+    console.error('export_drawing_pdf failed:', err);
+    throw new Error(`Export PDF failed: ${err}`);
+  }
+}
+
+/**
+ * Export a composed drawing SVG to DXF
+ */
+export async function exportDrawingDxf(svgContent: string, outputPath: string): Promise<string> {
+  try {
+    return await invoke<string>('export_drawing_dxf', { svgContent, outputPath });
+  } catch (err) {
+    console.error('export_drawing_dxf failed:', err);
+    throw new Error(`Export DXF failed: ${err}`);
+  }
+}
+
+/**
  * Show a native open file dialog
  */
 export async function showOpenDialog(extension: string): Promise<string | null> {

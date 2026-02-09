@@ -44,6 +44,9 @@ pub fn run() {
             commands::project::export_stl,
             commands::project::export_step,
             commands::parallel::generate_parallel,
+            commands::drawing::generate_drawing_view,
+            commands::drawing::export_drawing_pdf,
+            commands::drawing::export_drawing_dxf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
