@@ -1,4 +1,4 @@
-import type { FeatureItem, FeatureKind, PrimitiveParams } from '$lib/types/cad';
+import type { FeatureItem, FeatureKind, PrimitiveParams, SketchOperation } from '$lib/types/cad';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 
@@ -18,10 +18,12 @@ function primitiveIcon(type: string): string {
   }
 }
 
-function sketchIcon(hasExtrude: boolean, mode?: string): string {
-  if (!hasExtrude) return '\u270E'; // ✎
-  if (mode === 'cut') return '\u2702'; // ✂
-  return '\u2B06'; // ⬆
+function sketchIcon(op?: SketchOperation): string {
+  if (!op) return '\u270E';              // ✎ plain sketch
+  if (op.mode === 'cut') return '\u2702'; // ✂ cut
+  if (op.type === 'revolve') return '\u27F3'; // ⟳
+  if (op.type === 'sweep') return '\u2933';   // ⤳
+  return '\u2B06';                        // ⬆ extrude add
 }
 
 function primitiveDetail(params: PrimitiveParams): string {
@@ -37,11 +39,19 @@ function primitiveDetail(params: PrimitiveParams): string {
   }
 }
 
-function sketchDetail(sketch: { plane: string; entities: unknown[]; extrude?: { distance: number; mode: string } }): string {
+function sketchDetail(sketch: { plane: string; entities: unknown[]; operation?: SketchOperation }): string {
   const entityCount = sketch.entities.length;
   let detail = `Sketch ${sketch.plane} (${entityCount} entit${entityCount === 1 ? 'y' : 'ies'})`;
-  if (sketch.extrude) {
-    detail += ` \u2192 ${sketch.extrude.mode} ${sketch.extrude.distance}mm`;
+  const op = sketch.operation;
+  if (op) {
+    if (op.type === 'extrude') {
+      detail += ` \u2192 ${op.mode} ${op.distance}mm`;
+      if (op.taper) detail += ` taper ${op.taper}\u00B0`;
+    } else if (op.type === 'revolve') {
+      detail += ` \u2192 revolve ${op.angle}\u00B0`;
+    } else if (op.type === 'sweep') {
+      detail += ` \u2192 sweep`;
+    }
   }
   return detail;
 }
@@ -91,7 +101,7 @@ export function getFeatureTreeStore() {
             id: sketch.id,
             kind: 'sketch' as FeatureKind,
             name: sketch.name,
-            icon: sketchIcon(!!sketch.extrude, sketch.extrude?.mode),
+            icon: sketchIcon(sketch.operation),
             suppressed: suppressedIds.has(sketch.id),
             detail: sketchDetail(sketch),
           });

@@ -8,6 +8,8 @@ import type {
   PrimitiveType,
   FilletParams,
   ChamferParams,
+  ShellParams,
+  HoleParams,
 } from '$lib/types/cad';
 import { getDefaultParams, getDefaultTransform } from '$lib/types/cad';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
@@ -106,6 +108,42 @@ export function getSceneStore() {
       objects = objects.map((o) =>
         o.id === id ? { ...o, chamfer: params } : o,
       );
+    },
+
+    setShell(id: ObjectId, params: ShellParams | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, shell: params } : o,
+      );
+    },
+
+    setHoles(id: ObjectId, holes: HoleParams[] | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, holes } : o,
+      );
+    },
+
+    addHole(id: ObjectId, hole: HoleParams) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, holes: [...(o.holes ?? []), hole] } : o,
+      );
+    },
+
+    removeHole(id: ObjectId, index: number) {
+      objects = objects.map((o) => {
+        if (o.id !== id) return o;
+        const holes = [...(o.holes ?? [])];
+        holes.splice(index, 1);
+        return { ...o, holes: holes.length > 0 ? holes : undefined };
+      });
+    },
+
+    updateHole(id: ObjectId, index: number, hole: HoleParams) {
+      objects = objects.map((o) => {
+        if (o.id !== id) return o;
+        const holes = [...(o.holes ?? [])];
+        holes[index] = hole;
+        return { ...o, holes };
+      });
     },
 
     select(id: ObjectId, additive = false) {
