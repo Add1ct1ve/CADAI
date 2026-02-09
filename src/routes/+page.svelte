@@ -18,7 +18,7 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { startAutosave, stopAutosave } from '$lib/services/autosave';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
-  import type { ToolId, SketchToolId } from '$lib/types/cad';
+  import type { ToolId, SketchToolId, BooleanOpType } from '$lib/types/cad';
   import type { SceneSnapshot } from '$lib/stores/history.svelte';
   import { onMount } from 'svelte';
 
@@ -74,6 +74,30 @@
     }
   }
 
+  function applyBooleanFromPage(type: BooleanOpType) {
+    if (scene.codeMode !== 'parametric' || sketchStore.isInSketchMode) return;
+    if (scene.selectedIds.length !== 2) return;
+    if (scene.selectedObjects.some((o) => !!o.booleanOp)) return;
+    const targetId = scene.selectedIds[0];
+    const toolId = scene.selectedIds[1];
+    history.pushSnapshot(captureFullSnapshot());
+    scene.setBooleanOp(toolId, { type, targetId });
+    scene.select(targetId);
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
+  function applySplitFromPage() {
+    if (scene.codeMode !== 'parametric' || sketchStore.isInSketchMode) return;
+    if (scene.selectedIds.length !== 1) return;
+    const obj = scene.firstSelected;
+    if (!obj || obj.booleanOp) return;
+    history.pushSnapshot(captureFullSnapshot());
+    scene.setSplitOp(obj.id, { plane: 'XY', offset: 0, keepSide: 'both' });
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
@@ -106,6 +130,15 @@
       e.preventDefault();
       performRedo();
       return;
+    }
+
+    // Boolean / Split shortcuts (Ctrl+Shift+U/D/I/P)
+    if (ctrl && e.shiftKey && scene.codeMode === 'parametric') {
+      const key = e.key.toUpperCase();
+      if (key === 'U') { e.preventDefault(); applyBooleanFromPage('union'); return; }
+      if (key === 'D') { e.preventDefault(); applyBooleanFromPage('subtract'); return; }
+      if (key === 'I') { e.preventDefault(); applyBooleanFromPage('intersect'); return; }
+      if (key === 'P') { e.preventDefault(); applySplitFromPage(); return; }
     }
 
     // Tool shortcuts (only when not focused on an input)

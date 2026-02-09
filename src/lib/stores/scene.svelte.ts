@@ -10,6 +10,8 @@ import type {
   ChamferParams,
   ShellParams,
   HoleParams,
+  BooleanOp,
+  SplitOp,
 } from '$lib/types/cad';
 import { getDefaultParams, getDefaultTransform } from '$lib/types/cad';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
@@ -74,6 +76,10 @@ export function getSceneStore() {
     },
 
     removeObject(id: ObjectId) {
+      // Orphan any boolean tools that reference this target
+      objects = objects.map((o) =>
+        o.booleanOp?.targetId === id ? { ...o, booleanOp: undefined } : o,
+      );
       objects = objects.filter((o) => o.id !== id);
       selectedIds = selectedIds.filter((sid) => sid !== id);
       if (hoveredId === id) hoveredId = null;
@@ -146,6 +152,27 @@ export function getSceneStore() {
       });
     },
 
+    setBooleanOp(id: ObjectId, op: BooleanOp | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, booleanOp: op, splitOp: op ? undefined : o.splitOp } : o,
+      );
+    },
+
+    setSplitOp(id: ObjectId, op: SplitOp | undefined) {
+      objects = objects.map((o) =>
+        o.id === id ? { ...o, splitOp: op, booleanOp: op ? undefined : o.booleanOp } : o,
+      );
+    },
+
+    isBooleanTool(id: ObjectId): boolean {
+      const obj = objects.find((o) => o.id === id);
+      return !!obj?.booleanOp;
+    },
+
+    isBooleanTarget(id: ObjectId): boolean {
+      return objects.some((o) => o.booleanOp?.targetId === id);
+    },
+
     select(id: ObjectId, additive = false) {
       if (additive) {
         if (selectedIds.includes(id)) {
@@ -168,6 +195,12 @@ export function getSceneStore() {
 
     deleteSelected() {
       const toRemove = new Set(selectedIds);
+      // Orphan any boolean tools that reference deleted targets
+      objects = objects.map((o) =>
+        o.booleanOp?.targetId && toRemove.has(o.booleanOp.targetId) && !toRemove.has(o.id)
+          ? { ...o, booleanOp: undefined }
+          : o,
+      );
       objects = objects.filter((o) => !toRemove.has(o.id));
       for (const id of toRemove) {
         getFeatureTreeStore().unregisterFeature(id);

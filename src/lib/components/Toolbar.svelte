@@ -6,7 +6,8 @@
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { triggerPipeline } from '$lib/services/execution-pipeline';
-  import type { ToolId, SketchPlane, SketchToolId } from '$lib/types/cad';
+  import type { ToolId, SketchPlane, SketchToolId, BooleanOpType } from '$lib/types/cad';
+  import { runPythonExecution } from '$lib/services/execution-pipeline';
 
   interface Props {
     onSettingsClick: () => void;
@@ -168,6 +169,57 @@
   function handleFinishSketch() {
     sketchStore.exitSketchMode();
     triggerPipeline(100);
+  }
+
+  // ── Boolean / Split ──
+
+  function captureSnapshot() {
+    const sceneSnap = scene.snapshot();
+    const sketchSnap = sketchStore.snapshot();
+    const ftSnap = featureTree.snapshot();
+    return {
+      ...sceneSnap,
+      sketches: sketchSnap.sketches,
+      activeSketchId: sketchSnap.activeSketchId,
+      selectedSketchId: sketchSnap.selectedSketchId,
+      featureTree: ftSnap,
+    };
+  }
+
+  let canBoolean = $derived(
+    scene.codeMode === 'parametric' &&
+    !sketchStore.isInSketchMode &&
+    scene.selectedIds.length === 2 &&
+    !scene.selectedObjects.some((o) => !!o.booleanOp)
+  );
+
+  let canSplit = $derived(
+    scene.codeMode === 'parametric' &&
+    !sketchStore.isInSketchMode &&
+    scene.selectedIds.length === 1 &&
+    scene.firstSelected !== null &&
+    !scene.firstSelected.booleanOp
+  );
+
+  function applyBoolean(type: BooleanOpType) {
+    if (!canBoolean) return;
+    const ids = scene.selectedIds;
+    const targetId = ids[0];
+    const toolId = ids[1];
+    history.pushSnapshot(captureSnapshot());
+    scene.setBooleanOp(toolId, { type, targetId });
+    scene.select(targetId);
+    triggerPipeline(100);
+    runPythonExecution();
+  }
+
+  function applySplit() {
+    if (!canSplit) return;
+    const obj = scene.firstSelected!;
+    history.pushSnapshot(captureSnapshot());
+    scene.setSplitOp(obj.id, { plane: 'XY', offset: 0, keepSide: 'both' });
+    triggerPipeline(100);
+    runPythonExecution();
   }
 
   const toolButtons: { id: ToolId; label: string; shortcut: string; group: 'select' | 'primitive' }[] = [
@@ -410,6 +462,26 @@
 
       <div class="toolbar-separator"></div>
 
+      <!-- Boolean operations -->
+      <button class="toolbar-btn boolean-btn"
+        onclick={() => applyBoolean('union')}
+        title="Union (Ctrl+Shift+U)"
+        disabled={!canBoolean}>Union</button>
+      <button class="toolbar-btn boolean-btn"
+        onclick={() => applyBoolean('subtract')}
+        title="Subtract (Ctrl+Shift+D)"
+        disabled={!canBoolean}>Subtract</button>
+      <button class="toolbar-btn boolean-btn"
+        onclick={() => applyBoolean('intersect')}
+        title="Intersect (Ctrl+Shift+I)"
+        disabled={!canBoolean}>Intersect</button>
+      <button class="toolbar-btn boolean-btn"
+        onclick={applySplit}
+        title="Split (Ctrl+Shift+P)"
+        disabled={!canSplit}>Split</button>
+
+      <div class="toolbar-separator"></div>
+
       <!-- Code mode toggle -->
       <button
         class="toolbar-btn mode-btn"
@@ -526,6 +598,17 @@
     color: var(--success);
     border-color: var(--success);
     background: rgba(166, 227, 161, 0.1);
+  }
+
+  .boolean-btn {
+    font-size: 11px;
+    color: #fab387;
+    border: 1px solid rgba(250, 179, 135, 0.3);
+  }
+
+  .boolean-btn:hover:not(:disabled) {
+    background: rgba(250, 179, 135, 0.1);
+    border-color: #fab387;
   }
 
   .sketch-btn {

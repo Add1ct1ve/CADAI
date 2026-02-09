@@ -121,6 +121,22 @@ export interface HoleParams {
   face: FaceSelector;
 }
 
+// ─── Boolean / Split types ──────────────────────
+export type BooleanOpType = 'union' | 'subtract' | 'intersect';
+
+export interface BooleanOp {
+  type: BooleanOpType;
+  targetId: ObjectId;
+}
+
+export type SplitPlane = 'XY' | 'XZ' | 'YZ';
+
+export interface SplitOp {
+  plane: SplitPlane;
+  offset: number;
+  keepSide: 'positive' | 'negative' | 'both';
+}
+
 export interface Sketch {
   id: SketchId;
   name: string;
@@ -189,6 +205,8 @@ export interface SceneObject {
   chamfer?: ChamferParams;
   shell?: ShellParams;
   holes?: HoleParams[];
+  booleanOp?: BooleanOp;
+  splitOp?: SplitOp;
   suppressed?: boolean;
 }
 
