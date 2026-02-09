@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId, DisplayMode, SectionPlaneConfig } from '$lib/types/cad';
+import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId, DisplayMode, SectionPlaneConfig, MeasurementId } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
 import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
 import { SketchRenderer } from '$lib/services/sketch-renderer';
@@ -51,6 +51,18 @@ export class ViewportEngine {
   private currentDisplayMode: DisplayMode = 'shaded';
   private clippingPlane: THREE.Plane | null = null;
   private sectionPlaneHelper: THREE.PlaneHelper | null = null;
+
+  // Grid config for snapping and rebuild
+  private gridCellSize = 1;
+  private gridSize = 100;
+
+  // Hemisphere light reference for theme changes
+  private hemisphereLight: THREE.HemisphereLight;
+
+  // Measurement overlays
+  private measurementGroup: THREE.Group;
+  private measurementMeshes: Map<MeasurementId, THREE.Group> = new Map();
+  private pendingMarker: THREE.Mesh | null = null;
 
   // Sketch support
   private sketchRenderer: SketchRenderer;
@@ -169,8 +181,13 @@ export class ViewportEngine {
     directionalLight.shadow.mapSize.height = 1024;
     this.scene.add(directionalLight);
 
-    const hemisphereLight = new THREE.HemisphereLight(0x89b4fa, 0x1a1a2e, 0.3);
-    this.scene.add(hemisphereLight);
+    this.hemisphereLight = new THREE.HemisphereLight(0x89b4fa, 0x1a1a2e, 0.3);
+    this.scene.add(this.hemisphereLight);
+
+    // Measurement overlay group
+    this.measurementGroup = new THREE.Group();
+    this.measurementGroup.renderOrder = 10;
+    this.scene.add(this.measurementGroup);
 
     // Sketch renderer
     this.sketchRenderer = new SketchRenderer(this.scene);
@@ -329,19 +346,30 @@ export class ViewportEngine {
     params: PrimitiveParams,
     transform: CadTransform,
     color: string,
+    metalness?: number,
+    roughness?: number,
+    opacity?: number,
   ): void {
     // Remove existing if updating
     this.removeObject(id);
 
+    const resolvedMetalness = metalness ?? 0.3;
+    const resolvedRoughness = roughness ?? 0.7;
+    const resolvedOpacity = opacity ?? 1.0;
+
     const geometry = this.createGeometry(params);
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(color),
-      metalness: 0.3,
-      roughness: 0.7,
+      metalness: resolvedMetalness,
+      roughness: resolvedRoughness,
+      transparent: resolvedOpacity < 1,
+      opacity: resolvedOpacity,
+      depthWrite: resolvedOpacity >= 1,
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.userData.baseOpacity = resolvedOpacity;
 
     // Wrap in group for transform
     const group = new THREE.Group();
@@ -414,6 +442,36 @@ export class ViewportEngine {
 
     const rot = cadToThreeRot(transform.rotation);
     group.rotation.copy(rot);
+  }
+
+  /**
+   * Update material properties of an existing object mesh (no geometry rebuild).
+   */
+  updateObjectMaterial(id: ObjectId, color: string, metalness?: number, roughness?: number, opacity?: number): void {
+    const group = this.objectMeshes.get(id);
+    if (!group) return;
+
+    const resolvedMetalness = metalness ?? 0.3;
+    const resolvedRoughness = roughness ?? 0.7;
+    const resolvedOpacity = opacity ?? 1.0;
+
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        child.material.color.set(color);
+        child.material.metalness = resolvedMetalness;
+        child.material.roughness = resolvedRoughness;
+        child.userData.baseOpacity = resolvedOpacity;
+
+        // Only apply per-object opacity in shaded/shaded-edges/section modes
+        if (this.currentDisplayMode !== 'transparent' && this.currentDisplayMode !== 'wireframe') {
+          child.material.transparent = resolvedOpacity < 1;
+          child.material.opacity = resolvedOpacity;
+          child.material.depthWrite = resolvedOpacity >= 1;
+        }
+
+        child.material.needsUpdate = true;
+      }
+    });
   }
 
   // ─── Public API: Selection / Hover ───────────────
@@ -541,11 +599,12 @@ export class ViewportEngine {
 
     if (!hit) return null;
 
-    // Snap to grid (1 unit)
+    // Snap to grid
+    const cs = this.gridCellSize;
     const snapped = new THREE.Vector3(
-      Math.round(intersection.x),
+      Math.round(intersection.x / cs) * cs,
       0,
-      Math.round(intersection.z),
+      Math.round(intersection.z / cs) * cs,
     );
 
     // Convert to CadQuery coords: Three.js (x, 0, z) -> CadQuery (x, -z, 0)
@@ -643,6 +702,40 @@ export class ViewportEngine {
    */
   setAxesVisible(visible: boolean): void {
     this.axes.visible = visible;
+  }
+
+  /**
+   * Rebuild the grid with new size and spacing.
+   */
+  rebuildGrid(size: number, spacing: number, majorColor = 0x404060, minorColor = 0x2a2a40): void {
+    this.scene.remove(this.grid);
+    this.grid.geometry.dispose();
+    if (Array.isArray(this.grid.material)) {
+      this.grid.material.forEach((m) => m.dispose());
+    } else {
+      (this.grid.material as THREE.Material).dispose();
+    }
+
+    const divisions = Math.round(size / spacing);
+    this.grid = new THREE.GridHelper(size, divisions, majorColor, minorColor);
+    this.scene.add(this.grid);
+    this.gridCellSize = spacing;
+    this.gridSize = size;
+  }
+
+  /**
+   * Update scene colors based on theme.
+   */
+  setThemeColors(theme: 'dark' | 'light'): void {
+    if (theme === 'light') {
+      this.scene.background = new THREE.Color(0xdce0e8);
+      this.hemisphereLight.groundColor.setHex(0xdce0e8);
+      this.rebuildGrid(this.gridSize, this.gridCellSize, 0x9ca0b0, 0xbcc0cc);
+    } else {
+      this.scene.background = new THREE.Color(0x1a1a2e);
+      this.hemisphereLight.groundColor.setHex(0x1a1a2e);
+      this.rebuildGrid(this.gridSize, this.gridCellSize, 0x404060, 0x2a2a40);
+    }
   }
 
   /**
@@ -1013,6 +1106,404 @@ export class ViewportEngine {
     if (group) group.visible = visible;
   }
 
+  // ─── Public API: Measurements ──────────────────
+
+  /**
+   * Enhanced raycast returning world-space hit point, object ID, and face normal.
+   */
+  raycastSurface(event: PointerEvent): { point: THREE.Vector3; objectId: ObjectId | null; normal: THREE.Vector3 | null } | null {
+    this.updateNdc(event);
+    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+
+    const meshes: THREE.Mesh[] = [];
+    for (const [, group] of this.objectMeshes) {
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh && !child.userData.isOutline) meshes.push(child);
+      });
+    }
+
+    const intersects = this.raycaster.intersectObjects(meshes, false);
+    if (intersects.length === 0) return null;
+
+    const hit = intersects[0];
+    const point = hit.point.clone();
+    const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+
+    let objectId: ObjectId | null = null;
+    let obj: THREE.Object3D | null = hit.object;
+    while (obj) {
+      if (obj.userData.objectId) { objectId = obj.userData.objectId as ObjectId; break; }
+      obj = obj.parent;
+    }
+
+    return { point, objectId, normal };
+  }
+
+  /**
+   * Add a distance measurement overlay.
+   */
+  addDistanceMeasurement(id: MeasurementId, p1: THREE.Vector3, p2: THREE.Vector3, distance: number): void {
+    this.removeMeasurement(id);
+
+    const group = new THREE.Group();
+    group.userData.measurementId = id;
+
+    const TEAL = 0x94e2d5;
+
+    // Dashed line between points
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+    const lineMat = new THREE.LineDashedMaterial({
+      color: TEAL,
+      dashSize: 0.3,
+      gapSize: 0.15,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(lineGeo, lineMat);
+    line.computeLineDistances();
+    line.renderOrder = 10;
+    group.add(line);
+
+    // Endpoint markers
+    const markerGeo = new THREE.SphereGeometry(0.12, 8, 8);
+    const markerMat = new THREE.MeshBasicMaterial({ color: TEAL, depthTest: false, depthWrite: false });
+    const marker1 = new THREE.Mesh(markerGeo, markerMat);
+    marker1.position.copy(p1);
+    marker1.renderOrder = 11;
+    group.add(marker1);
+
+    const marker2 = new THREE.Mesh(markerGeo.clone(), markerMat.clone());
+    marker2.position.copy(p2);
+    marker2.renderOrder = 11;
+    group.add(marker2);
+
+    // Label at midpoint
+    const mid = new THREE.Vector3().lerpVectors(p1, p2, 0.5);
+    mid.y += 0.4; // slight offset above the line
+    const label = this.makeTextSprite(`${distance.toFixed(2)}`, mid, '#94e2d5', 1.2);
+    group.add(label);
+
+    this.measurementMeshes.set(id, group);
+    this.measurementGroup.add(group);
+  }
+
+  /**
+   * Add an angle measurement overlay.
+   */
+  addAngleMeasurement(id: MeasurementId, vertex: THREE.Vector3, arm1Pos: THREE.Vector3, arm2Pos: THREE.Vector3, angleDeg: number): void {
+    this.removeMeasurement(id);
+
+    const group = new THREE.Group();
+    group.userData.measurementId = id;
+
+    const TEAL = 0x94e2d5;
+
+    // Short arm lines from vertex
+    const armLen = 2.0;
+    const dir1 = new THREE.Vector3().subVectors(arm1Pos, vertex).normalize();
+    const dir2 = new THREE.Vector3().subVectors(arm2Pos, vertex).normalize();
+    const end1 = vertex.clone().addScaledVector(dir1, armLen);
+    const end2 = vertex.clone().addScaledVector(dir2, armLen);
+
+    const arm1Geo = new THREE.BufferGeometry().setFromPoints([vertex, end1]);
+    const arm2Geo = new THREE.BufferGeometry().setFromPoints([vertex, end2]);
+    const armMat = new THREE.LineBasicMaterial({
+      color: TEAL,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const armLine1 = new THREE.Line(arm1Geo, armMat);
+    armLine1.renderOrder = 10;
+    group.add(armLine1);
+    const armLine2 = new THREE.Line(arm2Geo, armMat.clone());
+    armLine2.renderOrder = 10;
+    group.add(armLine2);
+
+    // Arc between arms
+    const arcRadius = 1.2;
+    const arcPoints: THREE.Vector3[] = [];
+    const angleRad = angleDeg * (Math.PI / 180);
+    const segments = 24;
+
+    // Build rotation basis: from dir1 toward dir2
+    const normal = new THREE.Vector3().crossVectors(dir1, dir2).normalize();
+    if (normal.length() < 0.001) {
+      // Degenerate (parallel), skip arc
+    } else {
+      for (let i = 0; i <= segments; i++) {
+        const t = (i / segments) * angleRad;
+        const p = dir1.clone().applyAxisAngle(normal, t).multiplyScalar(arcRadius).add(vertex);
+        arcPoints.push(p);
+      }
+      const arcGeo = new THREE.BufferGeometry().setFromPoints(arcPoints);
+      const arcLine = new THREE.Line(arcGeo, armMat.clone());
+      arcLine.renderOrder = 10;
+      group.add(arcLine);
+    }
+
+    // Degree label
+    const labelDir = dir1.clone().add(dir2).normalize();
+    if (labelDir.length() < 0.001) labelDir.copy(dir1);
+    const labelPos = vertex.clone().addScaledVector(labelDir, arcRadius + 0.5);
+    const label = this.makeTextSprite(`${angleDeg.toFixed(1)}\u00B0`, labelPos, '#94e2d5', 1.0);
+    group.add(label);
+
+    // Vertex marker
+    const markerGeo = new THREE.SphereGeometry(0.12, 8, 8);
+    const markerMat = new THREE.MeshBasicMaterial({ color: TEAL, depthTest: false, depthWrite: false });
+    const marker = new THREE.Mesh(markerGeo, markerMat);
+    marker.position.copy(vertex);
+    marker.renderOrder = 11;
+    group.add(marker);
+
+    this.measurementMeshes.set(id, group);
+    this.measurementGroup.add(group);
+  }
+
+  /**
+   * Add a radius measurement overlay.
+   */
+  addRadiusMeasurement(id: MeasurementId, center: THREE.Vector3, radius: number): void {
+    this.removeMeasurement(id);
+
+    const group = new THREE.Group();
+    group.userData.measurementId = id;
+
+    const TEAL = 0x94e2d5;
+
+    // Dashed line from center outward (along X)
+    const endPoint = center.clone().add(new THREE.Vector3(radius, 0, 0));
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([center, endPoint]);
+    const lineMat = new THREE.LineDashedMaterial({
+      color: TEAL,
+      dashSize: 0.2,
+      gapSize: 0.1,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(lineGeo, lineMat);
+    line.computeLineDistances();
+    line.renderOrder = 10;
+    group.add(line);
+
+    // Center marker
+    const markerGeo = new THREE.SphereGeometry(0.12, 8, 8);
+    const markerMat = new THREE.MeshBasicMaterial({ color: TEAL, depthTest: false, depthWrite: false });
+    const marker = new THREE.Mesh(markerGeo, markerMat);
+    marker.position.copy(center);
+    marker.renderOrder = 11;
+    group.add(marker);
+
+    // Label
+    const labelPos = new THREE.Vector3().lerpVectors(center, endPoint, 0.5);
+    labelPos.y += 0.4;
+    const label = this.makeTextSprite(`R=${radius.toFixed(2)}`, labelPos, '#94e2d5', 1.0);
+    group.add(label);
+
+    this.measurementMeshes.set(id, group);
+    this.measurementGroup.add(group);
+  }
+
+  /**
+   * Add a bounding box measurement overlay.
+   */
+  addBBoxMeasurement(id: MeasurementId, objectId: ObjectId): void {
+    this.removeMeasurement(id);
+
+    const objGroup = this.objectMeshes.get(objectId);
+    if (!objGroup) return;
+
+    const group = new THREE.Group();
+    group.userData.measurementId = id;
+
+    const TEAL = 0x94e2d5;
+
+    // Compute bounding box
+    const box = new THREE.Box3().setFromObject(objGroup);
+    const min = box.min;
+    const max = box.max;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    // Wireframe box
+    const boxGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+    const edgesMat = new THREE.LineBasicMaterial({
+      color: TEAL,
+      transparent: true,
+      opacity: 0.6,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+    edges.position.copy(center);
+    edges.renderOrder = 10;
+    group.add(edges);
+
+    // Dimension labels at edge midpoints
+    const xLabel = this.makeTextSprite(
+      `X: ${size.x.toFixed(2)}`,
+      new THREE.Vector3(center.x, min.y - 0.5, center.z),
+      '#94e2d5',
+      1.0,
+    );
+    group.add(xLabel);
+
+    const yLabel = this.makeTextSprite(
+      `Y: ${size.y.toFixed(2)}`,
+      new THREE.Vector3(max.x + 0.5, center.y, center.z),
+      '#94e2d5',
+      1.0,
+    );
+    group.add(yLabel);
+
+    const zLabel = this.makeTextSprite(
+      `Z: ${size.z.toFixed(2)}`,
+      new THREE.Vector3(center.x, min.y - 0.5, max.z + 0.5),
+      '#94e2d5',
+      1.0,
+    );
+    group.add(zLabel);
+
+    this.measurementMeshes.set(id, group);
+    this.measurementGroup.add(group);
+  }
+
+  /**
+   * Remove a single measurement overlay.
+   */
+  removeMeasurement(id: MeasurementId): void {
+    const group = this.measurementMeshes.get(id);
+    if (!group) return;
+
+    this.measurementGroup.remove(group);
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else {
+          (child.material as THREE.Material).dispose();
+        }
+      }
+      if (child instanceof THREE.Sprite) {
+        child.material.map?.dispose();
+        child.material.dispose();
+      }
+    });
+    this.measurementMeshes.delete(id);
+  }
+
+  /**
+   * Remove all measurement overlays.
+   */
+  clearAllMeasurements(): void {
+    for (const id of [...this.measurementMeshes.keys()]) {
+      this.removeMeasurement(id);
+    }
+  }
+
+  /**
+   * Show a pending marker dot at the given position.
+   */
+  showPendingMarker(pos: THREE.Vector3): void {
+    this.clearPendingMarker();
+    const geo = new THREE.SphereGeometry(0.18, 12, 12);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x94e2d5,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.pendingMarker = new THREE.Mesh(geo, mat);
+    this.pendingMarker.position.copy(pos);
+    this.pendingMarker.renderOrder = 12;
+    this.measurementGroup.add(this.pendingMarker);
+  }
+
+  /**
+   * Remove the pending marker.
+   */
+  clearPendingMarker(): void {
+    if (!this.pendingMarker) return;
+    this.measurementGroup.remove(this.pendingMarker);
+    this.pendingMarker.geometry.dispose();
+    (this.pendingMarker.material as THREE.Material).dispose();
+    this.pendingMarker = null;
+  }
+
+  /**
+   * Get the set of measurement IDs currently rendered in the engine.
+   */
+  getMeasurementIds(): Set<MeasurementId> {
+    return new Set(this.measurementMeshes.keys());
+  }
+
+  /**
+   * Get the bounding box of an object mesh.
+   */
+  getObjectBBox(objectId: ObjectId): THREE.Box3 | null {
+    const group = this.objectMeshes.get(objectId);
+    if (!group) return null;
+    return new THREE.Box3().setFromObject(group);
+  }
+
+  private makeTextSprite(
+    text: string,
+    position: THREE.Vector3,
+    color: string,
+    scale = 1.0,
+  ): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    const size = 256;
+    canvas.width = size;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+
+    // Background pill
+    ctx.fillStyle = 'rgba(30, 30, 46, 0.9)';
+    ctx.beginPath();
+    ctx.roundRect(2, 2, size - 4, 60, 8);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(2, 2, size - 4, 60, 8);
+    ctx.stroke();
+
+    // Text
+    ctx.font = 'bold 32px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(text, size / 2, 32);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.copy(position);
+    sprite.scale.set(scale * 2, scale * 0.5, 1);
+    sprite.renderOrder = 12;
+    return sprite;
+  }
+
   // ─── Public API: Display Modes ──────────────────
 
   /**
@@ -1097,14 +1588,17 @@ export class ViewportEngine {
 
     const mode = this.currentDisplayMode;
 
+    const baseOpacity: number = mesh.userData.baseOpacity ?? 1.0;
+
     switch (mode) {
-      case 'shaded':
+      case 'shaded': {
         mat.wireframe = false;
-        mat.transparent = false;
-        mat.opacity = 1;
-        mat.depthWrite = true;
+        mat.transparent = baseOpacity < 1;
+        mat.opacity = baseOpacity;
+        mat.depthWrite = baseOpacity >= 1;
         mesh.castShadow = true;
         break;
+      }
 
       case 'wireframe':
         mat.wireframe = true;
@@ -1114,14 +1608,15 @@ export class ViewportEngine {
         mesh.castShadow = false;
         break;
 
-      case 'shaded-edges':
+      case 'shaded-edges': {
         mat.wireframe = false;
-        mat.transparent = false;
-        mat.opacity = 1;
-        mat.depthWrite = true;
+        mat.transparent = baseOpacity < 1;
+        mat.opacity = baseOpacity;
+        mat.depthWrite = baseOpacity >= 1;
         mesh.castShadow = true;
         this.addDisplayEdges(mesh, 0x606080, 0.6);
         break;
+      }
 
       case 'transparent':
         mat.wireframe = false;
@@ -1132,14 +1627,15 @@ export class ViewportEngine {
         this.addDisplayEdges(mesh, 0x89b4fa, 0.8);
         break;
 
-      case 'section':
+      case 'section': {
         // Same material as shaded; clipping handled by renderer
         mat.wireframe = false;
-        mat.transparent = false;
-        mat.opacity = 1;
-        mat.depthWrite = true;
+        mat.transparent = baseOpacity < 1;
+        mat.opacity = baseOpacity;
+        mat.depthWrite = baseOpacity >= 1;
         mesh.castShadow = true;
         break;
+      }
     }
 
     mat.needsUpdate = true;
@@ -1327,6 +1823,8 @@ export class ViewportEngine {
     this.viewHelper.dispose();
     this.controls.dispose();
     this.clearGhost();
+    this.clearAllMeasurements();
+    this.clearPendingMarker();
     this.sketchRenderer.dispose();
     this.removeAllDatums();
     this.removeAllObjects();

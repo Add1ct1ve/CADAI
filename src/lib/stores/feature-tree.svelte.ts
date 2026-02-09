@@ -3,6 +3,12 @@ import { isDatumPlane, isDatumAxis } from '$lib/types/cad';
 import { getSceneStore } from '$lib/stores/scene.svelte';
 import { getSketchStore } from '$lib/stores/sketch.svelte';
 import { getDatumStore } from '$lib/stores/datum.svelte';
+import { getSettingsStore } from '$lib/stores/settings.svelte';
+import { unitSuffix } from '$lib/services/units';
+
+function currentUnitSuffix(): string {
+  return unitSuffix(getSettingsStore().config.display_units);
+}
 
 // ─── State ──────────────────────────────────────
 let featureOrder = $state<string[]>([]);
@@ -54,7 +60,7 @@ function primitiveDetail(obj: SceneObject): string {
       case 'mirror':
         return `mirror ${obj.patternOp.plane}${obj.patternOp.offset ? ` +${obj.patternOp.offset}` : ''}`;
       case 'linear':
-        return `${obj.patternOp.count}\u00D7 linear ${obj.patternOp.direction} @${obj.patternOp.spacing}mm`;
+        return `${obj.patternOp.count}\u00D7 linear ${obj.patternOp.direction} @${obj.patternOp.spacing}${currentUnitSuffix()}`;
       case 'circular':
         return `${obj.patternOp.count}\u00D7 circular ${obj.patternOp.axis} ${obj.patternOp.fullAngle}\u00B0`;
     }
@@ -78,7 +84,7 @@ function sketchDetail(sketch: { plane: string; entities: unknown[]; operation?: 
   const op = sketch.operation;
   if (op) {
     if (op.type === 'extrude') {
-      detail += ` \u2192 ${op.mode} ${op.distance}mm`;
+      detail += ` \u2192 ${op.mode} ${op.distance}${currentUnitSuffix()}`;
       if (op.taper) detail += ` taper ${op.taper}\u00B0`;
     } else if (op.type === 'revolve') {
       detail += ` \u2192 revolve ${op.angle}\u00B0`;
@@ -92,7 +98,7 @@ function sketchDetail(sketch: { plane: string; entities: unknown[]; operation?: 
 function datumPlaneDetail(datum: DatumPlane): string {
   if (datum.definition.type === 'offset') {
     const sign = datum.definition.offset >= 0 ? '+' : '';
-    return `Offset ${datum.definition.basePlane} ${sign}${datum.definition.offset}mm`;
+    return `Offset ${datum.definition.basePlane} ${sign}${datum.definition.offset}${currentUnitSuffix()}`;
   }
   const { p1 } = datum.definition;
   return `3-Point (${p1[0]},${p1[1]},${p1[2]})...`;

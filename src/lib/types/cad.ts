@@ -259,12 +259,18 @@ export interface CadTransform {
   rotation: [number, number, number]; // degrees
 }
 
+export type MaterialId = string;
+
 export interface SceneObject {
   id: ObjectId;
   name: string;
   params: PrimitiveParams;
   transform: CadTransform;
   color: string;
+  materialId?: MaterialId;
+  metalness?: number;
+  roughness?: number;
+  opacity?: number;
   visible: boolean;
   locked: boolean;
   fillet?: FilletParams;
@@ -305,7 +311,63 @@ export type ToolId =
   | 'add-box'
   | 'add-cylinder'
   | 'add-sphere'
-  | 'add-cone';
+  | 'add-cone'
+  | 'measure';
+
+// ─── Measurement types ──────────────────────────
+export type MeasureToolId = 'measure-distance' | 'measure-angle' | 'measure-radius' | 'measure-bbox';
+export type MeasurementId = string;
+
+export interface MeasurePoint {
+  worldPos: [number, number, number]; // Three.js Y-up coords
+  objectId?: ObjectId;
+}
+
+export interface DistanceMeasurement {
+  type: 'distance';
+  id: MeasurementId;
+  point1: MeasurePoint;
+  point2: MeasurePoint;
+  distance: number;
+}
+
+export interface AngleMeasurement {
+  type: 'angle';
+  id: MeasurementId;
+  vertex: MeasurePoint;
+  arm1: MeasurePoint;
+  arm2: MeasurePoint;
+  angleDegrees: number;
+}
+
+export interface RadiusMeasurement {
+  type: 'radius';
+  id: MeasurementId;
+  center: [number, number, number];
+  objectId: ObjectId;
+  radius: number;
+}
+
+export interface BBoxMeasurement {
+  type: 'bbox';
+  id: MeasurementId;
+  objectId: ObjectId;
+  min: [number, number, number];
+  max: [number, number, number];
+  sizeX: number;
+  sizeY: number;
+  sizeZ: number;
+}
+
+export type Measurement = DistanceMeasurement | AngleMeasurement | RadiusMeasurement | BBoxMeasurement;
+
+export interface MassProperties {
+  volume: number;
+  surfaceArea: number;
+  centerOfMass: [number, number, number]; // CadQuery Z-up
+  density?: number;    // g/cm³
+  mass?: number;       // density × volume
+}
 
 export function getDefaultParams(type: PrimitiveType): PrimitiveParams {
   switch (type) {

@@ -17,10 +17,46 @@ pub struct AppConfig {
     pub agent_rules_preset: Option<String>,
     #[serde(default = "default_true")]
     pub enable_code_review: bool,
+    #[serde(default = "default_units")]
+    pub display_units: String,
+    #[serde(default = "default_grid_size")]
+    pub grid_size: f64,
+    #[serde(default = "default_grid_spacing")]
+    pub grid_spacing: f64,
+    #[serde(default = "default_snap_translate")]
+    pub snap_translate: Option<f64>,
+    #[serde(default = "default_snap_rotation")]
+    pub snap_rotation: Option<f64>,
+    #[serde(default = "default_snap_sketch")]
+    pub snap_sketch: Option<f64>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_units() -> String {
+    "mm".to_string()
+}
+
+fn default_grid_size() -> f64 {
+    100.0
+}
+
+fn default_grid_spacing() -> f64 {
+    1.0
+}
+
+fn default_snap_translate() -> Option<f64> {
+    Some(1.0)
+}
+
+fn default_snap_rotation() -> Option<f64> {
+    Some(15.0)
+}
+
+fn default_snap_sketch() -> Option<f64> {
+    Some(0.5)
 }
 
 impl Default for AppConfig {
@@ -35,6 +71,12 @@ impl Default for AppConfig {
             openai_base_url: None,
             agent_rules_preset: None,
             enable_code_review: true,
+            display_units: "mm".to_string(),
+            grid_size: 100.0,
+            grid_spacing: 1.0,
+            snap_translate: Some(1.0),
+            snap_rotation: Some(15.0),
+            snap_sketch: Some(0.5),
         }
     }
 }

@@ -11,6 +11,12 @@ const defaultConfig: AppConfig = {
   openai_base_url: null,
   agent_rules_preset: null,
   enable_code_review: true,
+  display_units: 'mm',
+  grid_size: 100,
+  grid_spacing: 1,
+  snap_translate: 1,
+  snap_rotation: 15,
+  snap_sketch: 0.5,
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });
