@@ -2,12 +2,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import type { ObjectId, PrimitiveParams, PrimitiveType, CadTransform, CameraState, Sketch, SketchId, SketchEntityId, SketchToolId, ConstraintState, Point2D, DatumId, DisplayMode, SectionPlaneConfig, MeasurementId } from '$lib/types/cad';
 import { getDefaultParams } from '$lib/types/cad';
-import { cadToThreePos, cadToThreeRot } from '$lib/services/coord-utils';
+import { cadToThreePos, cadToThreeRot, threeToCadPos } from '$lib/services/coord-utils';
 import { SketchRenderer } from '$lib/services/sketch-renderer';
 import { getSketchPlaneInfo, threeToSketchPos, getSketchViewCamera, snapToSketchGrid } from '$lib/services/sketch-plane-utils';
+import { ConfigurableViewHelper } from '$lib/services/configurable-view-helper';
 
 const DEFAULT_COLOR = 0x89b4fa;
 const SELECTED_EMISSIVE = 0x335588;
@@ -18,6 +18,7 @@ const HOVERED_OUTLINE_COLOR = 0x4a6a8a;
 type TransformMode = 'translate' | 'rotate' | 'scale';
 type TransformCallback = (id: ObjectId, group: THREE.Group) => void;
 type ScaleEndCallback = (id: ObjectId, scale: THREE.Vector3) => void;
+export type AddPlacement = { cadPosition: [number, number, number]; source: 'surface' | 'grid' };
 
 export class ViewportEngine {
   private scene: THREE.Scene;
@@ -29,7 +30,7 @@ export class ViewportEngine {
   private resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper;
   private axes: THREE.AxesHelper;
-  private viewHelper: ViewHelper;
+  private viewHelper: ConfigurableViewHelper;
   private clock: THREE.Clock;
   private _isAnimatingView = false;
 
@@ -160,11 +161,14 @@ export class ViewportEngine {
     this.scene.add(this.grid);
 
     // Axes
-    this.axes = new THREE.AxesHelper(5);
+    this.axes = new THREE.AxesHelper(12);
     this.scene.add(this.axes);
 
     // ViewHelper (interactive axis gizmo in bottom-right corner)
-    this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
+    this.viewHelper = new ConfigurableViewHelper(this.camera, this.renderer.domElement, {
+      dimension: 176,
+      axisScale: 1.25,
+    });
     this.viewHelper.center = this.controls.target;
 
     // Clock for ViewHelper animation
@@ -211,6 +215,9 @@ export class ViewportEngine {
     }
 
     this.controls.update();
+    this.updateAxesScale();
+    this.recenterGridToTarget();
+    this.sketchRenderer.updatePlaneVisuals(this.camera, this.controls.target);
     this.renderer.render(this.scene, this.camera);
     this.renderer.autoClear = false;
     this.viewHelper.render(this.renderer);
@@ -617,6 +624,89 @@ export class ViewportEngine {
     return [snapped.x, -snapped.z, 0];
   }
 
+  /**
+   * Resolve add-placement with surface-first behavior and grid fallback.
+   */
+  getAddPlacement(
+    event: PointerEvent,
+    primitiveType: PrimitiveType,
+    primitiveParams: PrimitiveParams = getDefaultParams(primitiveType),
+  ): AddPlacement | null {
+    const surfaceHit = this.raycastSurface(event);
+    if (surfaceHit?.normal) {
+      const epsilon = 0.02;
+      const normal = surfaceHit.normal.clone().normalize();
+      const supportDistance = this.computeSupportDistance(normal, primitiveType, primitiveParams);
+      const worldPosition = surfaceHit.point.clone().addScaledVector(normal, supportDistance + epsilon);
+      return {
+        cadPosition: threeToCadPos(worldPosition),
+        source: 'surface',
+      };
+    }
+
+    const gridPosition = this.getGridIntersection(event);
+    if (!gridPosition) return null;
+
+    return {
+      cadPosition: gridPosition,
+      source: 'grid',
+    };
+  }
+
+  private computeSupportDistance(
+    normal: THREE.Vector3,
+    primitiveType: PrimitiveType,
+    primitiveParams: PrimitiveParams,
+  ): number {
+    const absNx = Math.abs(normal.x);
+    const absNy = Math.abs(normal.y);
+    const absNz = Math.abs(normal.z);
+
+    switch (primitiveType) {
+      case 'sphere': {
+        if (primitiveParams.type === 'sphere') {
+          return Math.max(primitiveParams.radius, 0);
+        }
+        const defaults = getDefaultParams('sphere') as Extract<PrimitiveParams, { type: 'sphere' }>;
+        const radius = defaults.radius;
+        return Math.max(radius, 0);
+      }
+      case 'box': {
+        const defaults = getDefaultParams('box') as Extract<PrimitiveParams, { type: 'box' }>;
+        const boxParams: Extract<PrimitiveParams, { type: 'box' }> = primitiveParams.type === 'box'
+          ? primitiveParams
+          : defaults;
+        const width = boxParams.width;
+        const height = boxParams.height;
+        const depth = boxParams.depth;
+        const halfX = width / 2;
+        const halfY = height / 2;
+        const halfZ = depth / 2;
+        return absNx * halfX + absNy * halfY + absNz * halfZ;
+      }
+      case 'cylinder': {
+        const defaults = getDefaultParams('cylinder') as Extract<PrimitiveParams, { type: 'cylinder' }>;
+        const cylinderParams: Extract<PrimitiveParams, { type: 'cylinder' }> = primitiveParams.type === 'cylinder'
+          ? primitiveParams
+          : defaults;
+        const radius = cylinderParams.radius;
+        const halfHeight = cylinderParams.height / 2;
+        return absNx * radius + absNy * halfHeight + absNz * radius;
+      }
+      case 'cone': {
+        const defaults = getDefaultParams('cone') as Extract<PrimitiveParams, { type: 'cone' }>;
+        const coneParams: Extract<PrimitiveParams, { type: 'cone' }> = primitiveParams.type === 'cone'
+          ? primitiveParams
+          : defaults;
+        const bottomRadius = coneParams.bottomRadius;
+        const topRadius = coneParams.topRadius;
+        const maxRadius = Math.max(bottomRadius, topRadius);
+        const halfHeight = coneParams.height / 2;
+        return absNx * maxRadius + absNy * halfHeight + absNz * maxRadius;
+      }
+    }
+  }
+
   private updateNdc(event: PointerEvent): void {
     const rect = this.container.getBoundingClientRect();
     this.ndcMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -660,6 +750,25 @@ export class ViewportEngine {
 
     this.camera.far = Math.max(objectRadius * 10, 1000);
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Keep scene axes readable while zooming far out.
+   */
+  private updateAxesScale(): void {
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    const scale = THREE.MathUtils.clamp(distance / 24, 1, 12);
+    this.axes.scale.setScalar(scale);
+  }
+
+  /**
+   * Keep visible grid centered near camera target while preserving world snapping.
+   */
+  private recenterGridToTarget(): void {
+    const recenterStep = Math.max(this.gridCellSize * 10, this.gridCellSize);
+    const snappedX = Math.round(this.controls.target.x / recenterStep) * recenterStep;
+    const snappedZ = Math.round(this.controls.target.z / recenterStep) * recenterStep;
+    this.grid.position.set(snappedX, 0, snappedZ);
   }
 
   /**
@@ -739,6 +848,7 @@ export class ViewportEngine {
     this.scene.add(this.grid);
     this.gridCellSize = spacing;
     this.gridSize = size;
+    this.recenterGridToTarget();
     this.autoScaleViewport(size / 2);
   }
 

@@ -34,6 +34,9 @@ const DIMENSION_TEXT_COLOR = '#94e2d5'; // teal for dimension text
 
 const ARC_SEGMENTS = 64;
 const CIRCLE_SEGMENTS = 64;
+const SKETCH_MIN_SPAN = 200;
+const SKETCH_TARGET_GRID_LINES = 90;
+const SKETCH_CENTER_SNAP_MULTIPLIER = 10;
 
 export class SketchRenderer {
   private scene: THREE.Scene;
@@ -47,6 +50,9 @@ export class SketchRenderer {
   private previewLine: THREE.Line | null = null;
   private opPreviewLines: THREE.Line[] = [];
   private planeInfo: SketchPlaneInfo | null = null;
+  private planeVisualCenter: Point2D | null = null;
+  private planeVisualSpan = 0;
+  private planeVisualStep = 1;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -63,8 +69,10 @@ export class SketchRenderer {
 
   enterSketch(sketch: Sketch): void {
     this.planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
-    this.showPlaneOverlay();
-    this.showPlaneGrid();
+    this.planeVisualCenter = null;
+    this.planeVisualSpan = 0;
+    this.planeVisualStep = 1;
+    this.rebuildPlaneVisuals([0, 0], SKETCH_MIN_SPAN, 2);
   }
 
   exitSketch(): void {
@@ -74,10 +82,41 @@ export class SketchRenderer {
     this.clearAllEntities();
     this.clearConstraintVisuals();
     this.planeInfo = null;
+    this.planeVisualCenter = null;
+    this.planeVisualSpan = 0;
+    this.planeVisualStep = 1;
   }
 
   getPlaneInfo(): SketchPlaneInfo | null {
     return this.planeInfo;
+  }
+
+  updatePlaneVisuals(camera: THREE.PerspectiveCamera, cameraTarget: THREE.Vector3): void {
+    if (!this.planeInfo) return;
+
+    const projectedTarget = new THREE.Vector3();
+    this.planeInfo.plane.projectPoint(cameraTarget, projectedTarget);
+    const projectedSketch = threeToSketchPos(projectedTarget, this.planeInfo);
+
+    const cameraDistanceToPlane = Math.max(Math.abs(this.planeInfo.plane.distanceToPoint(camera.position)), 1);
+    const targetSpan = Math.max(SKETCH_MIN_SPAN, cameraDistanceToPlane * 6);
+    const step = this.computeAdaptiveGridStep(targetSpan);
+
+    const snappedCenter: Point2D = [
+      Math.round(projectedSketch[0] / (step * SKETCH_CENTER_SNAP_MULTIPLIER)) * step * SKETCH_CENTER_SNAP_MULTIPLIER,
+      Math.round(projectedSketch[1] / (step * SKETCH_CENTER_SNAP_MULTIPLIER)) * step * SKETCH_CENTER_SNAP_MULTIPLIER,
+    ];
+    const normalizedSpan = Math.ceil(targetSpan / (step * 2)) * step * 2;
+
+    const centerChanged = !this.planeVisualCenter
+      || this.planeVisualCenter[0] !== snappedCenter[0]
+      || this.planeVisualCenter[1] !== snappedCenter[1];
+    const spanChanged = Math.abs(this.planeVisualSpan - normalizedSpan) > 1e-6;
+    const stepChanged = Math.abs(this.planeVisualStep - step) > 1e-6;
+
+    if (centerChanged || spanChanged || stepChanged || !this.planeOverlay || !this.planeGrid) {
+      this.rebuildPlaneVisuals(snappedCenter, normalizedSpan, step);
+    }
   }
 
   // ── Entity Sync ──────────────────────────────────
@@ -592,12 +631,34 @@ export class SketchRenderer {
     }
   }
 
-  private showPlaneOverlay(): void {
+  private rebuildPlaneVisuals(center: Point2D, span: number, step: number): void {
+    this.showPlaneOverlay(center, span);
+    this.showPlaneGrid(center, span, step);
+    this.planeVisualCenter = center;
+    this.planeVisualSpan = span;
+    this.planeVisualStep = step;
+  }
+
+  private computeAdaptiveGridStep(span: number): number {
+    const rawStep = Math.max(span / SKETCH_TARGET_GRID_LINES, 0.1);
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const normalized = rawStep / magnitude;
+
+    const stepMultiplier = normalized <= 1
+      ? 1
+      : normalized <= 2
+        ? 2
+        : normalized <= 5
+          ? 5
+          : 10;
+    return stepMultiplier * magnitude;
+  }
+
+  private showPlaneOverlay(center: Point2D, span: number): void {
     if (!this.planeInfo) return;
     this.hidePlaneOverlay();
 
-    const size = 100;
-    const geometry = new THREE.PlaneGeometry(size, size);
+    const geometry = new THREE.PlaneGeometry(span, span);
     const material = new THREE.MeshBasicMaterial({
       color: PLANE_COLOR,
       transparent: true,
@@ -611,7 +672,7 @@ export class SketchRenderer {
     const quaternion = new THREE.Quaternion();
     quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.planeInfo.normal);
     this.planeOverlay.quaternion.copy(quaternion);
-    this.planeOverlay.position.copy(this.planeInfo.origin);
+    this.planeOverlay.position.copy(sketchToThreePos(center, this.planeInfo));
     this.planeOverlay.renderOrder = -1;
 
     this.container.add(this.planeOverlay);
@@ -626,30 +687,34 @@ export class SketchRenderer {
     }
   }
 
-  private showPlaneGrid(): void {
+  private showPlaneGrid(center: Point2D, span: number, step: number): void {
     if (!this.planeInfo) return;
     this.hidePlaneGrid();
 
     this.planeGrid = new THREE.Group();
-    const halfSize = 50;
-    const step = 1;
+    const halfSpan = span / 2;
+    const minU = center[0] - halfSpan;
+    const maxU = center[0] + halfSpan;
+    const minV = center[1] - halfSpan;
+    const maxV = center[1] + halfSpan;
     const material = new THREE.LineBasicMaterial({
       color: GRID_COLOR,
       transparent: true,
       opacity: 0.3,
     });
 
-    // Generate grid lines along U and V axes
-    for (let i = -halfSize; i <= halfSize; i += step) {
-      // Lines along U
-      const startU = sketchToThreePos([i, -halfSize], this.planeInfo);
-      const endU = sketchToThreePos([i, halfSize], this.planeInfo);
+    // Generate grid lines along U axis
+    for (let u = minU; u <= maxU + step * 0.5; u += step) {
+      const startU = sketchToThreePos([u, minV], this.planeInfo);
+      const endU = sketchToThreePos([u, maxV], this.planeInfo);
       const geoU = new THREE.BufferGeometry().setFromPoints([startU, endU]);
       this.planeGrid.add(new THREE.Line(geoU, material));
+    }
 
-      // Lines along V
-      const startV = sketchToThreePos([-halfSize, i], this.planeInfo);
-      const endV = sketchToThreePos([halfSize, i], this.planeInfo);
+    // Generate grid lines along V axis
+    for (let v = minV; v <= maxV + step * 0.5; v += step) {
+      const startV = sketchToThreePos([minU, v], this.planeInfo);
+      const endV = sketchToThreePos([maxU, v], this.planeInfo);
       const geoV = new THREE.BufferGeometry().setFromPoints([startV, endV]);
       this.planeGrid.add(new THREE.Line(geoV, material));
     }

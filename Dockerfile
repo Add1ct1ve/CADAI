@@ -34,7 +34,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustc --version \
     && cargo --version
 
-RUN npm install -g pnpm \
+RUN npm install -g pnpm@10.29.2 \
     && pnpm --version
 
 WORKDIR /workspace
