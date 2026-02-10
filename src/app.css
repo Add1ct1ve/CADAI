@@ -15,7 +15,7 @@
   --success: #a6e3a1;
   --warning: #f9e2af;
   --error: #f38ba8;
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
 }
 
