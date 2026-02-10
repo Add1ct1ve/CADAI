@@ -34,6 +34,11 @@
   let showDiff = $state(false);
   let selectedTemplate = $state('');
 
+  // Sync editedText when planText prop changes (Svelte 5 captures initial value only)
+  $effect(() => {
+    editedText = planText;
+  });
+
   // Compute diff lines when diff toggle is active
   let diffLines = $derived.by(() => {
     if (!showDiff || !previousPlanText) return [];

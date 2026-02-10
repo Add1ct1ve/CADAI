@@ -176,10 +176,11 @@ impl AiProvider for ClaudeProvider {
             .await
             .map_err(|e| AppError::AiProviderError(format!("Failed to parse response: {}", e)))?;
 
+        // Find the first content block that has a `text` field (skip thinking/tool_use blocks)
         let text = resp
             .content
-            .first()
-            .and_then(|b| b.text.clone())
+            .iter()
+            .find_map(|b| b.text.clone())
             .unwrap_or_default();
 
         let usage = resp.usage.map(|u| TokenUsage {

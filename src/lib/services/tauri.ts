@@ -206,11 +206,12 @@ export async function generateDesignPlan(
       onEvent(event);
     };
 
-    return await invoke<DesignPlanResult>('generate_design_plan', {
+    const result = await invoke<DesignPlanResult>('generate_design_plan', {
       message,
       history,
       onEvent: channel,
     });
+    return result;
   } catch (err) {
     console.error('generate_design_plan failed:', err);
     throw new Error(`Generate design plan failed: ${err}`);
