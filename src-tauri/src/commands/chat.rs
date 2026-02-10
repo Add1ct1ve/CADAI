@@ -195,14 +195,46 @@ pub async fn auto_retry(
     // Create the AI provider.
     let provider = create_provider(&config)?;
 
-    // Build a retry message that includes the failed code and error.
-    let retry_message = format!(
-        "The following CadQuery code failed with an error. Please fix it and provide the complete corrected code.\n\n\
-        Code that failed:\n```python\n{}\n```\n\n\
-        Error:\n```\n{}\n```\n\n\
-        Please provide the complete corrected code in a ```python block. Only output the fixed code, do not repeat the error.",
-        failed_code, error_message
-    );
+    // Build an escalating retry message based on the attempt number.
+    // Attempt 1: fix the error directly
+    // Attempt 2: simplify the approach
+    // Attempt 3: use only basic primitives
+    let retry_message = match attempt {
+        1 => format!(
+            "The following CadQuery code failed with an error. Please fix it and provide the complete corrected code.\n\n\
+            Code that failed:\n```python\n{}\n```\n\n\
+            Error:\n```\n{}\n```\n\n\
+            Please provide the complete corrected code in a ```python block. Only output the fixed code, do not repeat the error.",
+            failed_code, error_message
+        ),
+        2 => format!(
+            "The previous fix also failed. Try a SIMPLER approach.\n\n\
+            Code that failed:\n```python\n{}\n```\n\n\
+            Error:\n```\n{}\n```\n\n\
+            INSTRUCTIONS FOR THIS RETRY:\n\
+            - Use basic primitives combined with boolean operations\n\
+            - Break complex shapes into simpler sub-parts\n\
+            - Avoid sweep, loft, or spline if they might be causing issues\n\
+            - Use smaller fillet/chamfer radii\n\
+            - Simplify the geometry while keeping the overall shape recognizable\n\n\
+            Provide the complete simplified code in a ```python block.",
+            failed_code, error_message
+        ),
+        _ => format!(
+            "This is the FINAL attempt. The previous approaches failed. SIGNIFICANTLY simplify the geometry.\n\n\
+            Original error:\n```\n{}\n```\n\n\
+            STRICT INSTRUCTIONS FOR THIS FINAL ATTEMPT:\n\
+            - Use ONLY basic shapes: box, cylinder, sphere, cone\n\
+            - Combine with boolean operations: union, cut, intersect\n\
+            - You may use fillets/chamfers with SMALL radii (1-2mm)\n\
+            - Do NOT use sweep, loft, spline, or revolve\n\
+            - Do NOT use shell on complex geometry\n\
+            - Prioritize getting something that RENDERS over matching the exact request\n\
+            - Keep the overall proportions and intent, but simplify aggressively\n\n\
+            Provide the complete simplified code in a ```python block.",
+            error_message
+        ),
+    };
 
     // Build message list: system + history + retry request.
     let mut messages = vec![ChatMessage {

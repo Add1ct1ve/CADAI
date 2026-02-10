@@ -1,5 +1,77 @@
 use crate::agent::rules::AgentRules;
 
+/// Convert a snake_case key name into a Title Case heading.
+fn format_category_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    upper + chars.as_str()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Recursively render a `serde_yaml::Value` into indented bullet-point text.
+fn render_yaml_value(prompt: &mut String, value: &serde_yaml::Value, depth: usize) {
+    let indent = "  ".repeat(depth);
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (k, v) in map {
+                if let serde_yaml::Value::String(key) = k {
+                    let heading = format_category_name(key);
+                    prompt.push_str(&format!("{}- **{}**", indent, heading));
+                    match v {
+                        serde_yaml::Value::String(s) => {
+                            prompt.push_str(&format!(": {}\n", s));
+                        }
+                        serde_yaml::Value::Number(n) => {
+                            prompt.push_str(&format!(": {}\n", n));
+                        }
+                        serde_yaml::Value::Bool(b) => {
+                            prompt.push_str(&format!(": {}\n", b));
+                        }
+                        _ => {
+                            prompt.push('\n');
+                            render_yaml_value(prompt, v, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        serde_yaml::Value::Sequence(seq) => {
+            for item in seq {
+                match item {
+                    serde_yaml::Value::String(s) => {
+                        prompt.push_str(&format!("{}- {}\n", indent, s));
+                    }
+                    _ => {
+                        render_yaml_value(prompt, item, depth);
+                    }
+                }
+            }
+        }
+        serde_yaml::Value::String(s) => {
+            prompt.push_str(&format!("{}{}\n", indent, s));
+        }
+        serde_yaml::Value::Number(n) => {
+            prompt.push_str(&format!("{}{}\n", indent, n));
+        }
+        serde_yaml::Value::Bool(b) => {
+            prompt.push_str(&format!("{}{}\n", indent, b));
+        }
+        serde_yaml::Value::Null => {}
+        serde_yaml::Value::Tagged(tagged) => {
+            render_yaml_value(prompt, &tagged.value, depth);
+        }
+    }
+}
+
 /// Build a system prompt for the CAD AI agent from the loaded agent rules.
 pub fn build_system_prompt(rules: &AgentRules) -> String {
     let mut prompt = String::new();
@@ -64,9 +136,33 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
     if let Some(ref sr) = rules.spatial_rules {
         prompt.push_str("## Spatial Rules\n");
         for (category, rules_list) in sr {
-            prompt.push_str(&format!("### {}\n", category));
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
             for rule in rules_list {
                 prompt.push_str(&format!("- {}\n", rule));
+            }
+        }
+        prompt.push('\n');
+    }
+
+    // -- Capabilities & Limitations --
+    if let Some(ref caps) = rules.capabilities {
+        prompt.push_str("## Capabilities & Limitations\n");
+        for (category, items) in caps {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+        }
+        prompt.push('\n');
+    }
+
+    // -- Advanced Techniques --
+    if let Some(ref techniques) = rules.advanced_techniques {
+        prompt.push_str("## Advanced Techniques\n");
+        for (category, items) in techniques {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
             }
         }
         prompt.push('\n');
@@ -103,6 +199,54 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Validation checks --
+    if let Some(ref validation) = rules.validation {
+        prompt.push_str("## Validation Checks\n");
+        if let Some(ref pre) = validation.pre_generation {
+            prompt.push_str("### Pre-Generation\n");
+            for item in pre {
+                if let Some(map) = item.as_mapping() {
+                    if let Some(check) = map.get(&serde_yaml::Value::String("check".into())) {
+                        if let Some(check_str) = check.as_str() {
+                            prompt.push_str(&format!(
+                                "- **{}**",
+                                format_category_name(check_str)
+                            ));
+                        }
+                    }
+                    if let Some(rule) = map.get(&serde_yaml::Value::String("rule".into())) {
+                        if let Some(rule_str) = rule.as_str() {
+                            prompt.push_str(&format!(": {}", rule_str));
+                        }
+                    }
+                    prompt.push('\n');
+                }
+            }
+        }
+        if let Some(ref post) = validation.post_generation {
+            prompt.push_str("### Post-Generation\n");
+            for item in post {
+                if let Some(map) = item.as_mapping() {
+                    if let Some(check) = map.get(&serde_yaml::Value::String("check".into())) {
+                        if let Some(check_str) = check.as_str() {
+                            prompt.push_str(&format!(
+                                "- **{}**",
+                                format_category_name(check_str)
+                            ));
+                        }
+                    }
+                    if let Some(rule) = map.get(&serde_yaml::Value::String("rule".into())) {
+                        if let Some(rule_str) = rule.as_str() {
+                            prompt.push_str(&format!(": {}", rule_str));
+                        }
+                    }
+                    prompt.push('\n');
+                }
+            }
+        }
+        prompt.push('\n');
+    }
+
     // -- Cookbook (concrete code recipes) --
     if let Some(ref cookbook) = rules.cookbook {
         prompt.push_str("## CadQuery Cookbook - Reference Patterns\n");
@@ -121,11 +265,18 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Manufacturing awareness --
+    if let Some(ref mfg) = rules.manufacturing {
+        prompt.push_str("## Manufacturing Awareness\n");
+        render_yaml_value(&mut prompt, mfg, 0);
+        prompt.push('\n');
+    }
+
     // -- Error handling rules --
     if let Some(ref on_err) = rules.on_error {
         prompt.push_str("## Error Handling\n");
         for (category, steps) in on_err {
-            prompt.push_str(&format!("### {}\n", category));
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
             for step in steps {
                 prompt.push_str(&format!("- {}\n", step));
             }
@@ -137,7 +288,7 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
     prompt.push_str("## Response Format\n");
     if let Some(ref rf) = rules.response_format {
         for (category, items) in rf {
-            prompt.push_str(&format!("### {}\n", category));
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
             for item in items {
                 prompt.push_str(&format!("- {}\n", item));
             }
@@ -164,4 +315,321 @@ pub fn build_system_prompt_for_preset(preset_name: Option<&str>) -> String {
 #[allow(dead_code)]
 pub fn build_default_system_prompt() -> String {
     build_system_prompt_for_preset(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_category_name ───────────────────────────────────────────
+
+    #[test]
+    fn test_format_category_name_simple() {
+        assert_eq!(format_category_name("hello"), "Hello");
+    }
+
+    #[test]
+    fn test_format_category_name_snake_case() {
+        assert_eq!(
+            format_category_name("common_pitfalls"),
+            "Common Pitfalls"
+        );
+    }
+
+    #[test]
+    fn test_format_category_name_multiple_words() {
+        assert_eq!(
+            format_category_name("strategy_for_complex_requests"),
+            "Strategy For Complex Requests"
+        );
+    }
+
+    #[test]
+    fn test_format_category_name_empty() {
+        assert_eq!(format_category_name(""), "");
+    }
+
+    // ── render_yaml_value ──────────────────────────────────────────────
+
+    #[test]
+    fn test_render_yaml_value_string() {
+        let val = serde_yaml::Value::String("hello world".into());
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert_eq!(out, "hello world\n");
+    }
+
+    #[test]
+    fn test_render_yaml_value_number() {
+        let val = serde_yaml::Value::Number(serde_yaml::Number::from(42));
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn test_render_yaml_value_mapping() {
+        let yaml = "process: CNC Milling\nmin_wall: 1.0";
+        let val: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert!(out.contains("**Process**"));
+        assert!(out.contains("CNC Milling"));
+        assert!(out.contains("**Min Wall**"));
+    }
+
+    #[test]
+    fn test_render_yaml_value_sequence() {
+        let yaml = "- item one\n- item two";
+        let val: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert!(out.contains("- item one\n"));
+        assert!(out.contains("- item two\n"));
+    }
+
+    #[test]
+    fn test_render_yaml_value_nested() {
+        let yaml = "outer:\n  inner_key: inner_value";
+        let val: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert!(out.contains("**Outer**"));
+        assert!(out.contains("**Inner Key**"));
+        assert!(out.contains("inner_value"));
+    }
+
+    #[test]
+    fn test_render_yaml_value_bool() {
+        let val = serde_yaml::Value::Bool(true);
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert_eq!(out, "true\n");
+    }
+
+    #[test]
+    fn test_render_yaml_value_null() {
+        let val = serde_yaml::Value::Null;
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 0);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_render_yaml_value_depth_indentation() {
+        let val = serde_yaml::Value::String("indented".into());
+        let mut out = String::new();
+        render_yaml_value(&mut out, &val, 2);
+        assert_eq!(out, "    indented\n");
+    }
+
+    // ── build_system_prompt — new sections present ─────────────────────
+
+    #[test]
+    fn test_prompt_contains_capabilities_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Capabilities & Limitations"),
+            "prompt should have capabilities section"
+        );
+    }
+
+    #[test]
+    fn test_prompt_contains_advanced_techniques_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Advanced Techniques"),
+            "prompt should have advanced techniques section"
+        );
+    }
+
+    #[test]
+    fn test_prompt_contains_validation_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Validation Checks"),
+            "prompt should have validation section"
+        );
+        assert!(prompt.contains("### Pre-Generation"));
+        assert!(prompt.contains("### Post-Generation"));
+    }
+
+    #[test]
+    fn test_prompt_contains_manufacturing_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Manufacturing Awareness"),
+            "prompt should have manufacturing section"
+        );
+    }
+
+    #[test]
+    fn test_prompt_capabilities_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Check that the capabilities content is actually rendered
+        assert!(prompt.contains("organic"));
+        assert!(prompt.contains("NURBS"));
+        assert!(prompt.contains("Prefer simpler geometry"));
+    }
+
+    #[test]
+    fn test_prompt_advanced_techniques_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("revolve()"));
+        assert!(prompt.contains("sweep()"));
+        assert!(prompt.contains("loft()"));
+        assert!(prompt.contains("Fillet radius larger than edge"));
+    }
+
+    #[test]
+    fn test_prompt_validation_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Validation checks should be rendered with bold check names
+        assert!(prompt.contains("**Dimensions Realistic**"));
+        assert!(prompt.contains("**Mesh Watertight**"));
+    }
+
+    #[test]
+    fn test_prompt_manufacturing_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Manufacturing data from default.yaml
+        assert!(prompt.contains("3d Printing") || prompt.contains("3D") || prompt.contains("3d_printing"));
+    }
+
+    // ── Existing sections still present ────────────────────────────────
+
+    #[test]
+    fn test_prompt_still_has_code_requirements() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Code Requirements"));
+        assert!(prompt.contains("import cadquery as cq"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_coordinate_system() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Coordinate System"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_spatial_rules() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Spatial Rules"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_cookbook() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## CadQuery Cookbook"));
+        assert!(prompt.contains("### Recipe 1:"));
+        // New recipes should also be present
+        assert!(prompt.contains("Revolve"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_error_handling() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Error Handling"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_response_format() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Response Format"));
+    }
+
+    #[test]
+    fn test_prompt_still_has_code_style() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("## Code Style"));
+    }
+
+    // ── All 3 presets produce valid prompts ─────────────────────────────
+
+    #[test]
+    fn test_all_presets_produce_prompt_with_new_sections() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Capabilities & Limitations"),
+                "preset {:?} missing capabilities",
+                preset
+            );
+            assert!(
+                prompt.contains("## Advanced Techniques"),
+                "preset {:?} missing advanced techniques",
+                preset
+            );
+            assert!(
+                prompt.contains("## Validation Checks"),
+                "preset {:?} missing validation",
+                preset
+            );
+            assert!(
+                prompt.contains("## Manufacturing Awareness"),
+                "preset {:?} missing manufacturing",
+                preset
+            );
+            assert!(
+                prompt.contains("## CadQuery Cookbook"),
+                "preset {:?} missing cookbook",
+                preset
+            );
+        }
+    }
+
+    // ── Section ordering ───────────────────────────────────────────────
+
+    #[test]
+    fn test_prompt_section_order() {
+        let prompt = build_system_prompt_for_preset(None);
+        let caps_pos = prompt.find("## Capabilities & Limitations").unwrap();
+        let tech_pos = prompt.find("## Advanced Techniques").unwrap();
+        let style_pos = prompt.find("## Code Style").unwrap();
+        let valid_pos = prompt.find("## Validation Checks").unwrap();
+        let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
+        let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
+        let resp_pos = prompt.find("## Response Format").unwrap();
+
+        // Capabilities before Advanced Techniques
+        assert!(caps_pos < tech_pos, "Capabilities should come before Advanced Techniques");
+        // Advanced Techniques before Code Style
+        assert!(tech_pos < style_pos, "Advanced Techniques should come before Code Style");
+        // Validation after Code Style
+        assert!(style_pos < valid_pos, "Code Style should come before Validation");
+        // Cookbook after Validation
+        assert!(valid_pos < cook_pos, "Validation should come before Cookbook");
+        // Manufacturing after Cookbook
+        assert!(cook_pos < mfg_pos, "Cookbook should come before Manufacturing");
+        // Response Format last
+        assert!(mfg_pos < resp_pos, "Manufacturing should come before Response Format");
+    }
+
+    // ── default_empty produces minimal prompt ──────────────────────────
+
+    #[test]
+    fn test_empty_rules_produce_minimal_prompt() {
+        let rules = AgentRules::default_empty();
+        let prompt = build_system_prompt(&rules);
+        // Should have the hard-coded intro and requirements
+        assert!(prompt.contains("You are a CAD AI assistant"));
+        assert!(prompt.contains("## Code Requirements"));
+        // Should NOT have optional sections
+        assert!(!prompt.contains("## Capabilities"));
+        assert!(!prompt.contains("## Advanced Techniques"));
+        assert!(!prompt.contains("## Validation Checks"));
+        assert!(!prompt.contains("## Manufacturing Awareness"));
+    }
+
+    // ── Category name formatting in spatial rules ──────────────────────
+
+    #[test]
+    fn test_spatial_rules_use_formatted_names() {
+        let prompt = build_system_prompt_for_preset(None);
+        // spatial_rules keys like "boolean_cut" should appear as "Boolean Cut"
+        assert!(
+            prompt.contains("Boolean Cut") || prompt.contains("boolean_cut"),
+            "spatial rules should have formatted category names"
+        );
+    }
 }

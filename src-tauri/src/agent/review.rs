@@ -15,6 +15,18 @@ Review the code against this checklist:
 6. Is the final result assigned to 'result'?
 7. Does the code import cadquery as cq?
 
+## CadQuery-Specific Pitfall Checks
+8. Fillet radius must be SMALLER than the shortest edge it touches — if fillet(r) is called after a boolean, ensure r won't exceed any newly-created short edges
+9. Shell fails on bodies with very thin features or complex topology — if shell() is used after many booleans, flag as risky
+10. Revolve profiles must be entirely on ONE side of the rotation axis — check that no profile point crosses the axis
+11. Sweep paths must produce a proper Wire object — ensure .wire() is called or the path is built with .lineTo()/.arc() chains
+12. Boolean operations (union/cut/intersect) require OVERLAPPING geometry — bodies that don't touch produce no effect (silent failure)
+13. .translate() takes a SINGLE tuple argument (x, y, z), NOT three separate arguments
+14. .polarArray() must be called on a workplane context, not directly on a solid
+15. Loft profiles should have compatible topology (similar number of edges) for clean results
+16. Apply fillets and chamfers LAST, after all boolean operations are complete
+17. If a complex operation (sweep, loft, shell on complex body) is likely to fail at runtime, suggest a simpler alternative using basic primitives + booleans
+
 If the code is correct, respond with exactly:
 APPROVED
 
@@ -116,5 +128,126 @@ fn parse_review_response(response: &str, original_code: &str) -> ReviewResult {
         was_modified: false,
         code: original_code.to_string(),
         explanation: "Review completed (no changes).".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Review prompt content ──────────────────────────────────────────
+
+    #[test]
+    fn test_review_prompt_has_original_checklist() {
+        assert!(REVIEW_SYSTEM_PROMPT.contains("ALL requested features"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("dimensions correct"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("boolean cuts"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("face selectors"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("assigned to 'result'"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("import cadquery as cq"));
+    }
+
+    #[test]
+    fn test_review_prompt_has_pitfall_checks() {
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("Fillet radius must be SMALLER"),
+            "should check fillet radius"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("Shell fails on bodies with very thin features"),
+            "should check shell on thin features"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("Revolve profiles must be entirely on ONE side"),
+            "should check revolve axis"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("Sweep paths must produce a proper Wire"),
+            "should check sweep wire"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("OVERLAPPING geometry"),
+            "should check boolean overlap"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains(".translate() takes a SINGLE tuple"),
+            "should check translate signature"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains(".polarArray() must be called on a workplane"),
+            "should check polarArray context"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("fillets and chamfers LAST"),
+            "should check fillets-last rule"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("suggest a simpler alternative"),
+            "should suggest simplification"
+        );
+    }
+
+    #[test]
+    fn test_review_prompt_has_numbered_items_8_through_17() {
+        // Verify the new items are numbered 8-17
+        for i in 8..=17 {
+            assert!(
+                REVIEW_SYSTEM_PROMPT.contains(&format!("{}.", i)),
+                "should contain item number {}",
+                i
+            );
+        }
+    }
+
+    // ── parse_review_response ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_approved() {
+        let result = parse_review_response("APPROVED", "original code");
+        assert!(!result.was_modified);
+        assert_eq!(result.code, "original code");
+        assert!(result.explanation.contains("approved"));
+    }
+
+    #[test]
+    fn test_parse_approved_with_extra_text() {
+        let result =
+            parse_review_response("APPROVED\nThe code looks good.", "original code");
+        assert!(!result.was_modified);
+        assert_eq!(result.code, "original code");
+    }
+
+    #[test]
+    fn test_parse_issues_with_fixed_code() {
+        let response = r#"ISSUES:
+- Fillet radius too large for the short edges created by the boolean
+- translate() called with three arguments instead of a tuple
+
+FIXED CODE:
+```python
+import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+```"#;
+        let result = parse_review_response(response, "old code");
+        assert!(result.was_modified);
+        assert!(result.code.contains("import cadquery as cq"));
+        assert!(result.explanation.contains("Fillet radius"));
+    }
+
+    #[test]
+    fn test_parse_fallback_on_garbage() {
+        let result = parse_review_response("some random text", "original code");
+        assert!(!result.was_modified);
+        assert_eq!(result.code, "original code");
+        assert!(result.explanation.contains("no changes"));
+    }
+
+    #[test]
+    fn test_parse_issues_without_code_block() {
+        let response = "ISSUES:\n- Something is wrong\n\nBut I didn't provide fixed code.";
+        let result = parse_review_response(response, "original code");
+        // No code block means fallback to original
+        assert!(!result.was_modified);
+        assert_eq!(result.code, "original code");
     }
 }

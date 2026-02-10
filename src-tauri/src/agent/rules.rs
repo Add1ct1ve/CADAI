@@ -17,6 +17,8 @@ pub struct AgentRules {
     pub on_error: Option<HashMap<String, Vec<String>>>,
     pub code_style: Option<CodeStyle>,
     pub manufacturing: Option<serde_yaml::Value>,
+    pub capabilities: Option<HashMap<String, Vec<String>>>,
+    pub advanced_techniques: Option<HashMap<String, Vec<String>>>,
     pub response_format: Option<HashMap<String, Vec<String>>>,
     pub cookbook: Option<Vec<CookbookEntry>>,
 }
@@ -64,9 +66,9 @@ pub struct CodeStyle {
     pub example: Option<String>,
 }
 
-const DEFAULT_YAML: &str = include_str!("../../../agent-rules/default.yaml");
-const PRINTING_YAML: &str = include_str!("../../../agent-rules/printing-focused.yaml");
-const CNC_YAML: &str = include_str!("../../../agent-rules/cnc-focused.yaml");
+pub(crate) const DEFAULT_YAML: &str = include_str!("../../../agent-rules/default.yaml");
+pub(crate) const PRINTING_YAML: &str = include_str!("../../../agent-rules/printing-focused.yaml");
+pub(crate) const CNC_YAML: &str = include_str!("../../../agent-rules/cnc-focused.yaml");
 
 impl AgentRules {
     /// Load agent rules from a YAML file.
@@ -102,8 +104,249 @@ impl AgentRules {
             on_error: None,
             code_style: None,
             manufacturing: None,
+            capabilities: None,
+            advanced_techniques: None,
             response_format: None,
             cookbook: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── YAML Deserialization ────────────────────────────────────────────
+
+    #[test]
+    fn test_default_yaml_parses() {
+        let rules: AgentRules = serde_yaml::from_str(DEFAULT_YAML)
+            .expect("default.yaml should parse without errors");
+        assert_eq!(rules.version, Some(1));
+    }
+
+    #[test]
+    fn test_printing_yaml_parses() {
+        let rules: AgentRules = serde_yaml::from_str(PRINTING_YAML)
+            .expect("printing-focused.yaml should parse without errors");
+        assert_eq!(rules.version, Some(1));
+    }
+
+    #[test]
+    fn test_cnc_yaml_parses() {
+        let rules: AgentRules = serde_yaml::from_str(CNC_YAML)
+            .expect("cnc-focused.yaml should parse without errors");
+        assert_eq!(rules.version, Some(1));
+    }
+
+    // ── from_preset() ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_from_preset_default() {
+        let rules = AgentRules::from_preset(None).expect("default preset should load");
+        assert!(rules.capabilities.is_some());
+        assert!(rules.advanced_techniques.is_some());
+    }
+
+    #[test]
+    fn test_from_preset_printing() {
+        let rules =
+            AgentRules::from_preset(Some("3d-printing")).expect("printing preset should load");
+        assert!(rules.capabilities.is_some());
+        assert!(rules.advanced_techniques.is_some());
+    }
+
+    #[test]
+    fn test_from_preset_cnc() {
+        let rules = AgentRules::from_preset(Some("cnc")).expect("cnc preset should load");
+        assert!(rules.capabilities.is_some());
+        assert!(rules.advanced_techniques.is_some());
+    }
+
+    #[test]
+    fn test_from_preset_unknown_falls_back_to_default() {
+        let rules = AgentRules::from_preset(Some("laser"))
+            .expect("unknown preset should fall back to default");
+        assert_eq!(rules.version, Some(1));
+        assert!(rules.capabilities.is_some());
+    }
+
+    // ── Capabilities section ───────────────────────────────────────────
+
+    #[test]
+    fn test_default_capabilities_has_all_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let caps = rules.capabilities.as_ref().unwrap();
+        assert!(caps.contains_key("excels_at"), "missing excels_at");
+        assert!(caps.contains_key("limitations"), "missing limitations");
+        assert!(
+            caps.contains_key("strategy_for_complex_requests"),
+            "missing strategy"
+        );
+    }
+
+    #[test]
+    fn test_capabilities_limitations_mention_organic() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let caps = rules.capabilities.as_ref().unwrap();
+        let limitations = caps.get("limitations").unwrap();
+        assert!(
+            limitations.iter().any(|l| l.contains("organic")),
+            "limitations should mention organic surfaces"
+        );
+    }
+
+    // ── Advanced Techniques section ────────────────────────────────────
+
+    #[test]
+    fn test_default_advanced_techniques_has_all_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let tech = rules.advanced_techniques.as_ref().unwrap();
+        assert!(
+            tech.contains_key("profile_based_modeling"),
+            "missing profile_based_modeling"
+        );
+        assert!(
+            tech.contains_key("approximating_organic_shapes"),
+            "missing approximating_organic_shapes"
+        );
+        assert!(
+            tech.contains_key("common_pitfalls"),
+            "missing common_pitfalls"
+        );
+    }
+
+    #[test]
+    fn test_common_pitfalls_mention_fillet_radius() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let tech = rules.advanced_techniques.as_ref().unwrap();
+        let pitfalls = tech.get("common_pitfalls").unwrap();
+        assert!(
+            pitfalls.iter().any(|p| p.contains("Fillet radius")),
+            "pitfalls should mention fillet radius"
+        );
+    }
+
+    // ── Cookbook ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_cookbook_has_20_recipes() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let cookbook = rules.cookbook.as_ref().unwrap();
+        assert_eq!(cookbook.len(), 20, "cookbook should have 20 recipes");
+    }
+
+    #[test]
+    fn test_printing_cookbook_has_20_recipes() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let cookbook = rules.cookbook.as_ref().unwrap();
+        assert_eq!(cookbook.len(), 20, "printing cookbook should have 20 recipes");
+    }
+
+    #[test]
+    fn test_cnc_cookbook_has_20_recipes() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let cookbook = rules.cookbook.as_ref().unwrap();
+        assert_eq!(cookbook.len(), 20, "cnc cookbook should have 20 recipes");
+    }
+
+    #[test]
+    fn test_new_cookbook_recipes_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let cookbook = rules.cookbook.as_ref().unwrap();
+        let titles: Vec<&str> = cookbook.iter().map(|e| e.title.as_str()).collect();
+        assert!(titles.iter().any(|t| t.contains("Revolve")));
+        assert!(titles.iter().any(|t| t.contains("Sweep")));
+        assert!(titles.iter().any(|t| t.contains("Loft")));
+        assert!(titles.iter().any(|t| t.contains("Spline")));
+        assert!(titles.iter().any(|t| t.contains("Text")));
+        assert!(titles.iter().any(|t| t.contains("Circular pattern")));
+        assert!(titles.iter().any(|t| t.contains("helmet")));
+        assert!(titles.iter().any(|t| t.contains("Countersink")));
+        assert!(titles.iter().any(|t| t.contains("Multi-body")));
+    }
+
+    #[test]
+    fn test_all_cookbook_recipes_have_import_and_result() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let cookbook = rules.cookbook.as_ref().unwrap();
+            for entry in cookbook {
+                assert!(
+                    entry.code.contains("import cadquery"),
+                    "Recipe '{}' in preset {:?} missing 'import cadquery'",
+                    entry.title,
+                    preset
+                );
+                assert!(
+                    entry.code.contains("result"),
+                    "Recipe '{}' in preset {:?} missing 'result' variable",
+                    entry.title,
+                    preset
+                );
+            }
+        }
+    }
+
+    // ── Validation & Manufacturing ─────────────────────────────────────
+
+    #[test]
+    fn test_all_presets_have_validation() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            assert!(
+                rules.validation.is_some(),
+                "preset {:?} should have validation",
+                preset
+            );
+            let v = rules.validation.as_ref().unwrap();
+            assert!(v.pre_generation.is_some());
+            assert!(v.post_generation.is_some());
+        }
+    }
+
+    #[test]
+    fn test_all_presets_have_manufacturing() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            assert!(
+                rules.manufacturing.is_some(),
+                "preset {:?} should have manufacturing",
+                preset
+            );
+        }
+    }
+
+    // ── default_empty() ────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_empty_has_none_for_new_fields() {
+        let rules = AgentRules::default_empty();
+        assert!(rules.capabilities.is_none());
+        assert!(rules.advanced_techniques.is_none());
+    }
+
+    // ── Print-specific extras ──────────────────────────────────────────
+
+    #[test]
+    fn test_printing_has_print_specific_capability() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let caps = rules.capabilities.as_ref().unwrap();
+        let excels = caps.get("excels_at").unwrap();
+        assert!(
+            excels.iter().any(|e| e.contains("Print-ready")),
+            "printing preset should mention print-ready models"
+        );
+    }
+
+    #[test]
+    fn test_cnc_has_cnc_specific_capability() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let caps = rules.capabilities.as_ref().unwrap();
+        let excels = caps.get("excels_at").unwrap();
+        assert!(
+            excels.iter().any(|e| e.contains("CNC-ready")),
+            "cnc preset should mention CNC-ready models"
+        );
     }
 }
