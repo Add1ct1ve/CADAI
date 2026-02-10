@@ -94,6 +94,9 @@ export interface StructuredError {
   message: string;
   line_number: number | null;
   suggestion: string | null;
+  category: { kind: string; sub_kind?: string };
+  failing_operation: string | null;
+  context: { source_line: string | null; failing_parameters: string | null } | null;
 }
 
 // Multi-part parallel generation types
