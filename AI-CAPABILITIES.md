@@ -477,16 +477,16 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 >
 > **Files affected:** `src/lib/components/Chat.svelte`, `src/lib/components/` (new components), `src/lib/types/index.ts`, `src/lib/stores/`
 
-### 5.1 Interactive Design Plan Editor
+### 5.1 Interactive Design Plan Editor ✅
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Show design plan in an editable panel | ⬜ | Before code gen starts, show the geometry plan |
-| Edit plan text inline | ⬜ | User can modify dimensions, features, approach |
-| Approve/reject plan | ⬜ | "Generate Code" button only after user approves |
-| Auto-approve option | ⬜ | Setting to skip manual approval for speed |
-| Plan diff on re-generation | ⬜ | If user modifies request, show what changed in plan |
-| Plan templates | ⬜ | Quick-start templates for common object types |
+| Show design plan in an editable panel | ✅ | Before code gen starts, show the geometry plan |
+| Edit plan text inline | ✅ | User can modify dimensions, features, approach |
+| Approve/reject plan | ✅ | "Generate Code" button only after user approves |
+| Auto-approve option | ✅ | Setting to skip manual approval for speed |
+| Plan diff on re-generation | ✅ | If user modifies request, show what changed in plan |
+| Plan templates | ✅ | Quick-start templates for common object types |
 
 **Implementation notes:**
 - New component: `DesignPlanEditor.svelte`
@@ -498,16 +498,16 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ---
 
-### 5.2 Generation Confidence Indicator
+### 5.2 Generation Confidence Indicator ✅
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Predict success likelihood | ⬜ | Based on request complexity and operation types |
-| Green/yellow/red badge | ⬜ | Shown before and after generation |
-| Complexity scoring algorithm | ⬜ | Count: operations, booleans, fillets, sweeps, lofts |
-| Known-pattern detection | ⬜ | Cookbook match = green, novel combination = yellow |
-| Warning messages for yellow/red | ⬜ | "This design uses loft + shell — may need retries" |
-| Post-generation confidence update | ⬜ | Update badge based on reviewer result |
+| Predict success likelihood | ✅ | Based on plan risk score + cookbook familiarity |
+| Green/yellow/red badge | ✅ | Compact badge during streaming, expanded after generation |
+| Complexity scoring algorithm | ✅ | base = 100-(risk*10), cookbook bonus ±15, clamped 0-100 |
+| Known-pattern detection | ✅ | `match_cookbook()` with operation overlap + title word boost |
+| Warning messages for yellow/red | ✅ | Loft+shell, novel combo, high complexity warnings |
+| Post-generation confidence update | ✅ | Frontend adjusts score on ReviewComplete/ValidationSuccess/ValidationFailed |
 
 **Implementation notes:**
 - New utility module: `src-tauri/src/agent/confidence.rs`
@@ -707,8 +707,8 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 4.2 Iterative Refinement | ✅ | High | High | Complex objects succeed more often |
 | 4.3 Code Modification | ✅ | Medium | High | "Make it taller" is the #1 follow-up request |
 | 4.4 Multi-Model Consensus | ✅ | Medium | Medium | Same-provider dual-temperature consensus |
-| 5.1 Plan Editor | P2 | Medium | Medium | User control over geometry planning |
-| 5.2 Confidence Indicator | P2 | Low | Low | Manages expectations |
+| 5.1 Plan Editor | ✅ | Medium | Medium | User control over geometry planning |
+| 5.2 Confidence Indicator | ✅ | Low | Low | Manages expectations |
 | 5.3 Multi-Part Progress | P2 | Medium | Medium | Better visibility for multi-part |
 | 5.4 Generation History | P2 | Medium | Medium | Compare and roll back attempts |
 | 6.1 Design Patterns | P2 | Medium | Medium | Higher-level templates |

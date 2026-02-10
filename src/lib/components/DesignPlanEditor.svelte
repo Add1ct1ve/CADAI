@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PlanTemplate, DiffLine } from '$lib/types';
+  import ConfidenceBadge from './ConfidenceBadge.svelte';
 
   interface Props {
     planText: string;
@@ -10,6 +11,9 @@
     onApprove: (editedPlanText: string) => void;
     onReject: () => void;
     templates: PlanTemplate[];
+    confidenceLevel?: 'high' | 'medium' | 'low';
+    confidenceScore?: number;
+    confidenceMessage?: string;
   }
 
   let {
@@ -21,6 +25,9 @@
     onApprove,
     onReject,
     templates,
+    confidenceLevel,
+    confidenceScore,
+    confidenceMessage,
   }: Props = $props();
 
   let editedText = $state(planText);
@@ -81,9 +88,15 @@
 <div class="plan-editor">
   <div class="plan-editor-header">
     <span class="plan-editor-title">Geometry Design Plan</span>
-    <span class="risk-badge {riskBadgeClass(riskScore)}">
-      Risk: {riskScore}/10
-    </span>
+    <div class="header-badges">
+      {#if confidenceLevel}
+        <ConfidenceBadge level={confidenceLevel} score={confidenceScore ?? 0}
+          message={confidenceMessage} compact />
+      {/if}
+      <span class="risk-badge {riskBadgeClass(riskScore)}">
+        Risk: {riskScore}/10
+      </span>
+    </div>
   </div>
 
   <div class="plan-editor-toolbar">
@@ -160,6 +173,12 @@
     justify-content: space-between;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .header-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
   .plan-editor-title {

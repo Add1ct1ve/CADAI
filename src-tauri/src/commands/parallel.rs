@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::ai::message::ChatMessage;
 use crate::ai::cost;
 use crate::ai::provider::{StreamDelta, TokenUsage};
+use crate::agent::confidence;
 use crate::agent::consensus;
 use crate::agent::design;
 use crate::agent::executor;
@@ -54,6 +55,14 @@ pub enum MultiPartEvent {
         warnings: Vec<String>,
         is_valid: bool,
         rejected_reason: Option<String>,
+    },
+    /// Generation confidence assessment based on plan risk + cookbook matching.
+    ConfidenceAssessment {
+        level: String,
+        score: u32,
+        cookbook_matches: Vec<String>,
+        warnings: Vec<String>,
+        message: String,
     },
     PlanStatus {
         message: String,
@@ -439,6 +448,38 @@ async fn run_design_plan_phase(
     let _ = on_event.send(MultiPartEvent::DesignPlan {
         plan_text: design_plan.text.clone(),
     });
+
+    // Compute and emit confidence assessment
+    {
+        let confidence_rules =
+            crate::agent::rules::AgentRules::from_preset(config.agent_rules_preset.as_deref())
+                .ok();
+        let cookbook_ref = confidence_rules
+            .as_ref()
+            .and_then(|r| r.cookbook.as_deref());
+
+        let final_validation = design::PlanValidation {
+            is_valid: final_is_valid,
+            risk_score: final_risk_score,
+            warnings: final_warnings.clone(),
+            rejected_reason: None,
+            extracted_operations: design::extract_operations_from_text(&design_plan.text),
+            extracted_dimensions: vec![],
+        };
+
+        let conf = confidence::assess_confidence(&final_validation, cookbook_ref);
+        let _ = on_event.send(MultiPartEvent::ConfidenceAssessment {
+            level: match conf.level {
+                confidence::ConfidenceLevel::High => "high".to_string(),
+                confidence::ConfidenceLevel::Medium => "medium".to_string(),
+                confidence::ConfidenceLevel::Low => "low".to_string(),
+            },
+            score: conf.score,
+            cookbook_matches: conf.cookbook_matches.iter().map(|m| m.title.clone()).collect(),
+            warnings: conf.warnings.clone(),
+            message: conf.message.clone(),
+        });
+    }
 
     let result = DesignPlanResult {
         plan_text: design_plan.text.clone(),
