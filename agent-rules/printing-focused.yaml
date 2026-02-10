@@ -1509,3 +1509,163 @@ cookbook:
       tag = tag.faces(">Z").workplane().center(-TAG_W / 2 + 8, 0).hole(RING_HOLE_D)
       # Text on top face
       result = tag.faces(">Z").workplane().center(5, 0).text("TAG", 8.0, 0.5)
+
+# =============================================================================
+# ANTI-PATTERN LIBRARY — Common CadQuery Mistakes
+# =============================================================================
+# Each entry shows wrong code, the error it produces, why it fails, and the fix.
+
+anti_patterns:
+  - title: "Fillet before boolean"
+    wrong_code: |
+      box = cq.Workplane("XY").box(20, 20, 10).edges("|Z").fillet(2.0)
+      result = box.union(cq.Workplane("XY").workplane(offset=10).box(10, 10, 5))
+    error_message: "StdFail_NotDone: BRep_Tool — filleted edges conflict with boolean operation"
+    explanation: "Fillet modifies edge topology. When you union after filleting, the kernel cannot reconcile the changed edges. Always apply fillets and chamfers as the LAST operation, after all booleans are complete."
+    correct_code: |
+      box = cq.Workplane("XY").box(20, 20, 10)
+      combined = box.union(cq.Workplane("XY").workplane(offset=10).box(10, 10, 5))
+      result = combined.edges("|Z").fillet(2.0)
+
+  - title: "Shell on complex boolean body"
+    wrong_code: |
+      body = cq.Workplane("XY").box(40, 40, 20)
+      for i in range(5):
+          body = body.union(cq.Workplane("XY").center(i*8, 0).circle(3).extrude(25))
+      result = body.faces(">Z").shell(-2.0)
+    error_message: "StdFail_NotDone: BRep_API — shell operation failed on complex body"
+    explanation: "Shell struggles with bodies that have many boolean seams. The kernel cannot offset complex intersecting surfaces reliably. Either shell EARLY (before booleans) or use manual hollowing by cutting a slightly smaller solid from the inside."
+    correct_code: |
+      body = cq.Workplane("XY").box(40, 40, 20)
+      # Shell the simple box FIRST, then add features
+      body = body.faces(">Z").shell(-2.0)
+      for i in range(5):
+          body = body.union(cq.Workplane("XY").center(i*8, 0).circle(3).extrude(25))
+      result = body
+
+  - title: "Revolve profile crossing axis"
+    wrong_code: |
+      pts = [(-5, 0), (15, 0), (15, 30), (-5, 30)]
+      result = (
+          cq.Workplane("XZ").polyline(pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+    error_message: "Standard_ConstructionError: profile crosses the revolve axis"
+    explanation: "The profile extends to X=-5, which crosses the revolve axis at X=0. ALL profile points must be on the same side of the axis (positive X for revolve around Y). Move the profile so its minimum X coordinate is >= 0."
+    correct_code: |
+      pts = [(0, 0), (15, 0), (15, 30), (0, 30)]
+      result = (
+          cq.Workplane("XZ").polyline(pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+
+  - title: "Boolean on non-overlapping bodies"
+    wrong_code: |
+      plate = cq.Workplane("XY").box(40, 40, 5)
+      # Cutter sits exactly on top surface — does not penetrate
+      cutter = cq.Workplane("XY").workplane(offset=5).box(10, 10, 10)
+      result = plate.cut(cutter)
+    error_message: "No error — but the cut has no visible effect (silent no-op)"
+    explanation: "The cutting tool must OVERLAP the target body. If it only touches a face or sits outside, the boolean produces no change. Always extend the cutter BEYOND the target surface by at least 0.1mm."
+    correct_code: |
+      plate = cq.Workplane("XY").box(40, 40, 5)
+      # Cutter extends 1mm below the top surface into the plate
+      cutter = cq.Workplane("XY").workplane(offset=4).box(10, 10, 10)
+      result = plate.cut(cutter)
+
+  - title: "translate() wrong signature"
+    wrong_code: |
+      box = cq.Workplane("XY").box(10, 10, 10)
+      result = box.translate(10, 20, 0)
+    error_message: "TypeError: translate() takes 2 positional arguments but 4 were given"
+    explanation: "CadQuery's translate() expects a SINGLE tuple argument, not three separate numbers. The signature is .translate((x, y, z)) with double parentheses."
+    correct_code: |
+      box = cq.Workplane("XY").box(10, 10, 10)
+      result = box.translate((10, 20, 0))
+
+  - title: "Loft with mismatched profiles"
+    wrong_code: |
+      result = (
+          cq.Workplane("XY").rect(40, 40)
+          .workplane(offset=50).circle(20)
+          .loft()
+      )
+    error_message: "Loft produces twisted or self-intersecting geometry"
+    explanation: "Lofting between profiles with very different edge counts (4-sided rect to smooth circle) can produce twisted results. Use ruled=True for a cleaner linear transition, or use similar profile types (e.g. roundedRect to circle, or polygons with similar vertex counts)."
+    correct_code: |
+      result = (
+          cq.Workplane("XY").rect(40, 40)
+          .workplane(offset=50).circle(20)
+          .loft(ruled=True)
+      )
+
+  - title: "Fillet radius too large"
+    wrong_code: |
+      result = (
+          cq.Workplane("XY").box(10, 10, 5)
+          .edges("|Z").fillet(8.0)
+      )
+    error_message: "StdFail_NotDone: BRep_Tool — fillet radius exceeds edge length"
+    explanation: "The box is 10mm wide but the fillet radius is 8mm. The fillet radius must be LESS than half the shortest adjacent edge. For a 10mm edge, max safe fillet is ~4.5mm. Always keep fillet radius well below half the smallest dimension."
+    correct_code: |
+      result = (
+          cq.Workplane("XY").box(10, 10, 5)
+          .edges("|Z").fillet(2.0)
+      )
+
+  - title: "Sweep path without .wire()"
+    wrong_code: |
+      path = (
+          cq.Workplane("XZ")
+          .moveTo(0, 0).lineTo(0, 30)
+          .threePointArc((15, 45), (30, 45))
+      )
+      result = cq.Workplane("XY").circle(3).sweep(path)
+    error_message: "ValueError: Cannot sweep — path is not a Wire object"
+    explanation: "Sweep requires a Wire object as path, but chaining line/arc operations produces edges, not a wire. You must call .wire() at the end to combine edges into a single wire before sweeping."
+    correct_code: |
+      path = (
+          cq.Workplane("XZ")
+          .moveTo(0, 0).lineTo(0, 30)
+          .threePointArc((15, 45), (30, 45))
+          .wire()
+      )
+      result = cq.Workplane("XY").circle(3).sweep(path)
+
+  - title: "Too many chained booleans"
+    wrong_code: |
+      base = cq.Workplane("XY").box(80, 80, 5)
+      for i in range(15):
+          col = cq.Workplane("XY").center(i*5 - 35, 0).circle(2).extrude(20)
+          base = base.union(col)
+      result = base.edges("|Z").fillet(1.0)
+    error_message: "OCP kernel crash or tolerance drift — geometry becomes invalid after many booleans"
+    explanation: "Each boolean operation accumulates floating-point tolerance errors. After 10+ unions the geometry may become invalid, causing downstream operations (fillet, shell) to crash. Merge in groups of 3-4, or simplify the design to use fewer boolean operations."
+    correct_code: |
+      base = cq.Workplane("XY").box(80, 80, 5)
+      # Build columns as a single compound, then union once
+      cols = cq.Workplane("XY").pushPoints([(i*5 - 35, 0) for i in range(15)])
+      cols = cols.circle(2).extrude(20)
+      result = base.union(cols)
+
+  - title: "Hole on wrong face"
+    wrong_code: |
+      # Intent: drill holes on TOP face of a box
+      result = (
+          cq.Workplane("XY").box(40, 40, 10)
+          .faces(">X")  # WRONG: this selects the front face, not top
+          .workplane()
+          .pushPoints([(10, 0), (-10, 0)])
+          .hole(5.0)
+      )
+    error_message: "No crash — but holes appear on the wrong face (front instead of top)"
+    explanation: "Face selectors use axis directions: >Z = top, <Z = bottom, >X = front, <X = back, >Y = right, <Y = left. Mixing up axes puts features on the wrong face. Always verify: >Z means the face with the highest Z value (top)."
+    correct_code: |
+      # Correct: use >Z to select the TOP face
+      result = (
+          cq.Workplane("XY").box(40, 40, 10)
+          .faces(">Z")  # CORRECT: top face
+          .workplane()
+          .pushPoints([(10, 0), (-10, 0)])
+          .hole(5.0)
+      )

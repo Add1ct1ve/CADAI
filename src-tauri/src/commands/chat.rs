@@ -20,6 +20,9 @@ use crate::state::AppState;
 pub struct StreamEvent {
     pub delta: String,
     pub done: bool,
+    /// Optional event type: "design_plan" for geometry plans, defaults to normal response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
 }
 
 /// Result returned by the auto_retry command.
@@ -125,6 +128,7 @@ pub(crate) async fn stream_ai_response(
         let _ = on_event.send(StreamEvent {
             delta: delta.content,
             done: delta.done,
+            event_type: None,
         });
     }
 

@@ -74,6 +74,7 @@ export interface PythonStatus {
 export interface StreamEvent {
   delta: string;
   done: boolean;
+  event_type?: string;
 }
 
 export interface RustChatMessage {
@@ -111,6 +112,7 @@ export interface PartSpec {
 }
 
 export type MultiPartEvent =
+  | { kind: 'DesignPlan'; plan_text: string }
   | { kind: 'PlanStatus'; message: string }
   | { kind: 'PlanResult'; plan: GenerationPlan }
   | { kind: 'SingleDelta'; delta: string; done: boolean }

@@ -144,6 +144,18 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         prompt.push('\n');
     }
 
+    // -- Design Thinking (mandatory pre-generation reasoning) --
+    if let Some(ref dt) = rules.design_thinking {
+        prompt.push_str("## Design Thinking (Required Before Code)\n");
+        for (category, items) in dt {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+        }
+        prompt.push('\n');
+    }
+
     // -- Capabilities & Limitations --
     if let Some(ref caps) = rules.capabilities {
         prompt.push_str("## Capabilities & Limitations\n");
@@ -259,6 +271,29 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
             prompt.push_str("```python\n");
             prompt.push_str(&entry.code);
             if !entry.code.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("```\n\n");
+        }
+    }
+
+    // -- Anti-Patterns (common mistakes to avoid) --
+    if let Some(ref anti_patterns) = rules.anti_patterns {
+        prompt.push_str("## Common Anti-Patterns — Mistakes to Avoid\n");
+        prompt.push_str("These are common CadQuery mistakes. Study the wrong code, understand why it fails, and use the correct approach instead.\n\n");
+        for (i, entry) in anti_patterns.iter().enumerate() {
+            prompt.push_str(&format!("### Anti-Pattern {}: {}\n", i + 1, entry.title));
+            prompt.push_str("**Wrong:**\n```python\n");
+            prompt.push_str(&entry.wrong_code);
+            if !entry.wrong_code.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("```\n");
+            prompt.push_str(&format!("**Error:** {}\n", entry.error_message));
+            prompt.push_str(&format!("**Why:** {}\n", entry.explanation));
+            prompt.push_str("**Correct:**\n```python\n");
+            prompt.push_str(&entry.correct_code);
+            if !entry.correct_code.ends_with('\n') {
                 prompt.push('\n');
             }
             prompt.push_str("```\n\n");
@@ -426,6 +461,18 @@ mod tests {
     // ── build_system_prompt — new sections present ─────────────────────
 
     #[test]
+    fn test_prompt_contains_design_thinking_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Design Thinking"),
+            "prompt should have design thinking section"
+        );
+        assert!(prompt.contains("Mandatory Before Code"));
+        assert!(prompt.contains("For Organic Shapes"));
+        assert!(prompt.contains("For Complex Objects"));
+    }
+
+    #[test]
     fn test_prompt_contains_capabilities_section() {
         let prompt = build_system_prompt_for_preset(None);
         assert!(
@@ -551,6 +598,11 @@ mod tests {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
             let prompt = build_system_prompt_for_preset(*preset);
             assert!(
+                prompt.contains("## Design Thinking"),
+                "preset {:?} missing design thinking",
+                preset
+            );
+            assert!(
                 prompt.contains("## Capabilities & Limitations"),
                 "preset {:?} missing capabilities",
                 preset
@@ -578,19 +630,60 @@ mod tests {
         }
     }
 
+    // ── Anti-Patterns in prompt ──────────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_anti_patterns_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Common Anti-Patterns"),
+            "prompt should have anti-patterns section"
+        );
+        assert!(prompt.contains("Mistakes to Avoid"));
+    }
+
+    #[test]
+    fn test_prompt_anti_patterns_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("### Anti-Pattern 1:"));
+        assert!(prompt.contains("Fillet before boolean"));
+        assert!(prompt.contains("translate() wrong signature"));
+        assert!(prompt.contains("Hole on wrong face"));
+        assert!(prompt.contains("**Wrong:**"));
+        assert!(prompt.contains("**Error:**"));
+        assert!(prompt.contains("**Why:**"));
+        assert!(prompt.contains("**Correct:**"));
+    }
+
+    #[test]
+    fn test_all_presets_have_anti_patterns_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Common Anti-Patterns"),
+                "preset {:?} missing anti-patterns section",
+                preset
+            );
+        }
+    }
+
     // ── Section ordering ───────────────────────────────────────────────
 
     #[test]
     fn test_prompt_section_order() {
         let prompt = build_system_prompt_for_preset(None);
+        let dt_pos = prompt.find("## Design Thinking").unwrap();
         let caps_pos = prompt.find("## Capabilities & Limitations").unwrap();
         let tech_pos = prompt.find("## Advanced Techniques").unwrap();
         let style_pos = prompt.find("## Code Style").unwrap();
         let valid_pos = prompt.find("## Validation Checks").unwrap();
         let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
+        let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
         let resp_pos = prompt.find("## Response Format").unwrap();
 
+        // Design Thinking before Capabilities
+        assert!(dt_pos < caps_pos, "Design Thinking should come before Capabilities");
         // Capabilities before Advanced Techniques
         assert!(caps_pos < tech_pos, "Capabilities should come before Advanced Techniques");
         // Advanced Techniques before Code Style
@@ -599,8 +692,10 @@ mod tests {
         assert!(style_pos < valid_pos, "Code Style should come before Validation");
         // Cookbook after Validation
         assert!(valid_pos < cook_pos, "Validation should come before Cookbook");
-        // Manufacturing after Cookbook
-        assert!(cook_pos < mfg_pos, "Cookbook should come before Manufacturing");
+        // Anti-Patterns after Cookbook
+        assert!(cook_pos < ap_pos, "Cookbook should come before Anti-Patterns");
+        // Manufacturing after Anti-Patterns
+        assert!(ap_pos < mfg_pos, "Anti-Patterns should come before Manufacturing");
         // Response Format last
         assert!(mfg_pos < resp_pos, "Manufacturing should come before Response Format");
     }
@@ -615,10 +710,12 @@ mod tests {
         assert!(prompt.contains("You are a CAD AI assistant"));
         assert!(prompt.contains("## Code Requirements"));
         // Should NOT have optional sections
+        assert!(!prompt.contains("## Design Thinking"));
         assert!(!prompt.contains("## Capabilities"));
         assert!(!prompt.contains("## Advanced Techniques"));
         assert!(!prompt.contains("## Validation Checks"));
         assert!(!prompt.contains("## Manufacturing Awareness"));
+        assert!(!prompt.contains("## Common Anti-Patterns"));
     }
 
     // ── Category name formatting in spatial rules ──────────────────────
