@@ -1,5 +1,6 @@
 pub mod context;
 pub mod design;
+pub mod extract;
 pub mod prompts;
 pub mod review;
 pub mod rules;

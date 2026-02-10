@@ -264,7 +264,7 @@ pub(crate) fn build_retry_prompt(
         prompt.push_str(&format!("The failing operation: `{}`\n\n", op));
     }
 
-    prompt.push_str("Provide the complete corrected code in a ```python block.");
+    prompt.push_str("Provide the complete corrected code wrapped in <CODE>...</CODE> tags.");
 
     prompt
 }

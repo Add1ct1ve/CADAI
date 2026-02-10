@@ -369,11 +369,10 @@ fn generate_suggestion(
 }
 
 /// Extract Python code blocks from AI response text.
-/// Looks for ```python ... ``` fenced code blocks.
+/// Delegates to the multi-format extraction cascade in `extract.rs`.
 #[allow(dead_code)]
 pub fn extract_python_code(response: &str) -> Option<String> {
-    let re = Regex::new(r"```python\s*\n([\s\S]*?)```").ok()?;
-    re.captures(response).map(|cap| cap[1].trim().to_string())
+    crate::agent::extract::extract_code(response)
 }
 
 /// Determine the matching anti-pattern title based on error category and message.

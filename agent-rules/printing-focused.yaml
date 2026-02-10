@@ -341,7 +341,7 @@ design_thinking:
 response_format:
   on_success:
     - "Brief description of what was created"
-    - "The generated CadQuery code in a ```python block"
+    - "The generated CadQuery code wrapped in <CODE>...</CODE> tags"
     - "Print orientation recommendation"
     - "Any areas that may need supports"
     - "Estimated print time range (if applicable)"

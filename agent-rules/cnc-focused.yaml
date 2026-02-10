@@ -372,7 +372,7 @@ design_thinking:
 response_format:
   on_success:
     - "Brief description of what was created"
-    - "The generated CadQuery code in a ```python block"
+    - "The generated CadQuery code wrapped in <CODE>...</CODE> tags"
     - "Recommended material and tool sizes"
     - "Machining setup notes (fixturing, orientation)"
     - "Any features requiring special attention"
