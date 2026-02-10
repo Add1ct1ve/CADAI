@@ -29,6 +29,7 @@ pub struct AgentRules {
     pub failure_prevention: Option<HashMap<String, Vec<String>>>,
     pub few_shot_examples: Option<Vec<FewShotExample>>,
     pub design_patterns: Option<Vec<DesignPatternEntry>>,
+    pub operation_interactions: Option<HashMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,6 +169,7 @@ impl AgentRules {
             failure_prevention: None,
             few_shot_examples: None,
             design_patterns: None,
+            operation_interactions: None,
         }
     }
 }
@@ -625,6 +627,7 @@ mod tests {
         assert!(rules.failure_prevention.is_none());
         assert!(rules.few_shot_examples.is_none());
         assert!(rules.design_patterns.is_none());
+        assert!(rules.operation_interactions.is_none());
     }
 
     // ── Few-Shot Examples ──────────────────────────────────────────────
@@ -861,6 +864,50 @@ mod tests {
             excels.iter().any(|e| e.contains("CNC-ready")),
             "cnc preset should mention CNC-ready models"
         );
+    }
+
+    // ── Operation Interactions ────────────────────────────────────────────
+
+    #[test]
+    fn test_default_has_operation_interactions() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        assert!(
+            rules.operation_interactions.is_some(),
+            "default preset should have operation_interactions"
+        );
+    }
+
+    #[test]
+    fn test_all_presets_have_operation_interactions() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            assert!(
+                rules.operation_interactions.is_some(),
+                "preset {:?} should have operation_interactions",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn test_operation_interactions_has_8_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let oi = rules.operation_interactions.as_ref().unwrap();
+        assert_eq!(oi.len(), 8, "operation_interactions should have 8 categories");
+    }
+
+    #[test]
+    fn test_operation_interactions_categories_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let oi = rules.operation_interactions.as_ref().unwrap();
+        assert!(oi.contains_key("fillet_after_boolean"), "missing fillet_after_boolean");
+        assert!(oi.contains_key("shell_after_fillet"), "missing shell_after_fillet");
+        assert!(oi.contains_key("loft_then_shell"), "missing loft_then_shell");
+        assert!(oi.contains_key("boolean_chain_limit"), "missing boolean_chain_limit");
+        assert!(oi.contains_key("extrude_on_face"), "missing extrude_on_face");
+        assert!(oi.contains_key("sweep_with_boolean"), "missing sweep_with_boolean");
+        assert!(oi.contains_key("revolve_then_cut"), "missing revolve_then_cut");
+        assert!(oi.contains_key("operation_ordering"), "missing operation_ordering");
     }
 
     // ── Dimension Guidance ────────────────────────────────────────────

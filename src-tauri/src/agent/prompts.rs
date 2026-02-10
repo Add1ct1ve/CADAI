@@ -333,6 +333,20 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Operation Interactions (cross-operation reasoning rules) --
+    if let Some(ref interactions) = rules.operation_interactions {
+        prompt.push_str("## Operation Interactions — Cross-Operation Reasoning Rules\n");
+        prompt.push_str("CadQuery operations interact in subtle ways. ");
+        prompt.push_str("Follow these rules when planning operation sequences.\n\n");
+        for (pair_name, rules_list) in interactions {
+            prompt.push_str(&format!("### {}\n", format_category_name(pair_name)));
+            for rule in rules_list {
+                prompt.push_str(&format!("- {}\n", rule));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- API Quick-Reference --
     if let Some(ref api_ref) = rules.api_reference {
         prompt.push_str("## CadQuery API Quick-Reference\n");
@@ -776,6 +790,11 @@ mod tests {
                 "preset {:?} missing failure prevention",
                 preset
             );
+            assert!(
+                prompt.contains("## Operation Interactions"),
+                "preset {:?} missing operation interactions",
+                preset
+            );
         }
     }
 
@@ -978,6 +997,44 @@ mod tests {
         }
     }
 
+    // ── Operation Interactions in prompt ───────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_operation_interactions_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Operation Interactions — Cross-Operation Reasoning Rules"),
+            "prompt should have operation interactions section"
+        );
+        assert!(prompt.contains("Follow these rules when planning operation sequences."));
+    }
+
+    #[test]
+    fn test_prompt_operation_interactions_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Spot-check category names (formatted from snake_case)
+        assert!(prompt.contains("Fillet After Boolean"), "missing fillet_after_boolean category");
+        assert!(prompt.contains("Shell After Fillet"), "missing shell_after_fillet category");
+        assert!(prompt.contains("Loft Then Shell"), "missing loft_then_shell category");
+        assert!(prompt.contains("Boolean Chain Limit"), "missing boolean_chain_limit category");
+        assert!(prompt.contains("Extrude On Face"), "missing extrude_on_face category");
+        assert!(prompt.contains("Sweep With Boolean"), "missing sweep_with_boolean category");
+        assert!(prompt.contains("Revolve Then Cut"), "missing revolve_then_cut category");
+        assert!(prompt.contains("Operation Ordering"), "missing operation_ordering category");
+    }
+
+    #[test]
+    fn test_all_presets_have_operation_interactions_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Operation Interactions"),
+                "preset {:?} missing operation interactions section",
+                preset
+            );
+        }
+    }
+
     // ── Section ordering ───────────────────────────────────────────────
 
     #[test]
@@ -1013,8 +1070,11 @@ mod tests {
         assert!(cook_pos < dp_pos, "Cookbook should come before Design Patterns");
         // Anti-Patterns after Design Patterns
         assert!(dp_pos < ap_pos, "Design Patterns should come before Anti-Patterns");
-        // API Reference after Anti-Patterns
-        assert!(ap_pos < apiref_pos, "Anti-Patterns should come before API Reference");
+        // Operation Interactions after Anti-Patterns
+        let oi_pos = prompt.find("## Operation Interactions").unwrap();
+        assert!(ap_pos < oi_pos, "Anti-Patterns should come before Operation Interactions");
+        // API Reference after Operation Interactions
+        assert!(oi_pos < apiref_pos, "Operation Interactions should come before API Reference");
         // Dimension Tables after API Reference
         assert!(apiref_pos < dimtab_pos, "API Reference should come before Dimension Tables");
         // Dimension Guidance after Dimension Tables
@@ -1054,6 +1114,7 @@ mod tests {
         assert!(!prompt.contains("## Dimension Estimation Guidance"));
         assert!(!prompt.contains("## Failure Prevention"));
         assert!(!prompt.contains("## Few-Shot Examples"));
+        assert!(!prompt.contains("## Operation Interactions"));
     }
 
     // ── Category name formatting in spatial rules ──────────────────────
