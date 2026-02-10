@@ -145,8 +145,15 @@ export type MultiPartEvent =
   | { kind: 'IterativeStepRetry'; step_index: number; attempt: number; error: string }
   | { kind: 'IterativeStepSkipped'; step_index: number; name: string; error: string }
   | { kind: 'IterativeComplete'; final_code: string; stl_base64?: string; skipped_steps: SkippedStepInfo[] }
+  | { kind: 'ModificationDetected'; intent_summary: string }
+  | { kind: 'CodeDiff'; diff_lines: DiffLine[]; old_line_count: number; new_line_count: number; additions: number; deletions: number }
   | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
   | { kind: 'Done'; success: boolean; error?: string; validated?: boolean };
+
+export interface DiffLine {
+  tag: 'equal' | 'insert' | 'delete';
+  text: string;
+}
 
 export interface PartProgress {
   name: string;

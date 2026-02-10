@@ -4,7 +4,7 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
   import ChatMessageComponent from './ChatMessage.svelte';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -25,6 +25,8 @@
   let skippedStepsData = $state<SkippedStepInfo[]>([]);
   let lastDesignPlanText = $state('');
   let lastUserRequest = $state('');
+  let diffData = $state<{ diff_lines: DiffLine[]; additions: number; deletions: number } | null>(null);
+  let isModification = $state(false);
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -51,6 +53,8 @@
     designPlanText = '';
     isIterative = false;
     iterativeSteps = [];
+    isModification = false;
+    diffData = null;
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -500,6 +504,8 @@
     isIterative = false;
     iterativeSteps = [];
     skippedStepsData = [];
+    isModification = false;
+    diffData = null;
     lastUserRequest = text;
     let validatedStl: string | null = null;
     let backendValidated = false;
@@ -532,6 +538,12 @@
     let streamingContent = '';
     const planStartTime = Date.now();
     let planTimerInterval: ReturnType<typeof setInterval> | null = null;
+
+    // Determine if we should send existing code for modification detection
+    const DEFAULT_CODE_TEMPLATE = `import cadquery as cq\n\n# Create your 3D model here\nresult = cq.Workplane("XY").box(10, 10, 10)\n`;
+    const existingCode = project.code;
+    const hasExistingCode = existingCode.trim() !== DEFAULT_CODE_TEMPLATE.trim()
+      && existingCode.trim().split('\n').length > 3;
 
     try {
       const result = await generateParallel(text, rustHistory, (event: MultiPartEvent) => {
@@ -772,11 +784,23 @@
             }
             break;
 
+          case 'ModificationDetected':
+            isModification = true;
+            break;
+
+          case 'CodeDiff':
+            diffData = {
+              diff_lines: event.diff_lines,
+              additions: event.additions,
+              deletions: event.deletions,
+            };
+            break;
+
           case 'Done':
             if (event.validated) backendValidated = true;
             break;
         }
-      });
+      }, hasExistingCode ? existingCode : null);
 
       if (chatStore.generationId !== myGen) return;
 
@@ -911,6 +935,7 @@
         designPlanText = '';
         isIterative = false;
         iterativeSteps = [];
+        isModification = false;
       }
     }
   }
@@ -986,6 +1011,23 @@
       <details class="design-plan-block">
         <summary class="design-plan-summary">Geometry Design Plan</summary>
         <div class="design-plan-content">{designPlanText}</div>
+      </details>
+    {/if}
+    {#if diffData && !chatStore.isStreaming}
+      <details class="diff-block" open>
+        <summary class="diff-summary">
+          Code Changes (+{diffData.additions} −{diffData.deletions})
+        </summary>
+        <div class="diff-content">
+          {#each diffData.diff_lines as line}
+            <div class="diff-line diff-{line.tag}">
+              <span class="diff-marker">
+                {#if line.tag === 'insert'}+{:else if line.tag === 'delete'}-{:else}&nbsp;{/if}
+              </span>
+              <span class="diff-text">{line.text}</span>
+            </div>
+          {/each}
+        </div>
       </details>
     {/if}
     {#if skippedStepsData.length > 0 && !chatStore.isStreaming && !isRetrying}
@@ -1302,5 +1344,87 @@
     border-top: 1px solid var(--border-subtle);
     max-height: 300px;
     overflow-y: auto;
+  }
+
+  .diff-block {
+    margin: 4px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-mantle);
+    overflow: hidden;
+  }
+
+  .diff-summary {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+
+  .diff-summary::before {
+    content: '\25B6  ';
+    font-size: 9px;
+  }
+
+  .diff-block[open] .diff-summary::before {
+    content: '\25BC  ';
+  }
+
+  .diff-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .diff-content {
+    border-top: 1px solid var(--border-subtle);
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'Fira Code', 'Consolas', 'Monaco', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .diff-line {
+    display: flex;
+    padding: 0 8px;
+    white-space: pre;
+  }
+
+  .diff-marker {
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+    user-select: none;
+    color: var(--text-muted);
+  }
+
+  .diff-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .diff-line.diff-insert {
+    background: rgba(64, 160, 43, 0.12);
+    color: #40a02b;
+  }
+
+  .diff-line.diff-insert .diff-marker {
+    color: #40a02b;
+  }
+
+  .diff-line.diff-delete {
+    background: rgba(210, 15, 57, 0.12);
+    color: #d20f39;
+    text-decoration: line-through;
+  }
+
+  .diff-line.diff-delete .diff-marker {
+    color: #d20f39;
+  }
+
+  .diff-line.diff-equal {
+    color: var(--text-muted);
   }
 </style>
