@@ -20,6 +20,7 @@ pub struct PlanValidation {
     pub rejected_reason: Option<String>,
     pub extracted_operations: Vec<String>,
     pub extracted_dimensions: Vec<f64>,
+    pub plan_text: String,
 }
 
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.
@@ -191,15 +192,48 @@ const KNOWN_OPERATIONS: &[&str] = &[
 
 const BOOLEAN_OPS: &[&str] = &["cut", "union", "fuse", "intersect", "combine"];
 
+/// Check if "shell" appears as a CadQuery operation (verb) rather than an English noun.
+/// Matches: "shell(", "shell it", "shell the body", "apply shell", "use shell", "then shell"
+/// Does NOT match: "hollow shell", "outer shell", "thick shell"
+fn has_shell_operation(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    // Code/function call syntax: shell( or shell ()
+    if Regex::new(r"shell\s*\(").unwrap().is_match(&lower) {
+        return true;
+    }
+    // Imperative verb: "shell it", "shell the body", "shell this"
+    if Regex::new(r"\bshell\s+(?:it|the|this|that|a|an)\b")
+        .unwrap()
+        .is_match(&lower)
+    {
+        return true;
+    }
+    // Preceded by action verbs: "apply shell", "use shell", "then shell", "and shell"
+    if Regex::new(r"(?:apply|use|then|and|perform)\s+shell\b")
+        .unwrap()
+        .is_match(&lower)
+    {
+        return true;
+    }
+    false
+}
+
 /// Extract known CadQuery operation names from the plan text (unique, case-insensitive).
 fn extract_operations(plan_text: &str) -> Vec<String> {
     let lower = plan_text.to_lowercase();
     let mut ops = Vec::new();
     for &op in KNOWN_OPERATIONS {
-        let pattern = format!(r"\b{}\b", op);
-        if let Ok(re) = Regex::new(&pattern) {
-            if re.is_match(&lower) {
+        if op == "shell" {
+            // Special handling: "shell" as noun is very common in CAD prose
+            if has_shell_operation(plan_text) {
                 ops.push(op.to_string());
+            }
+        } else {
+            let pattern = format!(r"\b{}\b", op);
+            if let Ok(re) = Regex::new(&pattern) {
+                if re.is_match(&lower) {
+                    ops.push(op.to_string());
+                }
             }
         }
     }
@@ -241,6 +275,13 @@ fn extract_dimensions(plan_text: &str) -> Vec<f64> {
             continue;
         }
         if let Ok(v) = val_str.parse::<f64>() {
+            // Skip negative values in offset/position context
+            if v < 0.0 {
+                let match_start = cap.get(1).unwrap().start();
+                if is_offset_context(plan_text, match_start) {
+                    continue;
+                }
+            }
             dims.push(v);
         }
     }
@@ -260,6 +301,83 @@ fn extract_fillet_radii(plan_text: &str) -> Vec<f64> {
     radii
 }
 
+/// Extract chamfer sizes mentioned near "chamfer" keywords.
+fn extract_chamfer_sizes(plan_text: &str) -> Vec<f64> {
+    let re = Regex::new(r"(?i)chamfer\w*[\s\(\-\x{2014}:]+(\d+\.?\d*)\s*(?:mm)?").unwrap();
+    let mut sizes = Vec::new();
+    for cap in re.captures_iter(plan_text) {
+        if let Ok(v) = cap[1].parse::<f64>() {
+            sizes.push(v);
+        }
+    }
+    sizes
+}
+
+/// Check whether a negative number at `match_start` is in an offset/position context
+/// (the same line contains words like "offset", "move", "translate", etc.).
+fn is_offset_context(plan_text: &str, match_start: usize) -> bool {
+    const OFFSET_WORDS: &[&str] = &[
+        "offset", "position", "move", "translate", "adjust",
+        "shift", "back", "direction", "from", "away",
+    ];
+
+    let line_start = plan_text[..match_start]
+        .rfind('\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+
+    let line_prefix = &plan_text[line_start..match_start];
+    let lower = line_prefix.to_lowercase();
+
+    OFFSET_WORDS.iter().any(|w| lower.contains(w))
+}
+
+/// Extract the body text of a markdown section by heading name.
+/// Returns text between the matched heading and the next heading (or EOF).
+fn extract_section(plan_text: &str, heading: &str) -> Option<String> {
+    let lower = plan_text.to_lowercase();
+    let heading_lower = heading.to_lowercase();
+
+    let patterns = [
+        format!("### {}", heading_lower),
+        format!("## {}", heading_lower),
+    ];
+
+    let mut section_start = None;
+    for pattern in &patterns {
+        if let Some(pos) = lower.find(pattern.as_str()) {
+            let after_heading = pos + pattern.len();
+            section_start = Some(
+                plan_text[after_heading..]
+                    .find('\n')
+                    .map(|p| after_heading + p + 1)
+                    .unwrap_or(plan_text.len()),
+            );
+            break;
+        }
+    }
+
+    let start = section_start?;
+    if start >= plan_text.len() {
+        return None;
+    }
+
+    // Find the next section heading (## or ###)
+    let rest = &plan_text[start..];
+    let heading_re = Regex::new(r"(?m)^#{2,3}\s+\S").unwrap();
+    let end = heading_re
+        .find(rest)
+        .map(|m| start + m.start())
+        .unwrap_or(plan_text.len());
+
+    let body = plan_text[start..end].trim().to_string();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
+    }
+}
+
 /// Count total mentions of boolean operations (not unique — repeated mentions count).
 fn count_boolean_mentions(plan_text: &str) -> usize {
     let lower = plan_text.to_lowercase();
@@ -271,6 +389,14 @@ fn count_boolean_mentions(plan_text: &str) -> usize {
         }
     }
     count
+}
+
+/// Count boolean mentions scoped to the Build Plan section only.
+/// Falls back to the full text if no Build Plan section is found.
+fn count_boolean_mentions_in_build_plan(plan_text: &str) -> usize {
+    let section_text = extract_section(plan_text, "Build Plan")
+        .unwrap_or_else(|| plan_text.to_string());
+    count_boolean_mentions(&section_text)
 }
 
 /// Check whether the plan contains a section heading (case-insensitive).
@@ -297,10 +423,16 @@ pub fn extract_operations_from_text(text: &str) -> Vec<String> {
 /// Extracts operations and dimensions, calculates a risk score (0-10),
 /// and rejects plans with a score > 7.
 pub fn validate_plan(plan_text: &str) -> PlanValidation {
-    let operations = extract_operations(plan_text);
+    // Scope operations to the Build Plan section (fall back to full text)
+    let build_plan_text = extract_section(plan_text, "Build Plan")
+        .unwrap_or_else(|| plan_text.to_string());
+    let operations = extract_operations(&build_plan_text);
+
     let dimensions = extract_dimensions(plan_text);
     let fillet_radii = extract_fillet_radii(plan_text);
-    let boolean_count = count_boolean_mentions(plan_text);
+    let chamfer_sizes = extract_chamfer_sizes(plan_text);
+    // Scope boolean counting to Build Plan section
+    let boolean_count = count_boolean_mentions_in_build_plan(plan_text);
 
     let has_shell = operations.contains(&"shell".to_string());
     let has_loft = operations.contains(&"loft".to_string());
@@ -428,16 +560,20 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         warnings.push("no CadQuery operations mentioned in plan".to_string());
     }
 
-    // Rule 13: shell with thin walls
+    // Rule 13: shell with thin walls (skip dimensions that are fillet radii or chamfer sizes)
     if has_shell {
         for &d in &dimensions {
             if d > 0.0 && d < 2.0 {
-                risk += 2;
-                warnings.push(format!(
-                    "shell() with wall thickness {}mm may fail in OpenCascade",
-                    d
-                ));
-                break;
+                let is_fillet = fillet_radii.iter().any(|&r| (r - d).abs() < 0.001);
+                let is_chamfer = chamfer_sizes.iter().any(|&c| (c - d).abs() < 0.001);
+                if !is_fillet && !is_chamfer {
+                    risk += 2;
+                    warnings.push(format!(
+                        "shell() with wall thickness {}mm may fail in OpenCascade",
+                        d
+                    ));
+                    break;
+                }
             }
         }
     }
@@ -449,6 +585,22 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
             "chamfer() after {} boolean operations is risky",
             boolean_count
         ));
+    }
+
+    // Rule 15: missing Object Analysis section
+    if !has_section(plan_text, "Object Analysis") {
+        risk += 1;
+        warnings.push(
+            "plan is missing an 'Object Analysis' section".to_string(),
+        );
+    }
+
+    // Rule 16: missing CadQuery Approach section
+    if !has_section(plan_text, "CadQuery Approach") {
+        risk += 1;
+        warnings.push(
+            "plan is missing a 'CadQuery Approach' section".to_string(),
+        );
     }
 
     // Clamp to 10
@@ -468,6 +620,7 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         rejected_reason,
         extracted_operations: operations,
         extracted_dimensions: dimensions,
+        plan_text: plan_text.to_string(),
     }
 }
 
@@ -638,7 +791,8 @@ mod tests {
 
     #[test]
     fn test_extract_dimensions_negative() {
-        let text = "Offset by -2mm from the edge.";
+        // Non-offset context: negative dimension is a genuine error
+        let text = "Create a box with -2mm height.";
         let dims = extract_dimensions(text);
         assert!(dims.contains(&-2.0));
     }
@@ -676,10 +830,12 @@ mod tests {
 
     #[test]
     fn test_validate_simple_plan_low_risk() {
-        let text = "### Build Plan\n1. Extrude a 50x30x20mm box.\n\nUse extrude to create the base.";
+        let text = "### Object Analysis\nA simple rectangular box.\n\n\
+            ### CadQuery Approach\nUse extrude to create the base.\n\n\
+            ### Build Plan\n1. Extrude a 50x30x20mm box.";
         let v = validate_plan(text);
         assert!(v.is_valid);
-        assert!(v.risk_score <= 3);
+        assert!(v.risk_score <= 3, "risk {} should be <= 3", v.risk_score);
     }
 
     #[test]
@@ -692,6 +848,58 @@ mod tests {
         // Rule 1: shell + 5 booleans = +3, Rule 3: 5 booleans = +2 → score >= 5
         assert!(v.risk_score >= 5);
         assert!(v.warnings.iter().any(|w| w.contains("shell()")));
+    }
+
+    #[test]
+    fn test_extract_operations_shell_noun_not_detected() {
+        // "shell" used as an English noun should NOT be detected as a CadQuery operation
+        let text = "Boolean subtract inner solid from outer solid → 3mm thick hollow shell";
+        let ops = extract_operations(text);
+        assert!(
+            !ops.contains(&"shell".to_string()),
+            "'hollow shell' (noun) should not be detected as shell operation"
+        );
+
+        let text2 = "The outer shell profile is smooth.";
+        let ops2 = extract_operations(text2);
+        assert!(
+            !ops2.contains(&"shell".to_string()),
+            "'outer shell' (noun) should not be detected as shell operation"
+        );
+    }
+
+    #[test]
+    fn test_extract_operations_shell_parens_detected() {
+        let text = "Use shell() to hollow the body.";
+        let ops = extract_operations(text);
+        assert!(
+            ops.contains(&"shell".to_string()),
+            "shell() with parens should be detected"
+        );
+
+        let text2 = "Call shell (faces) to remove material.";
+        let ops2 = extract_operations(text2);
+        assert!(
+            ops2.contains(&"shell".to_string()),
+            "shell (with space before paren) should be detected"
+        );
+    }
+
+    #[test]
+    fn test_extract_operations_shell_action_verb_detected() {
+        let text = "Apply shell to create a hollow part.";
+        let ops = extract_operations(text);
+        assert!(
+            ops.contains(&"shell".to_string()),
+            "'apply shell' should be detected"
+        );
+
+        let text2 = "Then shell the body to 2mm walls.";
+        let ops2 = extract_operations(text2);
+        assert!(
+            ops2.contains(&"shell".to_string()),
+            "'then shell' should be detected"
+        );
     }
 
     #[test]
@@ -776,6 +984,7 @@ mod tests {
             rejected_reason: Some("shell() after 5 boolean operations is very likely to fail".to_string()),
             extracted_operations: vec!["shell".to_string()],
             extracted_dimensions: vec![100.0],
+            plan_text: String::new(),
         };
         let fb = build_rejection_feedback(&v);
         assert!(fb.contains("risk score 8/10"));
@@ -796,6 +1005,7 @@ mod tests {
             rejected_reason: Some("warning one".to_string()),
             extracted_operations: vec![],
             extracted_dimensions: vec![],
+            plan_text: String::new(),
         };
         let fb = build_rejection_feedback(&v);
         assert!(fb.contains("warning one"));
@@ -910,5 +1120,96 @@ overhangs:
         assert!(result.contains("Preemptive Warnings"));
         assert!(result.contains("fillet() fails"));
         assert!(result.contains("shell() after booleans"));
+    }
+
+    // -----------------------------------------------------------------------
+    // New tests for validator improvements
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_dimensions_skips_offset_negative() {
+        let text = "Offset by -6mm from the edge. Move -3mm along X.";
+        let dims = extract_dimensions(text);
+        // Both negatives have offset context words ("Offset", "Move") → skipped
+        assert!(!dims.contains(&-6.0), "offset -6mm should be skipped");
+        assert!(!dims.contains(&-3.0), "move -3mm should be skipped");
+    }
+
+    #[test]
+    fn test_extract_chamfer_sizes() {
+        let text = "Apply chamfer 1.5mm on bottom edges and chamfer(0.5) on top.";
+        let sizes = extract_chamfer_sizes(text);
+        assert!(sizes.contains(&1.5));
+        assert!(sizes.contains(&0.5));
+    }
+
+    #[test]
+    fn test_shell_with_fillet_not_flagged_as_thin_wall() {
+        // 1mm is a fillet radius, not a wall thickness → Rule 13 should not fire
+        let text = "### Object Analysis\nA hollow container.\n\n\
+            ### CadQuery Approach\nShell and fillet.\n\n\
+            ### Build Plan\n1. Create a 50x30x20mm box.\n\
+            2. Shell with 3mm walls.\n3. Apply fillet 1mm on edges.";
+        let v = validate_plan(text);
+        assert!(
+            !v.warnings.iter().any(|w| w.contains("wall thickness") && w.contains("1mm")),
+            "1mm fillet should not trigger thin wall warning: {:?}",
+            v.warnings
+        );
+    }
+
+    #[test]
+    fn test_boolean_counting_ignores_prose_sections() {
+        // "cut the design into sections" in Object Analysis is prose, not a boolean op
+        let text = "### Object Analysis\nWe need to cut the design into sections for analysis. \
+            We combine ideas to fuse the concept.\n\n\
+            ### CadQuery Approach\nUse extrude.\n\n\
+            ### Build Plan\n1. Extrude a 50x30x20mm box.";
+        let count = count_boolean_mentions_in_build_plan(text);
+        // Build Plan has no boolean ops
+        assert_eq!(count, 0, "prose 'cut' and 'fuse' should not be counted");
+    }
+
+    #[test]
+    fn test_extract_section_basic() {
+        let text = "### Object Analysis\nA box shape.\n\n\
+            ### Build Plan\n1. Extrude a box.\n2. Add fillets.\n\n\
+            ### Approximation Notes\nNone.";
+        let section = extract_section(text, "Build Plan");
+        assert!(section.is_some());
+        let body = section.unwrap();
+        assert!(body.contains("Extrude a box"));
+        assert!(body.contains("Add fillets"));
+        assert!(!body.contains("box shape"), "should not include Object Analysis");
+        assert!(!body.contains("Approximation"), "should not include next section");
+    }
+
+    #[test]
+    fn test_operations_scoped_to_build_plan() {
+        // "loft" and "sweep" only appear in CadQuery Approach (advisory), not Build Plan
+        let text = "### Object Analysis\nA simple bracket.\n\n\
+            ### CadQuery Approach\nCould use loft or sweep for organic shapes.\n\n\
+            ### Build Plan\n1. Extrude a 50x30x10mm box.\n\
+            2. Cut a 20mm hole through the center.";
+        let v = validate_plan(text);
+        assert!(
+            !v.extracted_operations.contains(&"loft".to_string()),
+            "loft from CadQuery Approach should not be extracted"
+        );
+        assert!(
+            !v.extracted_operations.contains(&"sweep".to_string()),
+            "sweep from CadQuery Approach should not be extracted"
+        );
+        assert!(v.extracted_operations.contains(&"extrude".to_string()));
+        assert!(v.extracted_operations.contains(&"cut".to_string()));
+    }
+
+    #[test]
+    fn test_structural_rules_15_16() {
+        // Plan missing Object Analysis and CadQuery Approach → +1 each
+        let text = "### Build Plan\n1. Extrude a 50x30x20mm box.";
+        let v = validate_plan(text);
+        assert!(v.warnings.iter().any(|w| w.contains("Object Analysis")));
+        assert!(v.warnings.iter().any(|w| w.contains("CadQuery Approach")));
     }
 }

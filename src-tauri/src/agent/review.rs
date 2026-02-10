@@ -24,18 +24,19 @@ Review the code against this checklist:
 15. Loft profiles should have compatible topology (similar number of edges) for clean results
 16. Apply fillets and chamfers LAST, after all boolean operations are complete
 17. If a complex operation (sweep, loft, shell on complex body) is likely to fail at runtime, suggest a simpler alternative using basic primitives + booleans
+18. If code uses .edges().fillet() or .edges().chamfer() on geometry built with loft, shell, or multiple boolean operations, flag as HIGH RISK. Suggest wrapping in try/except: `try: result = body.edges().fillet(r)` / `except: result = body`
 
 ## Plan Compliance Checks (only when a Geometry Design Plan is provided)
-18. Are ALL features listed in the Build Plan present in the code? (e.g., if plan says "add 4 mounting holes", there should be 4 holes in the code)
-19. Do dimensions in the code match the plan? (e.g., if plan says "50x30x20mm box", the code should use 50, 30, 20 — not different values unless geometrically justified)
-20. Does the code use the operations suggested in the plan? (e.g., if plan says "revolve a profile", the code should use revolve — not extrude — unless the alternative clearly achieves the same geometry)
-21. Does the Build Plan step sequence roughly match the code's construction order? (e.g., if plan says "base shape, then holes, then fillets", the code should follow that order)
+19. Are ALL features listed in the Build Plan present in the code? (e.g., if plan says "add 4 mounting holes", there should be 4 holes in the code)
+20. Do dimensions in the code match the plan? (e.g., if plan says "50x30x20mm box", the code should use 50, 30, 20 — not different values unless geometrically justified)
+21. Does the code use the operations suggested in the plan? (e.g., if plan says "revolve a profile", the code should use revolve — not extrude — unless the alternative clearly achieves the same geometry)
+22. Does the Build Plan step sequence roughly match the code's construction order? (e.g., if plan says "base shape, then holes, then fillets", the code should follow that order)
 
 IMPORTANT for plan compliance:
 - These checks are SOFT — the code may achieve the same geometry through different operations. If the result looks correct, APPROVE.
 - Do NOT reject code solely because it uses a different operation than the plan suggested (e.g., loft instead of revolve is fine if the shape is correct).
 - DO flag cases where planned features are completely missing or dimensions are significantly wrong (>20% off).
-- If no Geometry Design Plan is provided, skip items 18-21 entirely.
+- If no Geometry Design Plan is provided, skip items 19-22 entirely.
 
 If the code is correct, respond with exactly:
 APPROVED
@@ -209,9 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn test_review_prompt_has_numbered_items_8_through_17() {
-        // Verify the new items are numbered 8-17
-        for i in 8..=17 {
+    fn test_review_prompt_has_numbered_items_8_through_18() {
+        // Verify the pitfall check items are numbered 8-18
+        for i in 8..=18 {
             assert!(
                 REVIEW_SYSTEM_PROMPT.contains(&format!("{}.", i)),
                 "should contain item number {}",
@@ -287,18 +288,34 @@ result = cq.Workplane("XY").box(10, 10, 10)
     fn test_review_prompt_has_soft_check_guidance() {
         assert!(REVIEW_SYSTEM_PROMPT.contains("SOFT"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("Do NOT reject code solely"));
-        assert!(REVIEW_SYSTEM_PROMPT.contains("skip items 18-21"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("skip items 19-22"));
     }
 
     #[test]
-    fn test_review_prompt_has_numbered_items_18_through_21() {
-        for i in 18..=21 {
+    fn test_review_prompt_has_numbered_items_19_through_22() {
+        for i in 19..=22 {
             assert!(
                 REVIEW_SYSTEM_PROMPT.contains(&format!("{}.", i)),
                 "should contain item number {}",
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_review_prompt_has_blanket_fillet_check() {
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains(".edges().fillet()"),
+            "should mention .edges().fillet() pattern"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("HIGH RISK"),
+            "should flag blanket fillet as high risk"
+        );
+        assert!(
+            REVIEW_SYSTEM_PROMPT.contains("try/except"),
+            "should suggest try/except wrapping"
+        );
     }
 
     // ── build_review_user_message tests ───────────────────────────────

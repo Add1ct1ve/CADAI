@@ -200,6 +200,14 @@ impl AiProvider for GeminiProvider {
             .and_then(|p| p.text.clone())
             .unwrap_or_default();
 
+        if text.is_empty() {
+            eprintln!(
+                "[gemini] Warning: API returned empty text. Candidates: {}, model: {}",
+                resp.candidates.as_ref().map_or(0, |c| c.len()),
+                self.model
+            );
+        }
+
         let usage = resp.usage_metadata.and_then(|u| {
             Some(TokenUsage {
                 input_tokens: u.prompt_token_count.unwrap_or(0),

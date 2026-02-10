@@ -381,7 +381,7 @@ pub async fn auto_retry(
 
     // Classify the error and build a targeted retry prompt.
     let structured_error = validate::parse_traceback(&error_message);
-    let strategy = validate::get_retry_strategy(&structured_error, attempt);
+    let strategy = validate::get_retry_strategy(&structured_error, attempt, Some(&failed_code));
 
     // Look up matching anti-pattern from the agent rules (if any).
     let rules = AgentRules::from_preset(config.agent_rules_preset.as_deref()).ok();

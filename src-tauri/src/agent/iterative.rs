@@ -216,7 +216,7 @@ fn build_step_retry_prompt(
 ) -> String {
     // Use the structured error parsing for better retry guidance
     let structured_error = validate::parse_traceback(error_msg);
-    let strategy = validate::get_retry_strategy(&structured_error, 1);
+    let strategy = validate::get_retry_strategy(&structured_error, 1, Some(failed_code));
 
     // Look up anti-pattern if available
     let rules = AgentRules::from_preset(None).ok();

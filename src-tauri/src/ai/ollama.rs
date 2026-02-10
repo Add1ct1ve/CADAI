@@ -146,6 +146,13 @@ impl AiProvider for OllamaProvider {
             .and_then(|m| m.content)
             .unwrap_or_default();
 
+        if text.is_empty() {
+            eprintln!(
+                "[ollama] Warning: API returned empty text. Model: {}",
+                self.model
+            );
+        }
+
         let usage = match (resp.prompt_eval_count, resp.eval_count) {
             (Some(input), Some(output)) => Some(TokenUsage { input_tokens: input, output_tokens: output }),
             _ => None,

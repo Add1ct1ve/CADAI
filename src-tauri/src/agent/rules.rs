@@ -400,24 +400,24 @@ mod tests {
     // ── Anti-Patterns ─────────────────────────────────────────────────
 
     #[test]
-    fn test_default_anti_patterns_has_10_entries() {
+    fn test_default_anti_patterns_has_11_entries() {
         let rules = AgentRules::from_preset(None).unwrap();
         let ap = rules.anti_patterns.as_ref().unwrap();
-        assert_eq!(ap.len(), 10, "default should have 10 anti-patterns");
+        assert_eq!(ap.len(), 11, "default should have 11 anti-patterns");
     }
 
     #[test]
-    fn test_printing_anti_patterns_has_10_entries() {
+    fn test_printing_anti_patterns_has_11_entries() {
         let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
         let ap = rules.anti_patterns.as_ref().unwrap();
-        assert_eq!(ap.len(), 10, "printing should have 10 anti-patterns");
+        assert_eq!(ap.len(), 11, "printing should have 11 anti-patterns");
     }
 
     #[test]
-    fn test_cnc_anti_patterns_has_10_entries() {
+    fn test_cnc_anti_patterns_has_11_entries() {
         let rules = AgentRules::from_preset(Some("cnc")).unwrap();
         let ap = rules.anti_patterns.as_ref().unwrap();
-        assert_eq!(ap.len(), 10, "cnc should have 10 anti-patterns");
+        assert_eq!(ap.len(), 11, "cnc should have 11 anti-patterns");
     }
 
     #[test]

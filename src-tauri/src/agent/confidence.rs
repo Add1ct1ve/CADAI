@@ -40,7 +40,7 @@ pub fn assess_confidence(
     let cookbook_matches = match cookbook {
         Some(entries) => match_cookbook(
             &validation.extracted_operations,
-            "", // plan text not available here; operations suffice
+            &validation.plan_text,
             entries,
         ),
         None => vec![],
@@ -50,7 +50,7 @@ pub fn assess_confidence(
     let pattern_matches = match patterns {
         Some(entries) => match_design_patterns(
             &validation.extracted_operations,
-            "", // plan text not available here; operations suffice
+            &validation.plan_text,
             entries,
         ),
         None => vec![],
@@ -284,6 +284,7 @@ mod tests {
             rejected_reason: None,
             extracted_operations: operations.into_iter().map(|s| s.to_string()).collect(),
             extracted_dimensions: vec![],
+            plan_text: String::new(),
         }
     }
 
