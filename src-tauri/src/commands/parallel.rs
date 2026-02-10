@@ -43,6 +43,13 @@ pub enum MultiPartEvent {
     DesignPlan {
         plan_text: String,
     },
+    /// Result of deterministic plan validation.
+    PlanValidation {
+        risk_score: u32,
+        warnings: Vec<String>,
+        is_valid: bool,
+        rejected_reason: Option<String>,
+    },
     PlanStatus {
         message: String,
     },
@@ -239,9 +246,44 @@ pub async fn generate_parallel(
     });
 
     let design_provider = create_provider(&config)?;
-    let design_plan = design::plan_geometry(design_provider, &message).await?;
+    let mut design_plan = design::plan_geometry(design_provider, &message).await?;
 
-    // Send the design plan to the frontend so users can see the AI's reasoning.
+    // Validate the design plan (deterministic, no AI call).
+    let validation = design::validate_plan(&design_plan.text);
+
+    let _ = on_event.send(MultiPartEvent::PlanValidation {
+        risk_score: validation.risk_score,
+        warnings: validation.warnings.clone(),
+        is_valid: validation.is_valid,
+        rejected_reason: validation.rejected_reason.clone(),
+    });
+
+    // If plan is too risky, re-prompt once with feedback.
+    if !validation.is_valid {
+        let _ = on_event.send(MultiPartEvent::PlanStatus {
+            message: format!(
+                "Design plan too risky (score {}/10), re-planning...",
+                validation.risk_score
+            ),
+        });
+
+        let feedback = design::build_rejection_feedback(&validation);
+        let retry_provider = create_provider(&config)?;
+        design_plan = design::plan_geometry_with_feedback(
+            retry_provider, &message, &feedback
+        ).await?;
+
+        // Validate retry but accept even if still risky (max 1 retry).
+        let retry_validation = design::validate_plan(&design_plan.text);
+        let _ = on_event.send(MultiPartEvent::PlanValidation {
+            risk_score: retry_validation.risk_score,
+            warnings: retry_validation.warnings.clone(),
+            is_valid: retry_validation.is_valid,
+            rejected_reason: retry_validation.rejected_reason.clone(),
+        });
+    }
+
+    // Send the (possibly revised) design plan to the frontend.
     let _ = on_event.send(MultiPartEvent::DesignPlan {
         plan_text: design_plan.text.clone(),
     });
