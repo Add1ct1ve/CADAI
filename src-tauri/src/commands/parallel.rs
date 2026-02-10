@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::StreamDelta;
+use crate::agent::design;
 use crate::agent::prompts;
 use crate::agent::review;
 use crate::error::AppError;
@@ -38,6 +39,10 @@ pub struct PartSpec {
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum MultiPartEvent {
+    /// Geometry design plan produced before code generation.
+    DesignPlan {
+        plan_text: String,
+    },
     PlanStatus {
         message: String,
     },
@@ -87,40 +92,54 @@ pub enum MultiPartEvent {
 // Prompts
 // ---------------------------------------------------------------------------
 
-const PLANNER_SYSTEM_PROMPT: &str = r#"You are a CAD decomposition planner. Analyze the user's request and decide whether it should be built as a single part or decomposed into multiple parts.
+const PLANNER_SYSTEM_PROMPT: &str = r#"You are a CAD decomposition planner. Analyze the user's request (which includes a geometry design plan) and decide whether it should be built as a single part or decomposed into multiple parts.
 
 Return ONLY valid JSON (no markdown fences, no extra text).
 
-If the request is simple (a single object, a basic shape, one component), return:
+If the request is a single object (even a complex one like a helmet or handle), return:
 {"mode": "single"}
 
-If the request involves 2-4 clearly distinct components that fit together (e.g. a bottle with a cap, a box with a lid, a phone case with buttons), return:
+If the request involves 2-4 clearly distinct SEPARABLE components that fit together (e.g. a bottle with a cap, a box with a lid, a phone with a case), return:
 {
   "mode": "multi",
   "description": "Brief description of the overall assembly",
   "parts": [
     {
       "name": "snake_case_name",
-      "description": "Detailed description with ALL dimensions in mm. Be very specific about shape, size, and features. This description must be fully self-contained.",
+      "description": "Detailed geometric description with ALL dimensions in mm. Include the specific CadQuery operations to use (loft, revolve, booleans). Reference the geometry design plan. This description must be fully self-contained.",
       "position": [x, y, z],
       "constraints": ["any constraints like 'inner diameter must match outer diameter of part X'"]
     }
   ]
 }
 
+## When to use multi mode
+- The request describes 2-4 PHYSICALLY SEPARATE objects that assemble together
+- Example: "bottle with screw-on cap" → multi (bottle body + cap)
+- Example: "laptop stand with adjustable hinge" → multi (base + arm + platform)
+
+## When to use single mode
+- The request is ONE object, even if complex (helmet, phone case, vase, gear)
+- Features like holes, slots, fillets are modifications of one body, NOT separate parts
+- Complex shapes built from boolean operations on one body → single mode
+
+## Part description requirements (multi mode only)
+- Include specific CadQuery operations: "Use loft() between ellipses at heights 0, 80, 160mm"
+- Include all dimensions in mm
+- Include geometric detail from the design plan: profiles, cross-sections, radii
+- Each part description must be self-contained (another AI must be able to build it without other context)
+
 Rules:
-- Only decompose if there are 2-4 CLEARLY DISTINCT physical components
-- Each part description must be fully self-contained with all dimensions
-- Positions are in mm, relative to origin [0,0,0]
 - Part names must be valid Python identifiers (snake_case)
+- Positions are in mm, relative to origin [0,0,0]
 - Do NOT decompose decorative features, fillets, or chamfers into separate parts
-- When in doubt, return {"mode": "single"}
 
 Keep your response as short as possible. For single mode, return ONLY {"mode":"single"} with no other text."#;
 
-fn build_part_prompt(system_prompt: &str, part: &PartSpec) -> String {
+fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str) -> String {
     format!(
         "{}\n\n\
+        ## Geometry Design Context\n{}\n\n\
         ## IMPORTANT: You are generating ONE SPECIFIC PART of a multi-part assembly.\n\n\
         Generate ONLY this part: **{}**\n\n\
         Description: {}\n\n\
@@ -129,6 +148,7 @@ fn build_part_prompt(system_prompt: &str, part: &PartSpec) -> String {
         Do NOT generate any other parts. Do NOT create an assembly.\n\
         Wrap your code in a ```python code block.",
         system_prompt,
+        design_context,
         part.name,
         part.description,
         part.constraints
@@ -212,7 +232,29 @@ pub async fn generate_parallel(
     let user_request = message.clone();
 
     // -----------------------------------------------------------------------
-    // Phase 1: Plan
+    // Phase 0: Geometry Design Plan (always runs)
+    // -----------------------------------------------------------------------
+    let _ = on_event.send(MultiPartEvent::PlanStatus {
+        message: "Designing geometry...".to_string(),
+    });
+
+    let design_provider = create_provider(&config)?;
+    let design_plan = design::plan_geometry(design_provider, &message).await?;
+
+    // Send the design plan to the frontend so users can see the AI's reasoning.
+    let _ = on_event.send(MultiPartEvent::DesignPlan {
+        plan_text: design_plan.text.clone(),
+    });
+
+    // Build an enhanced message that includes the design plan as context
+    // for all downstream code generation.
+    let enhanced_message = format!(
+        "## Geometry Design Plan\n{}\n\n## User Request\n{}",
+        design_plan.text, message
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 1: Plan (decomposition)
     // -----------------------------------------------------------------------
     let _ = on_event.send(MultiPartEvent::PlanStatus {
         message: "Analyzing request...".to_string(),
@@ -227,7 +269,7 @@ pub async fn generate_parallel(
         },
         ChatMessage {
             role: "user".to_string(),
-            content: message.clone(),
+            content: enhanced_message.clone(),
         },
     ];
 
@@ -255,9 +297,10 @@ pub async fn generate_parallel(
             content: system_prompt,
         }];
         messages_list.extend(history);
+        // Use the enhanced message that includes the geometry design plan
         messages_list.push(ChatMessage {
             role: "user".to_string(),
-            content: message,
+            content: enhanced_message.clone(),
         });
 
         // Stream via the same channel using SingleDelta events.
@@ -346,7 +389,7 @@ pub async fn generate_parallel(
 
     for (idx, part) in plan.parts.iter().enumerate() {
         let part_provider = create_provider(&config)?;
-        let part_prompt = build_part_prompt(&system_prompt, part);
+        let part_prompt = build_part_prompt(&system_prompt, part, &design_plan.text);
         let part_name = part.name.clone();
         let event_channel = on_event.clone();
 

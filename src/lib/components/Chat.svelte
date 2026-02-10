@@ -18,6 +18,7 @@
   let isRetrying = $state(false);
   let partProgress = $state<PartProgress[]>([]);
   let isMultiPart = $state(false);
+  let designPlanText = $state('');
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -41,6 +42,7 @@
     isRetrying = false;
     isMultiPart = false;
     partProgress = [];
+    designPlanText = '';
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -303,6 +305,7 @@
     const myGen = chatStore.generationId;
     isMultiPart = false;
     partProgress = [];
+    designPlanText = '';
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -338,6 +341,10 @@
         if (chatStore.generationId !== myGen) return;
 
         switch (event.kind) {
+          case 'DesignPlan':
+            designPlanText = event.plan_text;
+            break;
+
           case 'PlanStatus':
             {
               // Start elapsed timer for planning phase
@@ -576,6 +583,7 @@
         chatStore.setStreaming(false);
         isMultiPart = false;
         partProgress = [];
+        designPlanText = '';
       }
     }
   }
@@ -647,6 +655,12 @@
         disableActions={chatStore.isStreaming || isRetrying}
       />
     {/each}
+    {#if designPlanText}
+      <details class="design-plan-block">
+        <summary class="design-plan-summary">Geometry Design Plan</summary>
+        <div class="design-plan-content">{designPlanText}</div>
+      </details>
+    {/if}
     {#if chatStore.isStreaming || isRetrying}
       <div class="streaming-indicator">
         <span class="dot"></span>
@@ -849,5 +863,47 @@
 
   .stop-btn:hover {
     background: #d13344;
+  }
+
+  .design-plan-block {
+    margin: 4px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-mantle);
+    overflow: hidden;
+  }
+
+  .design-plan-summary {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+
+  .design-plan-summary::before {
+    content: '\25B6  ';
+    font-size: 9px;
+  }
+
+  .design-plan-block[open] .design-plan-summary::before {
+    content: '\25BC  ';
+  }
+
+  .design-plan-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .design-plan-content {
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    border-top: 1px solid var(--border-subtle);
+    max-height: 300px;
+    overflow-y: auto;
   }
 </style>

@@ -22,6 +22,7 @@ pub struct AgentRules {
     pub design_thinking: Option<HashMap<String, Vec<String>>>,
     pub response_format: Option<HashMap<String, Vec<String>>>,
     pub cookbook: Option<Vec<CookbookEntry>>,
+    pub anti_patterns: Option<Vec<AntiPatternEntry>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +30,15 @@ pub struct CookbookEntry {
     pub title: String,
     pub description: Option<String>,
     pub code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AntiPatternEntry {
+    pub title: String,
+    pub wrong_code: String,
+    pub error_message: String,
+    pub explanation: String,
+    pub correct_code: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +120,7 @@ impl AgentRules {
             design_thinking: None,
             response_format: None,
             cookbook: None,
+            anti_patterns: None,
         }
     }
 }
@@ -336,6 +347,81 @@ mod tests {
         }
     }
 
+    // ── Anti-Patterns ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_anti_patterns_has_10_entries() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let ap = rules.anti_patterns.as_ref().unwrap();
+        assert_eq!(ap.len(), 10, "default should have 10 anti-patterns");
+    }
+
+    #[test]
+    fn test_printing_anti_patterns_has_10_entries() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let ap = rules.anti_patterns.as_ref().unwrap();
+        assert_eq!(ap.len(), 10, "printing should have 10 anti-patterns");
+    }
+
+    #[test]
+    fn test_cnc_anti_patterns_has_10_entries() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let ap = rules.anti_patterns.as_ref().unwrap();
+        assert_eq!(ap.len(), 10, "cnc should have 10 anti-patterns");
+    }
+
+    #[test]
+    fn test_anti_pattern_titles_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let ap = rules.anti_patterns.as_ref().unwrap();
+        let titles: Vec<&str> = ap.iter().map(|e| e.title.as_str()).collect();
+        assert!(titles.iter().any(|t| t.contains("Fillet before boolean")));
+        assert!(titles.iter().any(|t| t.contains("Shell on complex")));
+        assert!(titles.iter().any(|t| t.contains("Revolve profile")));
+        assert!(titles.iter().any(|t| t.contains("translate()")));
+        assert!(titles.iter().any(|t| t.contains("Sweep path")));
+        assert!(titles.iter().any(|t| t.contains("wrong face")));
+    }
+
+    #[test]
+    fn test_all_anti_patterns_have_required_fields() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let ap = rules.anti_patterns.as_ref().unwrap();
+            for entry in ap {
+                assert!(
+                    !entry.title.is_empty(),
+                    "Anti-pattern in preset {:?} has empty title",
+                    preset
+                );
+                assert!(
+                    !entry.wrong_code.is_empty(),
+                    "Anti-pattern '{}' in preset {:?} has empty wrong_code",
+                    entry.title,
+                    preset
+                );
+                assert!(
+                    !entry.error_message.is_empty(),
+                    "Anti-pattern '{}' in preset {:?} has empty error_message",
+                    entry.title,
+                    preset
+                );
+                assert!(
+                    !entry.explanation.is_empty(),
+                    "Anti-pattern '{}' in preset {:?} has empty explanation",
+                    entry.title,
+                    preset
+                );
+                assert!(
+                    !entry.correct_code.is_empty(),
+                    "Anti-pattern '{}' in preset {:?} has empty correct_code",
+                    entry.title,
+                    preset
+                );
+            }
+        }
+    }
+
     // ── default_empty() ────────────────────────────────────────────────
 
     #[test]
@@ -344,6 +430,7 @@ mod tests {
         assert!(rules.capabilities.is_none());
         assert!(rules.advanced_techniques.is_none());
         assert!(rules.design_thinking.is_none());
+        assert!(rules.anti_patterns.is_none());
     }
 
     // ── Print-specific extras ──────────────────────────────────────────
