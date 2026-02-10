@@ -19,7 +19,7 @@
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import { getHistoryStore } from '$lib/stores/history.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
-  import { startAutosave, stopAutosave } from '$lib/services/autosave';
+  import { startAutosave, stopAutosave, restoreDraftIfPresent } from '$lib/services/autosave';
   import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
   import { getDatumStore } from '$lib/stores/datum.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
@@ -56,6 +56,9 @@
       sketchStore.setSketchSnap(settings.config.snap_sketch ?? 0.5);
     });
 
+    restoreDraftIfPresent().catch((err) => {
+      console.warn('Draft restore failed:', err);
+    });
     startAutosave();
     sketchStore.initSolver().catch(console.error);
 

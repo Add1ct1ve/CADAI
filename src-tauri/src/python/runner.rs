@@ -1,13 +1,90 @@
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use uuid::Uuid;
+
 use crate::error::AppError;
 use super::venv;
+
+const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30_000;
+const POLL_INTERVAL_MS: u64 = 25;
 
 /// Result of executing CadQuery code
 pub struct ExecutionResult {
     pub stl_data: Vec<u8>,
     pub stdout: String,
     pub stderr: String,
+}
+
+fn create_execution_dir() -> Result<PathBuf, AppError> {
+    let dir = std::env::temp_dir()
+        .join("cadai-studio")
+        .join(Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn timeout_error(timeout_ms: u64) -> AppError {
+    let timeout_s = timeout_ms as f64 / 1000.0;
+    AppError::CadQueryError(format!(
+        "Execution timed out after {:.1} seconds",
+        timeout_s
+    ))
+}
+
+fn map_runner_error(exit_code: i32, stderr: &str, export_error_label: &str) -> AppError {
+    let error_msg = match exit_code {
+        2 => format!("CadQuery execution error:\n{}", stderr),
+        3 => "Code must assign final geometry to 'result' variable.".to_string(),
+        4 => format!("{export_error_label}:\n{}", stderr),
+        _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
+    };
+    AppError::CadQueryError(error_msg)
+}
+
+fn run_runner_with_timeout(
+    python: &Path,
+    runner_script: &Path,
+    input_file: &Path,
+    output_file: &Path,
+    timeout_ms: u64,
+    execution_dir: &Path,
+) -> Result<(std::process::ExitStatus, String, String), AppError> {
+    let stdout_path = execution_dir.join("stdout.log");
+    let stderr_path = execution_dir.join("stderr.log");
+    let stdout_file = std::fs::File::create(&stdout_path)?;
+    let stderr_file = std::fs::File::create(&stderr_path)?;
+
+    let mut child = Command::new(python)
+        .args([
+            runner_script.to_string_lossy().as_ref(),
+            input_file.to_string_lossy().as_ref(),
+            output_file.to_string_lossy().as_ref(),
+        ])
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()?;
+
+    let timeout = Duration::from_millis(timeout_ms.max(1));
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break status,
+            None => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(timeout_error(timeout_ms));
+                }
+                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+            }
+        }
+    };
+
+    let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    Ok((status, stdout, stderr))
 }
 
 /// Execute CadQuery Python code and return the resulting STL data.
@@ -19,66 +96,67 @@ pub fn execute_cadquery(
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
+    execute_cadquery_with_timeout_ms(
+        venv_dir,
+        runner_script,
+        code,
+        DEFAULT_EXECUTION_TIMEOUT_MS,
+    )
+}
+
+/// Execute CadQuery Python code and return STL data, with a hard timeout.
+///
+/// Uses a unique per-call temp directory to avoid collisions between concurrent runs.
+pub fn execute_cadquery_with_timeout_ms(
+    venv_dir: &Path,
+    runner_script: &Path,
+    code: &str,
+    timeout_ms: u64,
+) -> Result<ExecutionResult, AppError> {
     let python = venv::get_venv_python(venv_dir);
 
     if !python.exists() {
         return Err(AppError::PythonNotFound);
     }
 
-    // Create temp directory for this execution
-    let temp_dir = std::env::temp_dir().join("cadai-studio");
-    std::fs::create_dir_all(&temp_dir)?;
-
+    let temp_dir = create_execution_dir()?;
     let input_file = temp_dir.join("input.py");
     let output_file = temp_dir.join("output.stl");
 
-    // Write the code to the temp input file
-    std::fs::write(&input_file, code)?;
+    let result = (|| -> Result<ExecutionResult, AppError> {
+        std::fs::write(&input_file, code)?;
 
-    // Remove any existing output file
-    let _ = std::fs::remove_file(&output_file);
+        let (status, stdout, stderr) = run_runner_with_timeout(
+            &python,
+            runner_script,
+            &input_file,
+            &output_file,
+            timeout_ms,
+            &temp_dir,
+        )?;
 
-    // Run the Python script
-    let output = Command::new(&python)
-        .args([
-            runner_script.to_string_lossy().as_ref(),
-            input_file.to_string_lossy().as_ref(),
-            output_file.to_string_lossy().as_ref(),
-        ])
-        .output()?;
+        if !status.success() {
+            let exit_code = status.code().unwrap_or(-1);
+            return Err(map_runner_error(exit_code, &stderr, "STL export error"));
+        }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output_file.exists() {
+            return Err(AppError::CadQueryError(
+                "STL file was not generated".into(),
+            ));
+        }
 
-    if !output.status.success() {
-        let exit_code = output.status.code().unwrap_or(-1);
-        let error_msg = match exit_code {
-            2 => format!("CadQuery execution error:\n{}", stderr),
-            3 => "Code must assign final geometry to 'result' variable.".to_string(),
-            4 => format!("STL export error:\n{}", stderr),
-            _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
-        };
-        return Err(AppError::CadQueryError(error_msg));
-    }
+        let stl_data = std::fs::read(&output_file)?;
 
-    // Read the generated STL file
-    if !output_file.exists() {
-        return Err(AppError::CadQueryError(
-            "STL file was not generated".into(),
-        ));
-    }
+        Ok(ExecutionResult {
+            stl_data,
+            stdout,
+            stderr,
+        })
+    })();
 
-    let stl_data = std::fs::read(&output_file)?;
-
-    // Cleanup temp files
-    let _ = std::fs::remove_file(&input_file);
-    let _ = std::fs::remove_file(&output_file);
-
-    Ok(ExecutionResult {
-        stl_data,
-        stdout,
-        stderr,
-    })
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    result
 }
 
 /// Result of running a generic Python script
@@ -123,79 +201,18 @@ pub fn execute_python_script(
 
 /// Execute CadQuery Python code in an isolated temp subdirectory.
 ///
-/// Unlike `execute_cadquery()`, this creates a unique subdirectory per call
-/// so multiple executions can run concurrently without file collisions.
+/// Kept for API compatibility with call sites that explicitly request isolation.
 pub fn execute_cadquery_isolated(
     venv_dir: &Path,
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
-    let python = venv::get_venv_python(venv_dir);
-
-    if !python.exists() {
-        return Err(AppError::PythonNotFound);
-    }
-
-    // Create a unique subdirectory using PID + timestamp nanos
-    let unique_id = format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
-    let temp_dir = std::env::temp_dir()
-        .join("cadai-studio")
-        .join(unique_id);
-    std::fs::create_dir_all(&temp_dir)?;
-
-    let input_file = temp_dir.join("input.py");
-    let output_file = temp_dir.join("output.stl");
-
-    std::fs::write(&input_file, code)?;
-
-    let output = Command::new(&python)
-        .args([
-            runner_script.to_string_lossy().as_ref(),
-            input_file.to_string_lossy().as_ref(),
-            output_file.to_string_lossy().as_ref(),
-        ])
-        .output()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        let exit_code = output.status.code().unwrap_or(-1);
-        let error_msg = match exit_code {
-            2 => format!("CadQuery execution error:\n{}", stderr),
-            3 => "Code must assign final geometry to 'result' variable.".to_string(),
-            4 => format!("STL export error:\n{}", stderr),
-            _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
-        };
-        // Cleanup subdirectory before returning error
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(AppError::CadQueryError(error_msg));
-    }
-
-    if !output_file.exists() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(AppError::CadQueryError(
-            "STL file was not generated".into(),
-        ));
-    }
-
-    let stl_data = std::fs::read(&output_file)?;
-
-    // Cleanup the entire subdirectory
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
-    Ok(ExecutionResult {
-        stl_data,
-        stdout,
-        stderr,
-    })
+    execute_cadquery_with_timeout_ms(
+        venv_dir,
+        runner_script,
+        code,
+        DEFAULT_EXECUTION_TIMEOUT_MS,
+    )
 }
 
 /// Execute CadQuery Python code and export directly to a specific file path.
@@ -214,34 +231,36 @@ pub fn execute_cadquery_to_file(
         return Err(AppError::PythonNotFound);
     }
 
-    let temp_dir = std::env::temp_dir().join("cadai-studio");
-    std::fs::create_dir_all(&temp_dir)?;
-
+    let temp_dir = create_execution_dir()?;
     let input_file = temp_dir.join("input.py");
-    std::fs::write(&input_file, code)?;
+    let output_file = Path::new(output_path);
 
-    let output = Command::new(&python)
-        .args([
-            runner_script.to_string_lossy().as_ref(),
-            input_file.to_string_lossy().as_ref(),
-            output_path,
-        ])
-        .output()?;
+    let result = (|| -> Result<(), AppError> {
+        std::fs::write(&input_file, code)?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (status, _stdout, stderr) = run_runner_with_timeout(
+            &python,
+            runner_script,
+            &input_file,
+            output_file,
+            DEFAULT_EXECUTION_TIMEOUT_MS,
+            &temp_dir,
+        )?;
 
-    if !output.status.success() {
-        let exit_code = output.status.code().unwrap_or(-1);
-        let error_msg = match exit_code {
-            2 => format!("CadQuery execution error:\n{}", stderr),
-            3 => "Code must assign final geometry to 'result' variable.".to_string(),
-            4 => format!("Export error:\n{}", stderr),
-            _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
-        };
-        return Err(AppError::CadQueryError(error_msg));
-    }
+        if !status.success() {
+            let exit_code = status.code().unwrap_or(-1);
+            return Err(map_runner_error(exit_code, &stderr, "Export error"));
+        }
 
-    let _ = std::fs::remove_file(&input_file);
+        if !output_file.exists() {
+            return Err(AppError::CadQueryError(
+                "Export file was not generated".into(),
+            ));
+        }
 
-    Ok(())
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    result
 }

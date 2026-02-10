@@ -59,12 +59,10 @@ export interface ProjectState {
   modified: boolean;
 }
 
-export interface ExecuteResult {
-  stl_base64: string | null;
-  stdout: string;
-  stderr: string;
-  success: boolean;
-}
+export type ExecuteResult = import('$lib/types/execution').CadExecutionResult;
+export type ExecutionRequest = import('$lib/types/execution').ExecutionRequest;
+export type ExecutionTiming = import('$lib/types/execution').ExecutionTiming;
+export type ExecutionArtifacts = import('$lib/types/execution').ExecutionArtifacts;
 
 export interface PythonStatus {
   python_found: boolean;
@@ -236,5 +234,13 @@ export interface ProjectFile {
     codeMode: import('$lib/types/cad').CodeMode;
     camera: import('$lib/types/cad').CameraState;
     sketches?: import('$lib/types/cad').Sketch[];
+    featureTree?: import('$lib/stores/feature-tree.svelte').FeatureTreeSnapshot;
+    datumPlanes?: import('$lib/types/cad').DatumPlane[];
+    datumAxes?: import('$lib/types/cad').DatumAxis[];
+    displayMode?: import('$lib/types/cad').DisplayMode;
+    components?: import('$lib/types/cad').Component[];
+    componentNameCounter?: number;
+    mates?: import('$lib/types/cad').AssemblyMate[];
+    drawings?: import('$lib/types/drawing').Drawing[];
   };
 }

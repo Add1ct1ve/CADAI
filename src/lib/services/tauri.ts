@@ -1,6 +1,20 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo, DesignPlanResult, PartSpec } from '$lib/types';
+import type {
+  AppConfig,
+  ExecuteResult,
+  PythonStatus,
+  StreamEvent,
+  RustChatMessage,
+  AutoRetryResult,
+  ProjectFile,
+  ProviderInfo,
+  MultiPartEvent,
+  TokenUsageData,
+  SkippedStepInfo,
+  DesignPlanResult,
+  PartSpec,
+} from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -278,9 +292,18 @@ export function extractPythonCode(text: string): string | null {
 /**
  * Execute CadQuery code via the Python backend
  */
-export async function executeCode(code: string): Promise<ExecuteResult> {
+export async function executeCode(
+  code: string,
+  timeoutMs?: number,
+): Promise<ExecuteResult> {
   try {
-    return await invoke<ExecuteResult>('execute_code', { code });
+    const request: Record<string, unknown> = {
+      code,
+    };
+    if (timeoutMs !== undefined) {
+      request.timeoutMs = timeoutMs;
+    }
+    return await invoke<ExecuteResult>('execute_code', request);
   } catch (err) {
     console.error('execute_code failed:', err);
     throw new Error(`Execute code failed: ${err}`);
