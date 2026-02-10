@@ -278,8 +278,22 @@ pub async fn generate_parallel(
         message: "Designing geometry...".to_string(),
     });
 
+    // Extract manufacturing constraints for the geometry advisor
+    let manufacturing_ctx = {
+        let rules = crate::agent::rules::AgentRules::from_preset(
+            config.agent_rules_preset.as_deref()
+        ).ok();
+        rules.and_then(|r| r.manufacturing.as_ref().map(|m| {
+            crate::agent::design::format_manufacturing_constraints(m)
+        }))
+    };
+
     let design_provider = create_provider(&config)?;
-    let (mut design_plan, design_usage) = design::plan_geometry(design_provider, &message).await?;
+    let (mut design_plan, design_usage) = design::plan_geometry(
+        design_provider,
+        &message,
+        manufacturing_ctx.as_deref(),
+    ).await?;
     if let Some(ref u) = design_usage {
         total_usage.add(u);
         emit_usage(&on_event, "design", u, &provider_id, &model_id);
@@ -307,7 +321,7 @@ pub async fn generate_parallel(
         let feedback = design::build_rejection_feedback(&validation);
         let retry_provider = create_provider(&config)?;
         let (retry_plan, retry_usage) = design::plan_geometry_with_feedback(
-            retry_provider, &message, &feedback
+            retry_provider, &message, &feedback, manufacturing_ctx.as_deref()
         ).await?;
         design_plan = retry_plan;
         if let Some(ref u) = retry_usage {
