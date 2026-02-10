@@ -58,7 +58,7 @@ pub enum ValidationEvent {
 /// Run CadQuery code through `runner.py` with a timeout.
 ///
 /// Returns `Ok(ExecutionResult)` on success, `Err(error_message)` on failure or timeout.
-async fn execute_with_timeout(
+pub async fn execute_with_timeout(
     code: &str,
     venv_dir: &Path,
     runner_script: &Path,

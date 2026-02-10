@@ -9,6 +9,7 @@ export interface ChatMessage {
   errorMessage?: string; // the raw error text (for retry)
   retryAttempt?: number; // which retry attempt this is (1-3)
   codeUpdatedByAi?: boolean; // whether code was updated via auto-retry
+  hasSkippedSteps?: boolean; // triggers retry button for iterative build skipped steps
 }
 
 export interface AppConfig {
@@ -138,6 +139,12 @@ export type MultiPartEvent =
   | { kind: 'ValidationAttempt'; attempt: number; max_attempts: number; message: string }
   | { kind: 'ValidationSuccess'; attempt: number; message: string }
   | { kind: 'ValidationFailed'; attempt: number; error_category: string; error_message: string; will_retry: boolean }
+  | { kind: 'IterativeStart'; total_steps: number; steps: { index: number; name: string; description: string; operations: string[] }[] }
+  | { kind: 'IterativeStepStarted'; step_index: number; step_name: string; description: string }
+  | { kind: 'IterativeStepComplete'; step_index: number; success: boolean; stl_base64?: string }
+  | { kind: 'IterativeStepRetry'; step_index: number; attempt: number; error: string }
+  | { kind: 'IterativeStepSkipped'; step_index: number; name: string; error: string }
+  | { kind: 'IterativeComplete'; final_code: string; stl_base64?: string; skipped_steps: SkippedStepInfo[] }
   | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
   | { kind: 'Done'; success: boolean; error?: string; validated?: boolean };
 
@@ -146,6 +153,23 @@ export interface PartProgress {
   status: 'pending' | 'generating' | 'complete' | 'failed';
   streamedText: string;
   error?: string;
+}
+
+export interface IterativeStepProgress {
+  index: number;
+  name: string;
+  description: string;
+  status: 'pending' | 'generating' | 'retrying' | 'complete' | 'skipped';
+  stl_base64?: string;
+  error?: string;
+  attempt?: number;
+}
+
+export interface SkippedStepInfo {
+  step_index: number;
+  name: string;
+  description: string;
+  error: string;
 }
 
 export interface ProjectFile {

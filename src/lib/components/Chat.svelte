@@ -2,9 +2,9 @@
   import { getChatStore } from '$lib/stores/chat.svelte';
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
-  import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming } from '$lib/services/tauri';
+  import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
   import ChatMessageComponent from './ChatMessage.svelte';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, TokenUsageData } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -20,6 +20,11 @@
   let isMultiPart = $state(false);
   let designPlanText = $state('');
   let tokenUsageSummary = $state<TokenUsageData | null>(null);
+  let iterativeSteps = $state<IterativeStepProgress[]>([]);
+  let isIterative = $state(false);
+  let skippedStepsData = $state<SkippedStepInfo[]>([]);
+  let lastDesignPlanText = $state('');
+  let lastUserRequest = $state('');
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -44,6 +49,8 @@
     isMultiPart = false;
     partProgress = [];
     designPlanText = '';
+    isIterative = false;
+    iterativeSteps = [];
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -284,6 +291,166 @@
     handleExplainError(errorMessage, failedCode);
   }
 
+  async function handleRetrySkippedSteps() {
+    if (chatStore.isStreaming || isRetrying || skippedStepsData.length === 0) return;
+
+    const myGen = chatStore.generationId;
+    const currentCode = project.code;
+    isIterative = true;
+    iterativeSteps = [];
+
+    chatStore.addMessage({
+      id: generateId(),
+      role: 'system',
+      content: `Retrying ${skippedStepsData.length} skipped step(s)...`,
+      timestamp: Date.now(),
+    });
+
+    const assistantMsg: ChatMessage = {
+      id: generateId(),
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+    chatStore.addMessage(assistantMsg);
+    chatStore.setStreaming(true);
+
+    let validatedStl: string | null = null;
+
+    try {
+      const result = await retrySkippedSteps(
+        currentCode,
+        skippedStepsData,
+        lastDesignPlanText,
+        lastUserRequest,
+        (event: MultiPartEvent) => {
+          if (chatStore.generationId !== myGen) return;
+
+          switch (event.kind) {
+            case 'IterativeStart':
+              iterativeSteps = event.steps.map((s) => ({
+                index: s.index,
+                name: s.name,
+                description: s.description,
+                status: 'pending' as const,
+              }));
+              chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+              break;
+
+            case 'IterativeStepStarted':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'generating';
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'IterativeStepComplete':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = event.success ? 'complete' : 'skipped';
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                  if (event.success && event.stl_base64) {
+                    viewportStore.setPendingStl(event.stl_base64);
+                  }
+                }
+              }
+              break;
+
+            case 'IterativeStepRetry':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'retrying';
+                  iterativeSteps[stepIdx].attempt = event.attempt;
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'IterativeStepSkipped':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'skipped';
+                  iterativeSteps[stepIdx].error = event.error;
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'FinalCode':
+              project.setCode(event.code);
+              if (event.stl_base64) validatedStl = event.stl_base64;
+              break;
+
+            case 'IterativeComplete':
+              if (event.skipped_steps.length > 0) {
+                skippedStepsData = event.skipped_steps;
+              } else {
+                skippedStepsData = [];
+              }
+              break;
+
+            case 'TokenUsage':
+              if (event.phase === 'total') {
+                tokenUsageSummary = {
+                  input_tokens: event.input_tokens,
+                  output_tokens: event.output_tokens,
+                  total_tokens: event.total_tokens,
+                  cost_usd: event.cost_usd,
+                };
+              }
+              break;
+
+            case 'Done':
+              break;
+          }
+        },
+      );
+
+      if (chatStore.generationId !== myGen) return;
+
+      if (validatedStl) {
+        viewportStore.setPendingStl(validatedStl);
+      }
+
+      if (skippedStepsData.length === 0) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: 'All previously skipped steps completed successfully!',
+          timestamp: Date.now(),
+        });
+      } else {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: `${skippedStepsData.length} step(s) still failed. You can try again or modify the request.`,
+          timestamp: Date.now(),
+          hasSkippedSteps: true,
+        });
+      }
+    } catch (err) {
+      chatStore.addMessage({
+        id: generateId(),
+        role: 'system',
+        content: `Retry failed: ${err}`,
+        timestamp: Date.now(),
+        isError: true,
+      });
+    } finally {
+      if (chatStore.generationId === myGen) {
+        chatStore.setStreaming(false);
+        isIterative = false;
+        iterativeSteps = [];
+      }
+    }
+  }
+
   function formatPartProgress(parts: PartProgress[]): string {
     if (parts.length === 0) return '';
     const lines = parts.map((p) => {
@@ -301,6 +468,26 @@
     return `Generating ${parts.length} parts in parallel:\n${lines.join('\n')}`;
   }
 
+  function formatIterativeProgress(steps: IterativeStepProgress[]): string {
+    if (steps.length === 0) return '';
+    const completed = steps.filter((s) => s.status === 'complete').length;
+    const lines = steps.map((s) => {
+      switch (s.status) {
+        case 'pending':
+          return `[ ] Step ${s.index}: ${s.description}`;
+        case 'generating':
+          return `[...] Step ${s.index}: ${s.description}`;
+        case 'retrying':
+          return `[Retry ${s.attempt ?? ''}] Step ${s.index}: ${s.description}`;
+        case 'complete':
+          return `[Done] Step ${s.index}: ${s.description}`;
+        case 'skipped':
+          return `[Skipped] Step ${s.index}: ${s.description}${s.error ? ` — ${s.error}` : ''}`;
+      }
+    });
+    return `Building step by step (${completed}/${steps.length}):\n${lines.join('\n')}`;
+  }
+
   async function handleSend() {
     const text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
@@ -310,6 +497,10 @@
     partProgress = [];
     designPlanText = '';
     tokenUsageSummary = null;
+    isIterative = false;
+    iterativeSteps = [];
+    skippedStepsData = [];
+    lastUserRequest = text;
     let validatedStl: string | null = null;
     let backendValidated = false;
 
@@ -349,6 +540,7 @@
         switch (event.kind) {
           case 'DesignPlan':
             designPlanText = event.plan_text;
+            lastDesignPlanText = event.plan_text;
             break;
 
           case 'PlanValidation':
@@ -494,6 +686,81 @@
             }
             break;
 
+          case 'IterativeStart':
+            isIterative = true;
+            iterativeSteps = event.steps.map((s) => ({
+              index: s.index,
+              name: s.name,
+              description: s.description,
+              status: 'pending' as const,
+            }));
+            chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+            break;
+
+          case 'IterativeStepStarted':
+            {
+              const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+              if (stepIdx >= 0) {
+                iterativeSteps[stepIdx].status = 'generating';
+                chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+              }
+            }
+            break;
+
+          case 'IterativeStepComplete':
+            {
+              const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+              if (stepIdx >= 0) {
+                iterativeSteps[stepIdx].status = event.success ? 'complete' : 'skipped';
+                if (event.stl_base64) {
+                  iterativeSteps[stepIdx].stl_base64 = event.stl_base64;
+                }
+                chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                // Update viewport with intermediate STL so user sees model being built
+                if (event.success && event.stl_base64) {
+                  viewportStore.setPendingStl(event.stl_base64);
+                }
+              }
+            }
+            break;
+
+          case 'IterativeStepRetry':
+            {
+              const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+              if (stepIdx >= 0) {
+                iterativeSteps[stepIdx].status = 'retrying';
+                iterativeSteps[stepIdx].attempt = event.attempt;
+                iterativeSteps[stepIdx].error = event.error;
+                chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+              }
+            }
+            break;
+
+          case 'IterativeStepSkipped':
+            {
+              const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+              if (stepIdx >= 0) {
+                iterativeSteps[stepIdx].status = 'skipped';
+                iterativeSteps[stepIdx].error = event.error;
+                chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+              }
+            }
+            break;
+
+          case 'IterativeComplete':
+            if (event.skipped_steps.length > 0) {
+              skippedStepsData = event.skipped_steps;
+              const skippedNames = event.skipped_steps.map((s) => s.name).join(', ');
+              chatStore.addMessage({
+                id: generateId(),
+                role: 'system',
+                content: `Build complete with ${event.skipped_steps.length} skipped step(s): ${skippedNames}. You can retry them below.`,
+                timestamp: Date.now(),
+                hasSkippedSteps: true,
+              });
+            }
+            break;
+
           case 'TokenUsage':
             if (event.phase === 'total') {
               tokenUsageSummary = {
@@ -513,8 +780,12 @@
 
       if (chatStore.generationId !== myGen) return;
 
-      // Backend validated: STL already available, skip frontend execution
-      if (validatedStl) {
+      // Iterative mode: STL already set via StepComplete events, skip frontend execution
+      if (isIterative && validatedStl) {
+        viewportStore.setPendingStl(validatedStl);
+      } else if (isIterative) {
+        // Iterative completed (possibly with skipped steps), code already set via FinalCode
+      } else if (validatedStl) {
         viewportStore.setPendingStl(validatedStl);
       } else if (backendValidated) {
         // Backend validated but failed — code is already set in editor via FinalCode event.
@@ -638,6 +909,8 @@
         isMultiPart = false;
         partProgress = [];
         designPlanText = '';
+        isIterative = false;
+        iterativeSteps = [];
       }
     }
   }
@@ -714,6 +987,14 @@
         <summary class="design-plan-summary">Geometry Design Plan</summary>
         <div class="design-plan-content">{designPlanText}</div>
       </details>
+    {/if}
+    {#if skippedStepsData.length > 0 && !chatStore.isStreaming && !isRetrying}
+      <div class="retry-skipped-bar">
+        <span class="retry-skipped-label">{skippedStepsData.length} step(s) were skipped</span>
+        <button class="retry-skipped-btn" onclick={handleRetrySkippedSteps}>
+          Retry Skipped Steps
+        </button>
+      </div>
     {/if}
     {#if tokenUsageSummary && !chatStore.isStreaming && !isRetrying}
       <div class="token-usage-badge">
@@ -945,6 +1226,40 @@
 
   .token-cost {
     opacity: 0.6;
+  }
+
+  .retry-skipped-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 4px 12px;
+    padding: 6px 10px;
+    background: var(--bg-mantle);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+  }
+
+  .retry-skipped-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .retry-skipped-btn {
+    background: var(--accent);
+    color: var(--bg-base);
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s ease;
+  }
+
+  .retry-skipped-btn:hover {
+    background: var(--accent-hover);
   }
 
   .design-plan-block {

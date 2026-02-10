@@ -283,6 +283,11 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
         || lower.lines().any(|line| line.trim().to_lowercase() == heading_lower)
 }
 
+/// Public wrapper for `extract_operations` — used by `iterative.rs` to detect risky ops.
+pub fn extract_operations_from_text(text: &str) -> Vec<String> {
+    extract_operations(text)
+}
+
 // ---------------------------------------------------------------------------
 // Plan validation
 // ---------------------------------------------------------------------------
