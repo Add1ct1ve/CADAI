@@ -29,6 +29,8 @@ pub struct AppConfig {
     pub snap_rotation: Option<f64>,
     #[serde(default = "default_snap_sketch")]
     pub snap_sketch: Option<f64>,
+    #[serde(default)]
+    pub enable_consensus: bool,
 }
 
 fn default_true() -> bool {
@@ -77,6 +79,7 @@ impl Default for AppConfig {
             snap_translate: Some(1.0),
             snap_rotation: Some(15.0),
             snap_sketch: Some(0.5),
+            enable_consensus: false,
         }
     }
 }

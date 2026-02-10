@@ -27,6 +27,8 @@
   let lastUserRequest = $state('');
   let diffData = $state<{ diff_lines: DiffLine[]; additions: number; deletions: number } | null>(null);
   let isModification = $state(false);
+  let isConsensus = $state(false);
+  let consensusProgress = $state<{ label: string; status: string; temperature?: number; hasCode?: boolean; executionSuccess?: boolean }[]>([]);
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -55,6 +57,8 @@
     iterativeSteps = [];
     isModification = false;
     diffData = null;
+    isConsensus = false;
+    consensusProgress = [];
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -472,6 +476,28 @@
     return `Generating ${parts.length} parts in parallel:\n${lines.join('\n')}`;
   }
 
+  function formatConsensusProgress(candidates: typeof consensusProgress): string {
+    if (candidates.length === 0) return '';
+    const lines = candidates.map((c) => {
+      const tempStr = c.temperature != null ? ` (temp ${c.temperature})` : '';
+      switch (c.status) {
+        case 'pending':
+          return `[ ] Candidate ${c.label}${tempStr}`;
+        case 'generating':
+          return `[...] Candidate ${c.label}${tempStr} generating`;
+        case 'generated':
+          return `[${c.hasCode ? 'code' : 'no code'}] Candidate ${c.label}${tempStr} generated`;
+        case 'executing':
+          return `[running] Candidate ${c.label}${tempStr} executing`;
+        case 'executed':
+          return `[${c.executionSuccess ? 'pass' : 'fail'}] Candidate ${c.label}${tempStr} executed`;
+        default:
+          return `[${c.status}] Candidate ${c.label}${tempStr}`;
+      }
+    });
+    return `Running consensus (${candidates.length} candidates):\n${lines.join('\n')}`;
+  }
+
   function formatIterativeProgress(steps: IterativeStepProgress[]): string {
     if (steps.length === 0) return '';
     const completed = steps.filter((s) => s.status === 'complete').length;
@@ -506,6 +532,8 @@
     skippedStepsData = [];
     isModification = false;
     diffData = null;
+    isConsensus = false;
+    consensusProgress = [];
     lastUserRequest = text;
     let validatedStl: string | null = null;
     let backendValidated = false;
@@ -784,6 +812,37 @@
             }
             break;
 
+          case 'ConsensusStarted':
+            isConsensus = true;
+            consensusProgress = [
+              { label: 'A', status: 'pending' },
+              { label: 'B', status: 'pending' },
+            ];
+            chatStore.updateLastMessage(formatConsensusProgress(consensusProgress));
+            break;
+
+          case 'ConsensusCandidate':
+            {
+              const cidx = consensusProgress.findIndex((c) => c.label === event.label);
+              if (cidx >= 0) {
+                consensusProgress[cidx].status = event.status;
+                consensusProgress[cidx].temperature = event.temperature;
+                if (event.has_code != null) consensusProgress[cidx].hasCode = event.has_code;
+                if (event.execution_success != null) consensusProgress[cidx].executionSuccess = event.execution_success;
+                chatStore.updateLastMessage(formatConsensusProgress(consensusProgress));
+              }
+            }
+            break;
+
+          case 'ConsensusWinner':
+            {
+              const lastContent8 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(
+                `${lastContent8}\n\nWinner: Candidate ${event.label} (score ${event.score}) — ${event.reason}`
+              );
+            }
+            break;
+
           case 'ModificationDetected':
             isModification = true;
             break;
@@ -936,6 +995,8 @@
         isIterative = false;
         iterativeSteps = [];
         isModification = false;
+        isConsensus = false;
+        consensusProgress = [];
       }
     }
   }

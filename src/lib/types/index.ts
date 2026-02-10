@@ -28,6 +28,7 @@ export interface AppConfig {
   snap_translate: number | null;
   snap_rotation: number | null;
   snap_sketch: number | null;
+  enable_consensus: boolean;
 }
 
 export interface ModelInfo {
@@ -147,6 +148,9 @@ export type MultiPartEvent =
   | { kind: 'IterativeComplete'; final_code: string; stl_base64?: string; skipped_steps: SkippedStepInfo[] }
   | { kind: 'ModificationDetected'; intent_summary: string }
   | { kind: 'CodeDiff'; diff_lines: DiffLine[]; old_line_count: number; new_line_count: number; additions: number; deletions: number }
+  | { kind: 'ConsensusStarted'; candidate_count: number }
+  | { kind: 'ConsensusCandidate'; label: string; temperature: number; status: string; has_code?: boolean; execution_success?: boolean }
+  | { kind: 'ConsensusWinner'; label: string; score: number; reason: string }
   | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
   | { kind: 'Done'; success: boolean; error?: string; validated?: boolean };
 

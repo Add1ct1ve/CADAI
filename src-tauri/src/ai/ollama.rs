@@ -14,6 +14,7 @@ pub struct OllamaProvider {
     client: Client,
     base_url: String,
     model: String,
+    temperature: Option<f32>,
 }
 
 impl OllamaProvider {
@@ -22,7 +23,13 @@ impl OllamaProvider {
             client: Client::new(),
             base_url: base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string()),
             model,
+            temperature: None,
         }
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     fn chat_endpoint(&self) -> String {
@@ -33,10 +40,18 @@ impl OllamaProvider {
 // --- Request / Response types for the Ollama Chat API ---
 
 #[derive(Serialize)]
+struct OllamaOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+}
+
+#[derive(Serialize)]
 struct OllamaRequest {
     model: String,
     messages: Vec<OllamaMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaOptions>,
 }
 
 #[derive(Serialize)]
@@ -89,10 +104,15 @@ impl AiProvider for OllamaProvider {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 
+        let options = self.temperature.map(|t| OllamaOptions {
+            temperature: Some(t),
+        });
+
         let body = OllamaRequest {
             model: self.model.clone(),
             messages: ollama_messages,
             stream: false,
+            options,
         };
 
         let response = self
@@ -142,10 +162,15 @@ impl AiProvider for OllamaProvider {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 
+        let options = self.temperature.map(|t| OllamaOptions {
+            temperature: Some(t),
+        });
+
         let body = OllamaRequest {
             model: self.model.clone(),
             messages: ollama_messages,
             stream: true,
+            options,
         };
 
         let response = self

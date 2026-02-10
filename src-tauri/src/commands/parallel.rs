@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::ai::message::ChatMessage;
 use crate::ai::cost;
 use crate::ai::provider::{StreamDelta, TokenUsage};
+use crate::agent::consensus;
 use crate::agent::design;
 use crate::agent::executor;
 use crate::agent::iterative;
@@ -154,6 +155,21 @@ pub enum MultiPartEvent {
         new_line_count: usize,
         additions: usize,
         deletions: usize,
+    },
+    ConsensusStarted {
+        candidate_count: u32,
+    },
+    ConsensusCandidate {
+        label: String,
+        temperature: f32,
+        status: String,
+        has_code: Option<bool>,
+        execution_success: Option<bool>,
+    },
+    ConsensusWinner {
+        label: String,
+        score: u32,
+        reason: String,
     },
     Done {
         success: bool,
@@ -803,6 +819,160 @@ pub async fn generate_parallel(
                 return Ok(result.final_code);
             }
             // No Python execution context → fall through to single-shot
+        }
+
+        // -------------------------------------------------------------------
+        // Consensus branch: run 2 parallel generations at different temperatures
+        // -------------------------------------------------------------------
+        if config.enable_consensus {
+            if let Some(ref ctx) = execution_ctx {
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: "Running consensus (2 candidates)...".to_string(),
+                });
+
+                // Build messages for consensus: system + history + enhanced message
+                let mut consensus_messages = vec![ChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt.clone(),
+                }];
+                consensus_messages.extend(history.clone());
+                consensus_messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: enhanced_message.clone(),
+                });
+
+                let on_consensus_event = |evt: consensus::ConsensusEvent| {
+                    match evt {
+                        consensus::ConsensusEvent::Started { candidate_count } => {
+                            let _ = on_event.send(MultiPartEvent::ConsensusStarted {
+                                candidate_count,
+                            });
+                        }
+                        consensus::ConsensusEvent::CandidateUpdate {
+                            label, temperature, status, has_code, execution_success,
+                        } => {
+                            let _ = on_event.send(MultiPartEvent::ConsensusCandidate {
+                                label, temperature, status, has_code, execution_success,
+                            });
+                        }
+                        consensus::ConsensusEvent::Winner { label, score, reason } => {
+                            let _ = on_event.send(MultiPartEvent::ConsensusWinner {
+                                label, score, reason,
+                            });
+                        }
+                    }
+                };
+
+                let consensus_result = consensus::run_consensus(
+                    &consensus_messages, &config, ctx, &on_consensus_event,
+                ).await?;
+
+                total_usage.add(&consensus_result.total_usage);
+                if consensus_result.total_usage.total() > 0 {
+                    emit_usage(&on_event, "consensus", &consensus_result.total_usage, &provider_id, &model_id);
+                }
+
+                let winner = &consensus_result.winner;
+
+                if let Some(ref code) = winner.code {
+                    // Emit the winner's response as the AI message
+                    let response_text = winner.response.clone().unwrap_or_default();
+                    let _ = on_event.send(MultiPartEvent::SingleDone {
+                        full_response: response_text.clone(),
+                    });
+
+                    // Optional: code review
+                    let mut final_code = code.clone();
+                    let mut reviewed = false;
+                    if config.enable_code_review {
+                        let _ = on_event.send(MultiPartEvent::ReviewStatus {
+                            message: "Reviewing consensus winner...".to_string(),
+                        });
+                        let review_provider = create_provider(&config)?;
+                        match review::review_code(review_provider, &user_request, code, Some(&design_plan.text)).await {
+                            Ok((result, review_usage)) => {
+                                if let Some(ref u) = review_usage {
+                                    total_usage.add(u);
+                                    emit_usage(&on_event, "review", u, &provider_id, &model_id);
+                                }
+                                let _ = on_event.send(MultiPartEvent::ReviewComplete {
+                                    was_modified: result.was_modified,
+                                    explanation: result.explanation.clone(),
+                                });
+                                if result.was_modified {
+                                    final_code = result.code;
+                                    reviewed = true;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Code review failed (consensus): {}", e);
+                            }
+                        }
+                    }
+
+                    // If winner already executed OK and review didn't change code,
+                    // emit the winner's STL directly
+                    if winner.execution_success && !reviewed {
+                        let _ = on_event.send(MultiPartEvent::FinalCode {
+                            code: final_code.clone(),
+                            stl_base64: winner.stl_base64.clone(),
+                        });
+                    } else {
+                        // Run validate_and_retry on the (possibly reviewed) code
+                        let on_validation_event = |evt: executor::ValidationEvent| {
+                            match evt {
+                                executor::ValidationEvent::Attempt { attempt, max_attempts, message } => {
+                                    let _ = on_event.send(MultiPartEvent::ValidationAttempt {
+                                        attempt, max_attempts, message,
+                                    });
+                                }
+                                executor::ValidationEvent::Success { attempt, message } => {
+                                    let _ = on_event.send(MultiPartEvent::ValidationSuccess {
+                                        attempt, message,
+                                    });
+                                }
+                                executor::ValidationEvent::Failed { attempt, error_category, error_message, will_retry } => {
+                                    let _ = on_event.send(MultiPartEvent::ValidationFailed {
+                                        attempt, error_category, error_message, will_retry,
+                                    });
+                                }
+                            }
+                        };
+
+                        let validation_result = executor::validate_and_retry(
+                            final_code.clone(), ctx, &system_prompt, &on_validation_event,
+                        ).await?;
+
+                        if validation_result.retry_usage.total() > 0 {
+                            total_usage.add(&validation_result.retry_usage);
+                            emit_usage(&on_event, "validation", &validation_result.retry_usage, &provider_id, &model_id);
+                        }
+
+                        let _ = on_event.send(MultiPartEvent::FinalCode {
+                            code: validation_result.code.clone(),
+                            stl_base64: validation_result.stl_base64.clone(),
+                        });
+                    }
+
+                    if total_usage.total() > 0 {
+                        emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+                    }
+
+                    let _ = on_event.send(MultiPartEvent::Done {
+                        success: true,
+                        error: None,
+                        validated: true,
+                    });
+
+                    return Ok(response_text);
+                }
+
+                // Consensus failed (no code from either candidate) — fall through
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: "Consensus failed to produce code, falling back to single generation...".to_string(),
+                });
+            }
+            // No execution context — fall through to single-shot
         }
 
         let _ = on_event.send(MultiPartEvent::PlanStatus {

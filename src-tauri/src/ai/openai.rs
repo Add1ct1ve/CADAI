@@ -16,6 +16,7 @@ pub struct OpenAiProvider {
     api_key: String,
     model: String,
     base_url: String,
+    temperature: Option<f32>,
 }
 
 impl OpenAiProvider {
@@ -25,7 +26,13 @@ impl OpenAiProvider {
             api_key,
             model,
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            temperature: None,
         }
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     fn chat_endpoint(&self) -> String {
@@ -44,6 +51,8 @@ struct OpenAiRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAiStreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +130,7 @@ impl AiProvider for OpenAiProvider {
             stream: false,
             max_tokens,
             stream_options: None,
+            temperature: self.temperature,
         };
 
         let response = self
@@ -178,6 +188,7 @@ impl AiProvider for OpenAiProvider {
             stream: true,
             max_tokens: None,
             stream_options: Some(OpenAiStreamOptions { include_usage: true }),
+            temperature: self.temperature,
         };
 
         let response = self

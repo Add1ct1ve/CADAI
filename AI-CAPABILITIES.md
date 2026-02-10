@@ -453,12 +453,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Send request to 2-3 providers in parallel | ⬜ | Use different models for diversity |
-| Execute all results | ⬜ | Test each code output through runner |
-| Pick best result | ⬜ | First one that executes successfully, or highest-complexity working one |
-| Fallback to single model on timeout | ⬜ | If consensus takes too long, use first result |
-| Cost-aware model selection | ⬜ | Use cheap model + expensive model, not 3 expensive ones |
-| User opt-in toggle | ⬜ | Setting: "Use multi-model consensus (slower, higher quality)" |
+| Send request to 2-3 providers in parallel | ✅ | Uses same provider at 2 temperatures (0.3 + 0.8) for diversity |
+| Execute all results | ✅ | Test each code output through runner sequentially |
+| Pick best result | ✅ | Scoring: ops*10 + lines + 1000 execution bonus; highest wins |
+| Fallback to single model on timeout | ✅ | Falls through to normal single-shot if consensus produces no code |
+| Cost-aware model selection | ✅ | Same provider, different temperatures — no extra API key needed |
+| User opt-in toggle | ✅ | Settings checkbox: "Enable consensus mode" (default off) |
 
 **Implementation notes:**
 - New module: `src-tauri/src/agent/consensus.rs`
@@ -706,7 +706,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 4.1 Execution Validation | ✅ | High | Very High | **Biggest single UX improvement** |
 | 4.2 Iterative Refinement | ✅ | High | High | Complex objects succeed more often |
 | 4.3 Code Modification | ✅ | Medium | High | "Make it taller" is the #1 follow-up request |
-| 4.4 Multi-Model Consensus | P3 | Medium | Medium | Expensive but effective |
+| 4.4 Multi-Model Consensus | ✅ | Medium | Medium | Same-provider dual-temperature consensus |
 | 5.1 Plan Editor | P2 | Medium | Medium | User control over geometry planning |
 | 5.2 Confidence Indicator | P2 | Low | Low | Manages expectations |
 | 5.3 Multi-Part Progress | P2 | Medium | Medium | Better visibility for multi-part |
