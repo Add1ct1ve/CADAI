@@ -89,7 +89,7 @@ export class ViewportEngine {
 
     // Camera
     const { clientWidth: w, clientHeight: h } = container;
-    this.camera = new THREE.PerspectiveCamera(50, w / h || 1, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(50, w / h || 1, 0.1, 50000);
     this.camera.position.set(8, 6, 8);
     this.camera.lookAt(0, 0, 0);
 
@@ -110,8 +110,8 @@ export class ViewportEngine {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 2;
-    this.controls.maxDistance = 100;
+    this.controls.minDistance = 0.5;
+    this.controls.maxDistance = 5000;
     this.controls.target.set(0, 0, 0);
 
     // TransformControls
@@ -156,7 +156,7 @@ export class ViewportEngine {
     });
 
     // Grid
-    this.grid = new THREE.GridHelper(100, 100, 0x404060, 0x2a2a40);
+    this.grid = new THREE.GridHelper(200, 200, 0x404060, 0x2a2a40);
     this.scene.add(this.grid);
 
     // Axes
@@ -653,6 +653,16 @@ export class ViewportEngine {
   }
 
   /**
+   * Dynamically scale viewport limits (maxDistance, far clip) based on object radius.
+   */
+  private autoScaleViewport(objectRadius: number): void {
+    this.controls.maxDistance = Math.max(objectRadius * 4, 100);
+
+    this.camera.far = Math.max(objectRadius * 10, 1000);
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
    * Fit all objects in view with smooth animation.
    */
   fitAll(): void {
@@ -686,6 +696,8 @@ export class ViewportEngine {
     box.getSize(size);
 
     const maxDim = Math.max(size.x, size.y, size.z);
+    this.autoScaleViewport(maxDim);
+
     const fov = this.camera.fov * (Math.PI / 180);
     let cameraDistance = maxDim / (2 * Math.tan(fov / 2));
     cameraDistance *= 1.8; // padding
@@ -727,6 +739,7 @@ export class ViewportEngine {
     this.scene.add(this.grid);
     this.gridCellSize = spacing;
     this.gridSize = size;
+    this.autoScaleViewport(size / 2);
   }
 
   /**
@@ -1768,6 +1781,8 @@ export class ViewportEngine {
    */
   private fitCameraToModel(size: THREE.Vector3): void {
     const maxDim = Math.max(size.x, size.y, size.z);
+    this.autoScaleViewport(maxDim);
+
     const fov = this.camera.fov * (Math.PI / 180);
     let cameraDistance = maxDim / (2 * Math.tan(fov / 2));
     cameraDistance *= 1.8; // Add some padding
