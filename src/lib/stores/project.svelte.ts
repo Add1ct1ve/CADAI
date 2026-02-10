@@ -8,6 +8,7 @@ result = cq.Workplane("XY").box(10, 10, 10)
 
 let name = $state('Untitled Project');
 let code = $state(DEFAULT_CODE);
+let previousCode = $state<string | null>(null);
 let messages = $state<ChatMessage[]>([]);
 let modified = $state(false);
 let filePath = $state<string | null>(null);
@@ -29,13 +30,24 @@ export function getProjectStore() {
     get filePath() {
       return filePath;
     },
+    get previousCode() {
+      return previousCode;
+    },
     setName(val: string) {
       name = val;
       modified = true;
     },
     setCode(val: string) {
+      previousCode = code;
       code = val;
       modified = true;
+    },
+    undoLastCodeChange() {
+      if (previousCode !== null) {
+        code = previousCode;
+        previousCode = null;
+        modified = true;
+      }
     },
     setFilePath(val: string | null) {
       filePath = val;
@@ -53,6 +65,7 @@ export function getProjectStore() {
     reset() {
       name = 'Untitled Project';
       code = DEFAULT_CODE;
+      previousCode = null;
       messages = [];
       modified = false;
       filePath = null;

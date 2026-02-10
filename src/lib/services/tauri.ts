@@ -105,6 +105,7 @@ export async function generateParallel(
   message: string,
   history: RustChatMessage[],
   onEvent: (event: MultiPartEvent) => void,
+  existingCode?: string | null,
 ): Promise<string> {
   try {
     const channel = new Channel<MultiPartEvent>();
@@ -115,6 +116,7 @@ export async function generateParallel(
     const result = await invoke<string>('generate_parallel', {
       message,
       history,
+      existingCode: existingCode ?? null,
       onEvent: channel,
     });
 

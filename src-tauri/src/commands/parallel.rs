@@ -10,6 +10,7 @@ use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::agent::design;
 use crate::agent::executor;
 use crate::agent::iterative;
+use crate::agent::modify;
 use crate::agent::prompts;
 use crate::agent::review;
 use crate::error::AppError;
@@ -143,6 +144,16 @@ pub enum MultiPartEvent {
         final_code: String,
         stl_base64: Option<String>,
         skipped_steps: Vec<iterative::SkippedStep>,
+    },
+    ModificationDetected {
+        intent_summary: String,
+    },
+    CodeDiff {
+        diff_lines: Vec<crate::agent::modify::DiffLine>,
+        old_line_count: usize,
+        new_line_count: usize,
+        additions: usize,
+        deletions: usize,
     },
     Done {
         success: bool,
@@ -307,6 +318,7 @@ fn emit_usage(
 pub async fn generate_parallel(
     message: String,
     history: Vec<ChatMessage>,
+    existing_code: Option<String>,
     on_event: Channel<MultiPartEvent>,
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
@@ -336,6 +348,211 @@ pub async fn generate_parallel(
             None => None,
         }
     };
+
+    // -----------------------------------------------------------------------
+    // Modification branch: detect and handle code modifications (early return)
+    // -----------------------------------------------------------------------
+    let modification_intent = modify::detect_modification_intent(
+        &message,
+        existing_code.as_deref(),
+    );
+
+    if modification_intent.is_modification {
+        let intent_summary = modification_intent
+            .intent_summary
+            .unwrap_or_else(|| "modifying code".to_string());
+
+        let _ = on_event.send(MultiPartEvent::ModificationDetected {
+            intent_summary: intent_summary.clone(),
+        });
+
+        let _ = on_event.send(MultiPartEvent::PlanStatus {
+            message: "Modifying existing code...".to_string(),
+        });
+
+        let old_code = existing_code.as_deref().unwrap_or("");
+
+        // Build modification-specific system prompt and user message
+        let mod_system_prompt = format!("{}\n{}", system_prompt, modify::MODIFICATION_INSTRUCTIONS);
+        let modification_message = modify::build_modification_message(old_code, &message);
+
+        let provider = create_provider(&config)?;
+        let mut messages_list = vec![ChatMessage {
+            role: "system".to_string(),
+            content: mod_system_prompt,
+        }];
+        messages_list.extend(history);
+        messages_list.push(ChatMessage {
+            role: "user".to_string(),
+            content: modification_message,
+        });
+
+        // Stream the AI response (reuse SingleDelta/SingleDone events)
+        let (tx, mut rx) = mpsc::channel::<StreamDelta>(100);
+        let provider_handle =
+            tokio::spawn(async move { provider.stream(&messages_list, tx).await });
+
+        let mut full_response = String::new();
+        while let Some(delta) = rx.recv().await {
+            full_response.push_str(&delta.content);
+            let _ = on_event.send(MultiPartEvent::SingleDelta {
+                delta: delta.content,
+                done: delta.done,
+            });
+        }
+
+        match provider_handle.await {
+            Ok(Ok(stream_usage)) => {
+                if let Some(ref u) = stream_usage {
+                    total_usage.add(u);
+                    emit_usage(&on_event, "generate", u, &provider_id, &model_id);
+                }
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(e) => {
+                return Err(AppError::AiProviderError(format!(
+                    "Provider task panicked: {}",
+                    e
+                )));
+            }
+        }
+
+        let _ = on_event.send(MultiPartEvent::SingleDone {
+            full_response: full_response.clone(),
+        });
+
+        // Extract code from the response
+        let mut final_code = extract_code_from_response(&full_response);
+        let mut final_response = full_response.clone();
+
+        // Optional: code review
+        if config.enable_code_review {
+            if let Some(ref code) = final_code {
+                let _ = on_event.send(MultiPartEvent::ReviewStatus {
+                    message: "Reviewing modified code...".to_string(),
+                });
+
+                let review_provider = create_provider(&config)?;
+                match review::review_code(review_provider, &user_request, code, None).await {
+                    Ok((result, review_usage)) => {
+                        if let Some(ref u) = review_usage {
+                            total_usage.add(u);
+                            emit_usage(&on_event, "review", u, &provider_id, &model_id);
+                        }
+                        let _ = on_event.send(MultiPartEvent::ReviewComplete {
+                            was_modified: result.was_modified,
+                            explanation: result.explanation.clone(),
+                        });
+                        if result.was_modified {
+                            final_response = full_response.replace(code, &result.code);
+                            final_code = Some(result.code);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Code review failed (modification): {}", e);
+                    }
+                }
+            }
+        }
+
+        // Optional: backend validation
+        if let (Some(code), Some(ref ctx)) = (&final_code, &execution_ctx) {
+            let on_validation_event = |evt: executor::ValidationEvent| {
+                match evt {
+                    executor::ValidationEvent::Attempt { attempt, max_attempts, message } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationAttempt {
+                            attempt, max_attempts, message,
+                        });
+                    }
+                    executor::ValidationEvent::Success { attempt, message } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationSuccess {
+                            attempt, message,
+                        });
+                    }
+                    executor::ValidationEvent::Failed { attempt, error_category, error_message, will_retry } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationFailed {
+                            attempt, error_category, error_message, will_retry,
+                        });
+                    }
+                }
+            };
+
+            let validation_result = executor::validate_and_retry(
+                code.clone(), ctx, &system_prompt, &on_validation_event,
+            ).await?;
+
+            if validation_result.retry_usage.total() > 0 {
+                total_usage.add(&validation_result.retry_usage);
+                emit_usage(&on_event, "validation", &validation_result.retry_usage, &provider_id, &model_id);
+            }
+
+            let new_code = &validation_result.code;
+
+            // Compute diff between old code and final new code
+            let diff = modify::compute_diff(old_code, new_code);
+            if modify::diff_has_changes(&diff) {
+                let additions = diff.iter().filter(|l| l.tag == "insert").count();
+                let deletions = diff.iter().filter(|l| l.tag == "delete").count();
+                let _ = on_event.send(MultiPartEvent::CodeDiff {
+                    diff_lines: diff,
+                    old_line_count: old_code.lines().count(),
+                    new_line_count: new_code.lines().count(),
+                    additions,
+                    deletions,
+                });
+            }
+
+            let _ = on_event.send(MultiPartEvent::FinalCode {
+                code: validation_result.code.clone(),
+                stl_base64: validation_result.stl_base64.clone(),
+            });
+
+            if total_usage.total() > 0 {
+                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+            }
+
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: validation_result.success,
+                error: validation_result.error,
+                validated: true,
+            });
+
+            return Ok(final_response);
+        }
+
+        // No execution context — emit diff and code as-is
+        if let Some(ref code) = final_code {
+            let diff = modify::compute_diff(old_code, code);
+            if modify::diff_has_changes(&diff) {
+                let additions = diff.iter().filter(|l| l.tag == "insert").count();
+                let deletions = diff.iter().filter(|l| l.tag == "delete").count();
+                let _ = on_event.send(MultiPartEvent::CodeDiff {
+                    diff_lines: diff,
+                    old_line_count: old_code.lines().count(),
+                    new_line_count: code.lines().count(),
+                    additions,
+                    deletions,
+                });
+            }
+
+            let _ = on_event.send(MultiPartEvent::FinalCode {
+                code: code.clone(),
+                stl_base64: None,
+            });
+        }
+
+        if total_usage.total() > 0 {
+            emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+        }
+
+        let _ = on_event.send(MultiPartEvent::Done {
+            success: true,
+            error: None,
+            validated: false,
+        });
+
+        return Ok(final_response);
+    }
 
     // -----------------------------------------------------------------------
     // Phase 0: Geometry Design Plan (always runs)

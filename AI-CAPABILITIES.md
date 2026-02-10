@@ -432,12 +432,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Detect modification requests | ⬜ | "make it taller", "add a hole", "remove the fillet" |
-| Send existing code as context | ⬜ | Include current model code in the prompt |
-| Modification-specific prompt | ⬜ | "Modify this existing code to [change]. Return the complete updated code." |
-| Code diff display | ⬜ | Show what changed between old and new code |
-| Preserve variable names and structure | ⬜ | Modified code should keep the same style/naming |
-| Selective regeneration | ⬜ | Only regenerate the changed section, keep the rest |
+| Detect modification requests | ✅ | Regex-based intent detection in `agent/modify.rs` — 13 patterns |
+| Send existing code as context | ✅ | Frontend sends editor code via `existing_code` parameter |
+| Modification-specific prompt | ✅ | MODIFICATION_INSTRUCTIONS addendum skips design/planning phases |
+| Code diff display | ✅ | Line-level diff via `similar` crate, rendered in Chat.svelte |
+| Preserve variable names and structure | ✅ | Modification prompt instructs AI to keep existing structure |
+| Selective regeneration | ✅ | Modification branch skips design plan + planner, streams directly |
 
 **Implementation notes:**
 - Currently every request generates code from scratch, even "make it 5mm taller"
@@ -705,7 +705,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 3.4 Failure Case Prompting | P1 | Low | High | Proactive failure avoidance |
 | 4.1 Execution Validation | ✅ | High | Very High | **Biggest single UX improvement** |
 | 4.2 Iterative Refinement | ✅ | High | High | Complex objects succeed more often |
-| 4.3 Code Modification | P1 | Medium | High | "Make it taller" is the #1 follow-up request |
+| 4.3 Code Modification | ✅ | Medium | High | "Make it taller" is the #1 follow-up request |
 | 4.4 Multi-Model Consensus | P3 | Medium | Medium | Expensive but effective |
 | 5.1 Plan Editor | P2 | Medium | Medium | User control over geometry planning |
 | 5.2 Confidence Indicator | P2 | Low | Low | Manages expectations |
