@@ -132,11 +132,14 @@ export type MultiPartEvent =
   | { kind: 'PartDelta'; part_index: number; part_name: string; delta: string }
   | { kind: 'PartComplete'; part_index: number; part_name: string; success: boolean; error?: string }
   | { kind: 'AssemblyStatus'; message: string }
-  | { kind: 'FinalCode'; code: string }
+  | { kind: 'FinalCode'; code: string; stl_base64?: string }
   | { kind: 'ReviewStatus'; message: string }
   | { kind: 'ReviewComplete'; was_modified: boolean; explanation: string }
+  | { kind: 'ValidationAttempt'; attempt: number; max_attempts: number; message: string }
+  | { kind: 'ValidationSuccess'; attempt: number; message: string }
+  | { kind: 'ValidationFailed'; attempt: number; error_category: string; error_message: string; will_retry: boolean }
   | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
-  | { kind: 'Done'; success: boolean; error?: string };
+  | { kind: 'Done'; success: boolean; error?: string; validated?: boolean };
 
 export interface PartProgress {
   name: string;

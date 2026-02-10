@@ -383,22 +383,24 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Execute code before returning to user | ⬜ | Run through `runner.py` after generation |
-| Capture execution errors internally | ⬜ | Parse stderr, classify error (uses 2.1) |
-| Auto-fix loop (max 3 internal attempts) | ⬜ | Re-prompt AI with error, get fix, re-execute |
-| Success = show result + code to user | ⬜ | Only surface the working version |
-| All-attempts-failed = show last code + error | ⬜ | User sees the best attempt + clear error |
-| Progress events for internal retries | ⬜ | "Validating code... fixing issue... retrying..." |
-| Timeout per execution attempt | ⬜ | Kill runaway scripts after 30s |
+| Execute code before returning to user | ✅ | Run through `runner.py` after generation |
+| Capture execution errors internally | ✅ | Parse stderr, classify error (uses 2.1) |
+| Auto-fix loop (max 3 internal attempts) | ✅ | Re-prompt AI with error, get fix, re-execute |
+| Success = show result + code to user | ✅ | Only surface the working version |
+| All-attempts-failed = show last code + error | ✅ | User sees the best attempt + clear error |
+| Progress events for internal retries | ✅ | "Validating code... fixing issue... retrying..." |
+| Timeout per execution attempt | ✅ | Kill runaway scripts after 30s |
 
 **Implementation notes:**
-- Currently, code is shown to user → user clicks Run → sees error → clicks Retry
-- This phase moves execution BEFORE showing to user — AI tries to fix its own mistakes
-- New module: `src-tauri/src/agent/executor.rs`
-- Flow: generate → execute → if error: classify → retry with targeted prompt → execute → ...
-- Reuses `runner.py` subprocess execution (already exists in `commands/python.rs`)
-- The `MultiPartEvent` gets new variants: `ValidationAttempt`, `ValidationSuccess`, `ValidationFailed`
-- This is the single highest-impact improvement for user experience
+- Backend executes code after generation via `executor::validate_and_retry()`
+- New module: `src-tauri/src/agent/executor.rs` — core validation loop
+- Flow: generate → execute → if error: classify → retry with targeted prompt (non-streaming) → execute → ...
+- Reuses `runner.py` subprocess execution, `parse_traceback`, `get_retry_strategy`, `build_retry_prompt`
+- `MultiPartEvent` has new variants: `ValidationAttempt`, `ValidationSuccess`, `ValidationFailed`
+- `FinalCode` now carries optional `stl_base64`, `Done` carries `validated` flag
+- Frontend skips execution when `validated=true` and renders STL directly
+- Graceful fallback: if Python venv not set up, existing frontend-driven flow works unchanged
+- `auto_retry` command kept as manual fallback (not removed)
 
 ---
 
@@ -700,7 +702,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 3.2 Manufacturing-Aware Design | P1 | Low | Medium | Better parts for specific use cases |
 | 3.3 Dimension Guidance | P1 | Low | Medium | Less "I don't know the dimensions" responses |
 | 3.4 Failure Case Prompting | P1 | Low | High | Proactive failure avoidance |
-| 4.1 Execution Validation | P0 | High | Very High | **Biggest single UX improvement** |
+| 4.1 Execution Validation | ✅ | High | Very High | **Biggest single UX improvement** |
 | 4.2 Iterative Refinement | P1 | High | High | Complex objects succeed more often |
 | 4.3 Code Modification | P1 | Medium | High | "Make it taller" is the #1 follow-up request |
 | 4.4 Multi-Model Consensus | P3 | Medium | Medium | Expensive but effective |

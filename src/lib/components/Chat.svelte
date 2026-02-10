@@ -310,6 +310,8 @@
     partProgress = [];
     designPlanText = '';
     tokenUsageSummary = null;
+    let validatedStl: string | null = null;
+    let backendValidated = false;
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -447,8 +449,8 @@
             break;
 
           case 'FinalCode':
-            // Set code in editor immediately for UX (but don't gate execution on this)
             project.setCode(event.code);
+            if (event.stl_base64) validatedStl = event.stl_base64;
             break;
 
           case 'ReviewStatus':
@@ -468,6 +470,30 @@
             }
             break;
 
+          case 'ValidationAttempt':
+            {
+              const lastContent5 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${lastContent5}\n\n${event.message}`);
+            }
+            break;
+
+          case 'ValidationSuccess':
+            {
+              const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+            }
+            break;
+
+          case 'ValidationFailed':
+            {
+              const lastContent7 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              const note = event.will_retry
+                ? `Execution failed (${event.error_category}), retrying...`
+                : `Execution failed: ${event.error_message}`;
+              chatStore.updateLastMessage(`${lastContent7}\n${note}`);
+            }
+            break;
+
           case 'TokenUsage':
             if (event.phase === 'total') {
               tokenUsageSummary = {
@@ -480,17 +506,21 @@
             break;
 
           case 'Done':
-            // Handled after the await
+            if (event.validated) backendValidated = true;
             break;
         }
       });
 
       if (chatStore.generationId !== myGen) return;
 
-      // Use the return value from invoke — this is authoritative and avoids
-      // the race condition where Channel events haven't fired yet.
-      if (isMultiPart) {
-        // Multi-part: result is the assembled Python code
+      // Backend validated: STL already available, skip frontend execution
+      if (validatedStl) {
+        viewportStore.setPendingStl(validatedStl);
+      } else if (backendValidated) {
+        // Backend validated but failed — code is already set in editor via FinalCode event.
+        // User can manually retry or edit.
+      } else if (isMultiPart) {
+        // Multi-part, no backend validation: execute assembled code in frontend
         const assembledCode = result;
         project.setCode(assembledCode);
         chatStore.updateLastMessage(
@@ -542,7 +572,7 @@
           return;
         }
       } else {
-        // Single mode: result is the full AI response text
+        // Single mode, no backend validation: execute in frontend
         const code = extractPythonCode(result);
         if (code) {
           project.setCode(code);
