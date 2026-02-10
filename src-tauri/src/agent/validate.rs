@@ -36,6 +36,17 @@ pub struct ErrorContext {
     pub failing_parameters: Option<String>,
 }
 
+/// A targeted retry strategy based on error classification.
+#[derive(Debug, Clone)]
+pub struct RetryStrategy {
+    /// Category-specific instruction for the AI on how to fix this error.
+    pub fix_instruction: String,
+    /// Operations the AI should avoid in its fix.
+    pub forbidden_operations: Vec<String>,
+    /// The matching anti-pattern title, if any (for including in prompt).
+    pub matching_anti_pattern: Option<String>,
+}
+
 /// A structured representation of a Python error parsed from a traceback.
 #[derive(Debug, Serialize, Clone)]
 #[allow(dead_code)]
@@ -363,6 +374,210 @@ fn generate_suggestion(
 pub fn extract_python_code(response: &str) -> Option<String> {
     let re = Regex::new(r"```python\s*\n([\s\S]*?)```").ok()?;
     re.captures(response).map(|cap| cap[1].trim().to_string())
+}
+
+/// Determine the matching anti-pattern title based on error category and message.
+fn match_anti_pattern(error: &StructuredError) -> Option<String> {
+    match &error.category {
+        ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
+            // Could be "Fillet radius too large" or "Fillet before boolean"
+            let msg = error.message.to_lowercase();
+            if msg.contains("before") || msg.contains("boolean") {
+                Some("Fillet before boolean".to_string())
+            } else {
+                Some("Fillet radius too large".to_string())
+            }
+        }
+        ErrorCategory::Topology(TopologySubKind::ShellFailure) => {
+            Some("Shell on complex boolean body".to_string())
+        }
+        ErrorCategory::Topology(TopologySubKind::BooleanFailure) => {
+            let msg = error.message.to_lowercase();
+            if msg.contains("chained") || msg.contains("many") || msg.contains("loop") {
+                Some("Too many chained booleans".to_string())
+            } else {
+                Some("Boolean on non-overlapping bodies".to_string())
+            }
+        }
+        ErrorCategory::Topology(TopologySubKind::LoftFailure) => {
+            Some("Loft with mismatched profiles".to_string())
+        }
+        ErrorCategory::Topology(TopologySubKind::SweepFailure) => {
+            Some("Sweep path without .wire()".to_string())
+        }
+        ErrorCategory::Topology(TopologySubKind::RevolveFailure) => {
+            Some("Revolve profile crossing axis".to_string())
+        }
+        ErrorCategory::ApiMisuse => {
+            let msg = error.message.to_lowercase();
+            if msg.contains("translate") {
+                Some("translate() wrong signature".to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Get a targeted retry strategy based on the classified error and attempt number.
+///
+/// - Attempt 1: Category-specific targeted fix
+/// - Attempt 2: Targeted fix + simplification of the failing operation class
+/// - Attempt 3+: Full nuclear simplification (basic primitives only)
+pub fn get_retry_strategy(error: &StructuredError, attempt: u32) -> RetryStrategy {
+    let anti_pattern = match_anti_pattern(error);
+
+    // Attempt 3+: nuclear option — same for all categories.
+    if attempt >= 3 {
+        return RetryStrategy {
+            fix_instruction: "SIGNIFICANTLY simplify the geometry. Use ONLY basic shapes \
+                (box, cylinder, sphere, cone) combined with boolean operations. You may use \
+                fillets with small radii (1-2mm). Do NOT use sweep, loft, spline, or revolve. \
+                Do NOT use shell on complex geometry. Prioritize getting something that RENDERS."
+                .to_string(),
+            forbidden_operations: vec![
+                "sweep".to_string(),
+                "loft".to_string(),
+                "spline".to_string(),
+                "revolve".to_string(),
+                "shell".to_string(),
+            ],
+            matching_anti_pattern: anti_pattern,
+        };
+    }
+
+    let line_hint = error
+        .line_number
+        .map(|n| format!(" on line {}", n))
+        .unwrap_or_default();
+    let msg = &error.message;
+    let op = error
+        .failing_operation
+        .as_deref()
+        .unwrap_or("the failing operation");
+
+    let (mut fix_instruction, mut forbidden_operations) = match &error.category {
+        ErrorCategory::Syntax => (
+            format!(
+                "Fix the syntax error{}. The error is: {}. \
+                 Check for missing colons, brackets, parentheses, or incorrect indentation.",
+                line_hint, msg
+            ),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::FilletFailure) => (
+            "The fillet/chamfer radius is too large for the geometry. Reduce ALL fillet/chamfer \
+             radii by at least 50%, or remove fillets entirely and add them as the very last \
+             operation with conservative radii (1-2mm)."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::ShellFailure) => (
+            "The shell operation failed. Replace .shell() with manual hollowing: create a \
+             slightly smaller inner solid and use .cut() to subtract it. Or apply shell BEFORE \
+             boolean operations on the simple base shape."
+                .to_string(),
+            vec!["shell".to_string()],
+        ),
+        ErrorCategory::Topology(TopologySubKind::BooleanFailure) => (
+            format!(
+                "The boolean operation ({}) failed. Ensure cutting/fusing bodies overlap the \
+                 target by at least 0.5mm — extend tools beyond target surfaces. If using many \
+                 booleans, combine features using .pushPoints() + single extrude instead of \
+                 looped unions.",
+                op
+            ),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::LoftFailure) => (
+            "The loft failed. Ensure profiles have compatible edge counts. Try: add ruled=True, \
+             use similar profile types (both rects or both circles), or replace loft with stacked \
+             extrudes connected by fillets."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::SweepFailure) => (
+            "The sweep failed. Ensure the path is a Wire object — call .wire() on edge chains. \
+             Keep the profile perpendicular to the path start and avoid self-intersecting paths."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::RevolveFailure) => (
+            "The revolve failed. The profile must be entirely on one side of the rotation axis \
+             — all X coordinates must be >= 0 when revolving around Y. Move the profile so no \
+             points cross the axis."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::General) => (
+            "A topology operation failed. Simplify the failing operation or break it into \
+             smaller steps. Apply fillets/chamfers last, after all booleans."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::ApiMisuse => (
+            format!(
+                "There is an API usage error: {}. Check the CadQuery API — verify method names, \
+                 argument types, and tuple signatures (e.g. .translate((x,y,z)) needs double parens).",
+                msg
+            ),
+            vec![],
+        ),
+        ErrorCategory::ImportRuntime => (
+            format!(
+                "Fix the import/name error: {}. Only cadquery and standard library modules are \
+                 available. Check variable names for typos.",
+                msg
+            ),
+            vec![],
+        ),
+        ErrorCategory::GeometryKernel => (
+            "The OpenCascade geometry kernel failed. Simplify the geometry: use larger minimum \
+             dimensions (>1mm), ensure no zero-thickness walls, and reduce the number of complex \
+             operations."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Unknown => (
+            format!(
+                "The code failed with: {}. Review the error carefully and fix the specific issue.",
+                msg
+            ),
+            vec![],
+        ),
+    };
+
+    // Attempt 2: append simplification guidance.
+    if attempt == 2 {
+        match &error.category {
+            ErrorCategory::Topology(_) => {
+                fix_instruction.push_str(&format!(
+                    " If the {} approach doesn't work, replace it with a simpler geometric \
+                     construction using only extrude, cut, and union.",
+                    op
+                ));
+                // Add the failing operation to forbidden list for topology errors.
+                if let Some(ref failing_op) = error.failing_operation {
+                    if !forbidden_operations.contains(failing_op) {
+                        forbidden_operations.push(failing_op.clone());
+                    }
+                }
+            }
+            _ => {
+                fix_instruction.push_str(
+                    " If the direct fix doesn't work, simplify the overall approach. \
+                     Use basic primitives where possible.",
+                );
+            }
+        }
+    }
+
+    RetryStrategy {
+        fix_instruction,
+        forbidden_operations,
+        matching_anti_pattern: anti_pattern,
+    }
 }
 
 /// Validate that CadQuery code has the basic required structure.
@@ -789,5 +1004,211 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
         assert_eq!(err.category, ErrorCategory::Topology(TopologySubKind::SweepFailure));
         assert_eq!(err.failing_operation, Some("sweep".to_string()));
         assert!(err.suggestion.unwrap().contains("Sweep failed"));
+    }
+
+    // ========== RetryStrategy tests ==========
+
+    /// Helper: create a StructuredError with the given category.
+    fn make_error(category: ErrorCategory, message: &str, failing_op: Option<&str>) -> StructuredError {
+        StructuredError {
+            error_type: "TestError".to_string(),
+            message: message.to_string(),
+            line_number: Some(5),
+            suggestion: None,
+            category,
+            failing_operation: failing_op.map(|s| s.to_string()),
+            context: Some(ErrorContext {
+                source_line: Some("result = base.fillet(10)".to_string()),
+                failing_parameters: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_strategy_syntax_attempt1() {
+        let err = make_error(ErrorCategory::Syntax, "invalid syntax", None);
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("syntax error"));
+        assert!(strategy.fix_instruction.contains("line 5"));
+        assert!(strategy.forbidden_operations.is_empty());
+        assert!(strategy.matching_anti_pattern.is_none());
+    }
+
+    #[test]
+    fn test_strategy_fillet_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::FilletFailure),
+            "BRep_API: not done",
+            Some("fillet"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("fillet/chamfer radius"));
+        assert!(strategy.fix_instruction.contains("Reduce"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Fillet radius too large")
+        );
+    }
+
+    #[test]
+    fn test_strategy_shell_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::ShellFailure),
+            "Shell offset not done",
+            Some("shell"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("shell operation failed"));
+        assert!(strategy.forbidden_operations.contains(&"shell".to_string()));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Shell on complex boolean body")
+        );
+    }
+
+    #[test]
+    fn test_strategy_boolean_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::BooleanFailure),
+            "Boolean operation (cut) failed",
+            Some("cut"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("boolean operation"));
+        assert!(strategy.fix_instruction.contains("overlap"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Boolean on non-overlapping bodies")
+        );
+    }
+
+    #[test]
+    fn test_strategy_loft_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::LoftFailure),
+            "loft failed",
+            Some("loft"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("loft failed"));
+        assert!(strategy.fix_instruction.contains("edge counts"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Loft with mismatched profiles")
+        );
+    }
+
+    #[test]
+    fn test_strategy_sweep_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::SweepFailure),
+            "sweep failed",
+            Some("sweep"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("sweep failed"));
+        assert!(strategy.fix_instruction.contains("Wire"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Sweep path without .wire()")
+        );
+    }
+
+    #[test]
+    fn test_strategy_revolve_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::RevolveFailure),
+            "revolve failed",
+            Some("revolve"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("revolve failed"));
+        assert!(strategy.fix_instruction.contains("rotation axis"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Revolve profile crossing axis")
+        );
+    }
+
+    #[test]
+    fn test_strategy_api_misuse_attempt1() {
+        let err = make_error(
+            ErrorCategory::ApiMisuse,
+            "translate() requires a 3-tuple",
+            Some("translate"),
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("API usage error"));
+        assert!(strategy.fix_instruction.contains("translate()"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("translate() wrong signature")
+        );
+    }
+
+    #[test]
+    fn test_strategy_import_attempt1() {
+        let err = make_error(
+            ErrorCategory::ImportRuntime,
+            "name 'foo' is not defined",
+            None,
+        );
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("import/name error"));
+        assert!(strategy.fix_instruction.contains("foo"));
+        assert!(strategy.matching_anti_pattern.is_none());
+    }
+
+    #[test]
+    fn test_strategy_geometry_kernel_attempt1() {
+        let err = make_error(ErrorCategory::GeometryKernel, "kernel error", None);
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("OpenCascade"));
+        assert!(strategy.matching_anti_pattern.is_none());
+    }
+
+    #[test]
+    fn test_strategy_unknown_attempt1() {
+        let err = make_error(ErrorCategory::Unknown, "something broke", None);
+        let strategy = get_retry_strategy(&err, 1);
+        assert!(strategy.fix_instruction.contains("something broke"));
+        assert!(strategy.matching_anti_pattern.is_none());
+    }
+
+    #[test]
+    fn test_strategy_attempt2_adds_simplification() {
+        // Topology errors get operation-specific simplification.
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::FilletFailure),
+            "BRep_API: not done",
+            Some("fillet"),
+        );
+        let strategy = get_retry_strategy(&err, 2);
+        assert!(strategy.fix_instruction.contains("fillet/chamfer radius"));
+        assert!(strategy.fix_instruction.contains("simpler geometric"));
+        assert!(strategy.forbidden_operations.contains(&"fillet".to_string()));
+
+        // Non-topology errors get generic simplification.
+        let err2 = make_error(ErrorCategory::Syntax, "invalid syntax", None);
+        let strategy2 = get_retry_strategy(&err2, 2);
+        assert!(strategy2.fix_instruction.contains("syntax error"));
+        assert!(strategy2.fix_instruction.contains("simplify the overall approach"));
+    }
+
+    #[test]
+    fn test_strategy_attempt3_is_nuclear() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::FilletFailure),
+            "BRep_API: not done",
+            Some("fillet"),
+        );
+        let strategy = get_retry_strategy(&err, 3);
+        assert!(strategy.fix_instruction.contains("SIGNIFICANTLY simplify"));
+        assert!(strategy.fix_instruction.contains("ONLY basic shapes"));
+        assert!(strategy.forbidden_operations.contains(&"sweep".to_string()));
+        assert!(strategy.forbidden_operations.contains(&"loft".to_string()));
+        assert!(strategy.forbidden_operations.contains(&"spline".to_string()));
+        assert!(strategy.forbidden_operations.contains(&"revolve".to_string()));
+        assert!(strategy.forbidden_operations.contains(&"shell".to_string()));
     }
 }
