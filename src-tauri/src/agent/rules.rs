@@ -23,6 +23,7 @@ pub struct AgentRules {
     pub response_format: Option<HashMap<String, Vec<String>>>,
     pub cookbook: Option<Vec<CookbookEntry>>,
     pub anti_patterns: Option<Vec<AntiPatternEntry>>,
+    pub api_reference: Option<Vec<ApiReferenceEntry>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +40,16 @@ pub struct AntiPatternEntry {
     pub error_message: String,
     pub explanation: String,
     pub correct_code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ApiReferenceEntry {
+    pub operation: String,
+    pub signature: String,
+    pub returns: String,
+    pub params: Vec<String>,
+    pub gotchas: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,6 +132,7 @@ impl AgentRules {
             response_format: None,
             cookbook: None,
             anti_patterns: None,
+            api_reference: None,
         }
     }
 }
@@ -422,6 +434,83 @@ mod tests {
         }
     }
 
+    // ── API Reference ────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_api_reference_has_8_entries() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let api = rules.api_reference.as_ref().unwrap();
+        assert_eq!(api.len(), 8, "default should have 8 API reference entries");
+    }
+
+    #[test]
+    fn test_printing_api_reference_has_8_entries() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let api = rules.api_reference.as_ref().unwrap();
+        assert_eq!(api.len(), 8, "printing should have 8 API reference entries");
+    }
+
+    #[test]
+    fn test_cnc_api_reference_has_8_entries() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let api = rules.api_reference.as_ref().unwrap();
+        assert_eq!(api.len(), 8, "cnc should have 8 API reference entries");
+    }
+
+    #[test]
+    fn test_api_reference_operations_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let api = rules.api_reference.as_ref().unwrap();
+        let ops: Vec<&str> = api.iter().map(|e| e.operation.as_str()).collect();
+        assert!(ops.iter().any(|o| o.contains("loft")));
+        assert!(ops.iter().any(|o| o.contains("sweep")));
+        assert!(ops.iter().any(|o| o.contains("revolve")));
+        assert!(ops.iter().any(|o| o.contains("shell")));
+        assert!(ops.iter().any(|o| o.contains("Selector")));
+        assert!(ops.iter().any(|o| o.contains("Workplane")));
+        assert!(ops.iter().any(|o| o.contains("pushPoints")));
+        assert!(ops.iter().any(|o| o.contains("tag")));
+    }
+
+    #[test]
+    fn test_all_api_reference_entries_have_required_fields() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let api = rules.api_reference.as_ref().unwrap();
+            for entry in api {
+                assert!(
+                    !entry.operation.is_empty(),
+                    "API ref in preset {:?} has empty operation",
+                    preset
+                );
+                assert!(
+                    !entry.signature.is_empty(),
+                    "API ref '{}' in preset {:?} has empty signature",
+                    entry.operation,
+                    preset
+                );
+                assert!(
+                    !entry.returns.is_empty(),
+                    "API ref '{}' in preset {:?} has empty returns",
+                    entry.operation,
+                    preset
+                );
+                assert!(
+                    !entry.params.is_empty(),
+                    "API ref '{}' in preset {:?} has empty params",
+                    entry.operation,
+                    preset
+                );
+                assert!(
+                    !entry.gotchas.is_empty(),
+                    "API ref '{}' in preset {:?} has empty gotchas",
+                    entry.operation,
+                    preset
+                );
+            }
+        }
+    }
+
     // ── default_empty() ────────────────────────────────────────────────
 
     #[test]
@@ -431,6 +520,7 @@ mod tests {
         assert!(rules.advanced_techniques.is_none());
         assert!(rules.design_thinking.is_none());
         assert!(rules.anti_patterns.is_none());
+        assert!(rules.api_reference.is_none());
     }
 
     // ── Print-specific extras ──────────────────────────────────────────

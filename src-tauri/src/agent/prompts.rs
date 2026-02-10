@@ -300,6 +300,26 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- API Quick-Reference --
+    if let Some(ref api_ref) = rules.api_reference {
+        prompt.push_str("## CadQuery API Quick-Reference\n");
+        prompt.push_str("Compact reference for error-prone operations.\n\n");
+        for entry in api_ref {
+            prompt.push_str(&format!("### `{}`\n", entry.operation));
+            prompt.push_str(&format!("**Signature:** `{}`\n", entry.signature));
+            prompt.push_str(&format!("**Returns:** {}\n", entry.returns));
+            prompt.push_str("**Key params:**\n");
+            for p in &entry.params {
+                prompt.push_str(&format!("- {}\n", p));
+            }
+            prompt.push_str("**Gotchas:**\n");
+            for g in &entry.gotchas {
+                prompt.push_str(&format!("- {}\n", g));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- Manufacturing awareness --
     if let Some(ref mfg) = rules.manufacturing {
         prompt.push_str("## Manufacturing Awareness\n");
@@ -627,6 +647,11 @@ mod tests {
                 "preset {:?} missing cookbook",
                 preset
             );
+            assert!(
+                prompt.contains("## CadQuery API Quick-Reference"),
+                "preset {:?} missing API reference",
+                preset
+            );
         }
     }
 
@@ -667,6 +692,49 @@ mod tests {
         }
     }
 
+    // ── API Reference in prompt ──────────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_api_reference_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## CadQuery API Quick-Reference"),
+            "prompt should have API reference section"
+        );
+        assert!(prompt.contains("Compact reference for error-prone operations."));
+    }
+
+    #[test]
+    fn test_prompt_api_reference_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Check operation names are rendered
+        assert!(prompt.contains("### `loft()`"));
+        assert!(prompt.contains("### `sweep()`"));
+        assert!(prompt.contains("### `revolve()`"));
+        assert!(prompt.contains("### `shell()`"));
+        assert!(prompt.contains("### `Selector strings`"));
+        assert!(prompt.contains("### `Workplane constructor & offsets`"));
+        assert!(prompt.contains("### `pushPoints / rarray / polarArray`"));
+        assert!(prompt.contains("### `.tag() / .faces(tag=)`"));
+        // Check formatting markers
+        assert!(prompt.contains("**Signature:**"));
+        assert!(prompt.contains("**Returns:**"));
+        assert!(prompt.contains("**Key params:**"));
+        assert!(prompt.contains("**Gotchas:**"));
+    }
+
+    #[test]
+    fn test_all_presets_have_api_reference_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## CadQuery API Quick-Reference"),
+                "preset {:?} missing API reference section",
+                preset
+            );
+        }
+    }
+
     // ── Section ordering ───────────────────────────────────────────────
 
     #[test]
@@ -679,6 +747,7 @@ mod tests {
         let valid_pos = prompt.find("## Validation Checks").unwrap();
         let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
         let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
+        let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
         let resp_pos = prompt.find("## Response Format").unwrap();
 
@@ -694,8 +763,10 @@ mod tests {
         assert!(valid_pos < cook_pos, "Validation should come before Cookbook");
         // Anti-Patterns after Cookbook
         assert!(cook_pos < ap_pos, "Cookbook should come before Anti-Patterns");
-        // Manufacturing after Anti-Patterns
-        assert!(ap_pos < mfg_pos, "Anti-Patterns should come before Manufacturing");
+        // API Reference after Anti-Patterns
+        assert!(ap_pos < apiref_pos, "Anti-Patterns should come before API Reference");
+        // Manufacturing after API Reference
+        assert!(apiref_pos < mfg_pos, "API Reference should come before Manufacturing");
         // Response Format last
         assert!(mfg_pos < resp_pos, "Manufacturing should come before Response Format");
     }
@@ -716,6 +787,7 @@ mod tests {
         assert!(!prompt.contains("## Validation Checks"));
         assert!(!prompt.contains("## Manufacturing Awareness"));
         assert!(!prompt.contains("## Common Anti-Patterns"));
+        assert!(!prompt.contains("## CadQuery API Quick-Reference"));
     }
 
     // ── Category name formatting in spatial rules ──────────────────────
