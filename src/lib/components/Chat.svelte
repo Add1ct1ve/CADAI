@@ -1714,8 +1714,9 @@
         isModification = false;
         isConsensus = false;
         consensusProgress = [];
-        showPlanEditor = false;
-        pendingPlan = null;
+        if (!pendingPlan) {
+          showPlanEditor = false;
+        }
       }
     }
   }
