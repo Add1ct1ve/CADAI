@@ -382,7 +382,7 @@ pub async fn generate_parallel(
                 });
 
                 let review_provider = create_provider(&config)?;
-                match review::review_code(review_provider, &user_request, &code).await {
+                match review::review_code(review_provider, &user_request, &code, Some(&design_plan.text)).await {
                     Ok(result) => {
                         let _ = on_event.send(MultiPartEvent::ReviewComplete {
                             was_modified: result.was_modified,
@@ -559,7 +559,7 @@ pub async fn generate_parallel(
                     message: "Reviewing assembled code...".to_string(),
                 });
                 let review_provider = create_provider(&config)?;
-                match review::review_code(review_provider, &user_request, &code).await {
+                match review::review_code(review_provider, &user_request, &code, Some(&design_plan.text)).await {
                     Ok(result) => {
                         let _ = on_event.send(MultiPartEvent::ReviewComplete {
                             was_modified: result.was_modified,

@@ -27,6 +27,18 @@ Review the code against this checklist:
 16. Apply fillets and chamfers LAST, after all boolean operations are complete
 17. If a complex operation (sweep, loft, shell on complex body) is likely to fail at runtime, suggest a simpler alternative using basic primitives + booleans
 
+## Plan Compliance Checks (only when a Geometry Design Plan is provided)
+18. Are ALL features listed in the Build Plan present in the code? (e.g., if plan says "add 4 mounting holes", there should be 4 holes in the code)
+19. Do dimensions in the code match the plan? (e.g., if plan says "50x30x20mm box", the code should use 50, 30, 20 — not different values unless geometrically justified)
+20. Does the code use the operations suggested in the plan? (e.g., if plan says "revolve a profile", the code should use revolve — not extrude — unless the alternative clearly achieves the same geometry)
+21. Does the Build Plan step sequence roughly match the code's construction order? (e.g., if plan says "base shape, then holes, then fillets", the code should follow that order)
+
+IMPORTANT for plan compliance:
+- These checks are SOFT — the code may achieve the same geometry through different operations. If the result looks correct, APPROVE.
+- Do NOT reject code solely because it uses a different operation than the plan suggested (e.g., loft instead of revolve is fine if the shape is correct).
+- DO flag cases where planned features are completely missing or dimensions are significantly wrong (>20% off).
+- If no Geometry Design Plan is provided, skip items 18-21 entirely.
+
 If the code is correct, respond with exactly:
 APPROVED
 
@@ -53,12 +65,30 @@ pub struct ReviewResult {
     pub explanation: String,
 }
 
+/// Build the user message for the review prompt, optionally including the design plan.
+fn build_review_user_message(
+    user_request: &str,
+    generated_code: &str,
+    design_plan: Option<&str>,
+) -> String {
+    let mut content = format!("## User's Request\n{}", user_request);
+    if let Some(plan) = design_plan {
+        content.push_str(&format!("\n\n## Geometry Design Plan\n{}", plan));
+    }
+    content.push_str(&format!(
+        "\n\n## Generated Code\n```python\n{}\n```",
+        generated_code
+    ));
+    content
+}
+
 /// Review generated CadQuery code against the user's original request.
 /// Returns the original or corrected code with an explanation.
 pub async fn review_code(
     provider: Box<dyn AiProvider>,
     user_request: &str,
     generated_code: &str,
+    design_plan: Option<&str>,
 ) -> Result<ReviewResult, AppError> {
     let messages = vec![
         ChatMessage {
@@ -67,10 +97,7 @@ pub async fn review_code(
         },
         ChatMessage {
             role: "user".to_string(),
-            content: format!(
-                "## User's Request\n{}\n\n## Generated Code\n```python\n{}\n```",
-                user_request, generated_code
-            ),
+            content: build_review_user_message(user_request, generated_code, design_plan),
         },
     ];
 
@@ -249,5 +276,60 @@ result = cq.Workplane("XY").box(10, 10, 10)
         // No code block means fallback to original
         assert!(!result.was_modified);
         assert_eq!(result.code, "original code");
+    }
+
+    // ── Plan compliance prompt tests ──────────────────────────────────
+
+    #[test]
+    fn test_review_prompt_has_plan_compliance_section() {
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Plan Compliance Checks"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("ALL features listed in the Build Plan"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("dimensions in the code match the plan"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("operations suggested in the plan"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Build Plan step sequence"));
+    }
+
+    #[test]
+    fn test_review_prompt_has_soft_check_guidance() {
+        assert!(REVIEW_SYSTEM_PROMPT.contains("SOFT"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Do NOT reject code solely"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("skip items 18-21"));
+    }
+
+    #[test]
+    fn test_review_prompt_has_numbered_items_18_through_21() {
+        for i in 18..=21 {
+            assert!(
+                REVIEW_SYSTEM_PROMPT.contains(&format!("{}.", i)),
+                "should contain item number {}",
+                i
+            );
+        }
+    }
+
+    // ── build_review_user_message tests ───────────────────────────────
+
+    #[test]
+    fn test_build_review_message_without_plan() {
+        let msg = build_review_user_message("make a box", "code here", None);
+        assert!(msg.contains("## User's Request\nmake a box"));
+        assert!(msg.contains("## Generated Code"));
+        assert!(!msg.contains("## Geometry Design Plan"));
+    }
+
+    #[test]
+    fn test_build_review_message_with_plan() {
+        let plan = "### Build Plan\n1. Extrude a 50x30x20mm box";
+        let msg = build_review_user_message("make a bracket", "code here", Some(plan));
+        assert!(msg.contains("## Geometry Design Plan"));
+        assert!(msg.contains("50x30x20mm box"));
+    }
+
+    #[test]
+    fn test_build_review_message_plan_before_code() {
+        let msg = build_review_user_message("req", "code", Some("plan text"));
+        let plan_pos = msg.find("## Geometry Design Plan").unwrap();
+        let code_pos = msg.find("## Generated Code").unwrap();
+        assert!(plan_pos < code_pos, "plan should appear before code");
     }
 }
