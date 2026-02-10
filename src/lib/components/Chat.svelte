@@ -345,6 +345,15 @@
             designPlanText = event.plan_text;
             break;
 
+          case 'PlanValidation':
+            if (!event.is_valid) {
+              const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(
+                `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
+              );
+            }
+            break;
+
           case 'PlanStatus':
             {
               // Start elapsed timer for planning phase

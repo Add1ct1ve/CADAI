@@ -116,6 +116,7 @@ export interface PartSpec {
 
 export type MultiPartEvent =
   | { kind: 'DesignPlan'; plan_text: string }
+  | { kind: 'PlanValidation'; risk_score: number; warnings: string[]; is_valid: boolean; rejected_reason: string | null }
   | { kind: 'PlanStatus'; message: string }
   | { kind: 'PlanResult'; plan: GenerationPlan }
   | { kind: 'SingleDelta'; delta: string; done: boolean }

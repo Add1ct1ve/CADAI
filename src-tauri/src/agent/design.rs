@@ -1,3 +1,6 @@
+use regex::Regex;
+use serde::Serialize;
+
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::AiProvider;
 use crate::error::AppError;
@@ -6,6 +9,17 @@ use crate::error::AppError;
 #[derive(Debug, Clone)]
 pub struct DesignPlan {
     pub text: String,
+}
+
+/// Result of deterministic plan validation (no AI calls).
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanValidation {
+    pub is_valid: bool,
+    pub risk_score: u32,
+    pub warnings: Vec<String>,
+    pub rejected_reason: Option<String>,
+    pub extracted_operations: Vec<String>,
+    pub extracted_dimensions: Vec<f64>,
 }
 
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.
@@ -44,6 +58,358 @@ What can't CadQuery do perfectly? What's the closest buildable shape? Where shou
 - Prefer approaches that are ROBUST in CadQuery (box+cylinder+booleans > complex lofts)
 - If the request is simple (e.g. "a box" or "a cylinder"), keep the plan brief — 2-3 lines is fine
 - NEVER write Python or CadQuery code — only describe geometry in plain English"#;
+
+// ---------------------------------------------------------------------------
+// Parsing helpers (private)
+// ---------------------------------------------------------------------------
+
+const KNOWN_OPERATIONS: &[&str] = &[
+    "fillet", "chamfer", "shell", "loft", "sweep", "revolve", "cut", "union",
+    "intersect", "extrude", "hole", "fuse", "combine",
+];
+
+const BOOLEAN_OPS: &[&str] = &["cut", "union", "fuse", "intersect", "combine"];
+
+/// Extract known CadQuery operation names from the plan text (unique, case-insensitive).
+fn extract_operations(plan_text: &str) -> Vec<String> {
+    let lower = plan_text.to_lowercase();
+    let mut ops = Vec::new();
+    for &op in KNOWN_OPERATIONS {
+        let pattern = format!(r"\b{}\b", op);
+        if let Ok(re) = Regex::new(&pattern) {
+            if re.is_match(&lower) {
+                ops.push(op.to_string());
+            }
+        }
+    }
+    ops
+}
+
+/// Extract numeric dimensions (in mm) from the plan text.
+fn extract_dimensions(plan_text: &str) -> Vec<f64> {
+    let mut dims = Vec::new();
+    let mut multi_dim_values = std::collections::HashSet::new();
+
+    // Pattern 1: multi-dim like "50x30x20mm" or "50 x 30 x 20 mm"
+    let multi_re = Regex::new(
+        r"(-?\d+\.?\d*)\s*[x×]\s*(-?\d+\.?\d*)(?:\s*[x×]\s*(-?\d+\.?\d*))?\s*(?:mm)?\b"
+    ).unwrap();
+    for cap in multi_re.captures_iter(plan_text) {
+        if let Ok(v) = cap[1].parse::<f64>() {
+            dims.push(v);
+            multi_dim_values.insert(cap[1].to_string());
+        }
+        if let Ok(v) = cap[2].parse::<f64>() {
+            dims.push(v);
+            multi_dim_values.insert(cap[2].to_string());
+        }
+        if let Some(m) = cap.get(3) {
+            if let Ok(v) = m.as_str().parse::<f64>() {
+                dims.push(v);
+                multi_dim_values.insert(m.as_str().to_string());
+            }
+        }
+    }
+
+    // Pattern 2: single like "5mm", "100 mm", "-2mm"
+    let single_re = Regex::new(r"(-?\d+\.?\d*)\s*mm\b").unwrap();
+    for cap in single_re.captures_iter(plan_text) {
+        let val_str = &cap[1];
+        // Skip if already captured by multi-dim pattern
+        if multi_dim_values.contains(val_str) {
+            continue;
+        }
+        if let Ok(v) = val_str.parse::<f64>() {
+            dims.push(v);
+        }
+    }
+
+    dims
+}
+
+/// Extract fillet radii mentioned near "fillet" keywords.
+fn extract_fillet_radii(plan_text: &str) -> Vec<f64> {
+    let re = Regex::new(r"(?i)fillet\w*[\s\(\-\x{2014}:]+(\d+\.?\d*)\s*(?:mm)?").unwrap();
+    let mut radii = Vec::new();
+    for cap in re.captures_iter(plan_text) {
+        if let Ok(v) = cap[1].parse::<f64>() {
+            radii.push(v);
+        }
+    }
+    radii
+}
+
+/// Count total mentions of boolean operations (not unique — repeated mentions count).
+fn count_boolean_mentions(plan_text: &str) -> usize {
+    let lower = plan_text.to_lowercase();
+    let mut count = 0;
+    for &op in BOOLEAN_OPS {
+        let pattern = format!(r"\b{}\b", op);
+        if let Ok(re) = Regex::new(&pattern) {
+            count += re.find_iter(&lower).count();
+        }
+    }
+    count
+}
+
+/// Check whether the plan contains a section heading (case-insensitive).
+fn has_section(plan_text: &str, heading: &str) -> bool {
+    let lower = plan_text.to_lowercase();
+    let heading_lower = heading.to_lowercase();
+    // Match "### Build Plan", "## Build Plan", or just "Build Plan" on its own line
+    lower.contains(&format!("### {}", heading_lower))
+        || lower.contains(&format!("## {}", heading_lower))
+        || lower.lines().any(|line| line.trim().to_lowercase() == heading_lower)
+}
+
+// ---------------------------------------------------------------------------
+// Plan validation
+// ---------------------------------------------------------------------------
+
+/// Validate a design plan deterministically (no AI calls).
+///
+/// Extracts operations and dimensions, calculates a risk score (0-10),
+/// and rejects plans with a score > 7.
+pub fn validate_plan(plan_text: &str) -> PlanValidation {
+    let operations = extract_operations(plan_text);
+    let dimensions = extract_dimensions(plan_text);
+    let fillet_radii = extract_fillet_radii(plan_text);
+    let boolean_count = count_boolean_mentions(plan_text);
+
+    let has_shell = operations.contains(&"shell".to_string());
+    let has_loft = operations.contains(&"loft".to_string());
+    let has_sweep = operations.contains(&"sweep".to_string());
+    let has_revolve = operations.contains(&"revolve".to_string());
+    let has_chamfer = operations.contains(&"chamfer".to_string());
+
+    let min_positive_dimension = dimensions
+        .iter()
+        .copied()
+        .filter(|&d| d > 0.0)
+        .reduce(f64::min);
+
+    let mut risk: u32 = 0;
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Rule 1: shell after many booleans
+    if has_shell && boolean_count > 3 {
+        risk += 3;
+        warnings.push(format!(
+            "shell() after {} boolean operations is very likely to fail",
+            boolean_count
+        ));
+    }
+
+    // Rule 2: large fillet on small feature
+    if let Some(min_dim) = min_positive_dimension {
+        if min_dim < 20.0 {
+            for &r in &fillet_radii {
+                if r > 5.0 {
+                    risk += 2;
+                    warnings.push(format!(
+                        "fillet radius {}mm may be too large for features as small as {}mm",
+                        r, min_dim
+                    ));
+                    break; // only count once
+                }
+            }
+        }
+    }
+
+    // Rule 3: many boolean operations
+    if boolean_count >= 5 {
+        risk += 2;
+        warnings.push(format!(
+            "{} boolean operations increases topology failure risk",
+            boolean_count
+        ));
+    }
+
+    // Rule 4: loft is fragile
+    if has_loft {
+        risk += 1;
+        warnings.push(
+            "loft() is fragile — ensure profiles have compatible edge counts".to_string(),
+        );
+    }
+
+    // Rule 5: sweep requires wire
+    if has_sweep {
+        risk += 1;
+        warnings.push(
+            "sweep() requires a Wire path — ensure .wire() is called".to_string(),
+        );
+    }
+
+    // Rule 6: revolve axis
+    if has_revolve {
+        risk += 1;
+        warnings.push(
+            "revolve() — ensure profile is entirely on one side of rotation axis".to_string(),
+        );
+    }
+
+    // Rule 7: negative dimensions
+    for &d in &dimensions {
+        if d < 0.0 {
+            risk += 4;
+            warnings.push(format!("negative dimension {}mm is physically impossible", d));
+            break; // only count once
+        }
+    }
+
+    // Rule 8: huge dimensions
+    for &d in &dimensions {
+        if d > 10000.0 {
+            risk += 3;
+            warnings.push(format!(
+                "dimension {}mm exceeds 10 meters — likely a mistake",
+                d
+            ));
+            break;
+        }
+    }
+
+    // Rule 9: tiny dimensions
+    for &d in &dimensions {
+        if d > 0.0 && d < 0.01 {
+            risk += 3;
+            warnings.push(format!(
+                "dimension {}mm is below manufacturing precision",
+                d
+            ));
+            break;
+        }
+    }
+
+    // Rule 10: missing Build Plan section
+    if !has_section(plan_text, "Build Plan") {
+        risk += 2;
+        warnings.push(
+            "plan is missing a 'Build Plan' section with numbered steps".to_string(),
+        );
+    }
+
+    // Rule 11: no dimensions
+    if dimensions.is_empty() {
+        risk += 2;
+        warnings.push("no concrete dimensions found in plan".to_string());
+    }
+
+    // Rule 12: no operations
+    if operations.is_empty() {
+        risk += 1;
+        warnings.push("no CadQuery operations mentioned in plan".to_string());
+    }
+
+    // Rule 13: shell with thin walls
+    if has_shell {
+        for &d in &dimensions {
+            if d > 0.0 && d < 2.0 {
+                risk += 2;
+                warnings.push(format!(
+                    "shell() with wall thickness {}mm may fail in OpenCascade",
+                    d
+                ));
+                break;
+            }
+        }
+    }
+
+    // Rule 14: chamfer after many booleans
+    if has_chamfer && boolean_count > 3 {
+        risk += 2;
+        warnings.push(format!(
+            "chamfer() after {} boolean operations is risky",
+            boolean_count
+        ));
+    }
+
+    // Clamp to 10
+    risk = risk.min(10);
+
+    let is_valid = risk <= 7;
+    let rejected_reason = if !is_valid {
+        warnings.first().cloned()
+    } else {
+        None
+    };
+
+    PlanValidation {
+        is_valid,
+        risk_score: risk,
+        warnings,
+        rejected_reason,
+        extracted_operations: operations,
+        extracted_dimensions: dimensions,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feedback and re-prompt
+// ---------------------------------------------------------------------------
+
+/// Build a human-readable feedback message for a rejected plan.
+pub fn build_rejection_feedback(validation: &PlanValidation) -> String {
+    let mut feedback = format!(
+        "## Plan Validation Feedback\nYour previous plan was rejected (risk score {}/10).\n\n",
+        validation.risk_score
+    );
+
+    if let Some(ref reason) = validation.rejected_reason {
+        feedback.push_str(&format!("**Primary concern:** {}\n\n", reason));
+    }
+
+    if !validation.warnings.is_empty() {
+        feedback.push_str("**All warnings:**\n");
+        for w in &validation.warnings {
+            feedback.push_str(&format!("- {}\n", w));
+        }
+        feedback.push('\n');
+    }
+
+    feedback.push_str(
+        "**Instructions for revision:**\n\
+         - Use simpler operations where possible (prefer box+cylinder+booleans over complex lofts)\n\
+         - Use realistic, achievable dimensions\n\
+         - Apply fillets and chamfers as the LAST operations\n\
+         - Include a '### Build Plan' section with numbered steps\n"
+    );
+
+    feedback
+}
+
+/// Re-call the geometry advisor with feedback about a rejected plan.
+pub async fn plan_geometry_with_feedback(
+    provider: Box<dyn AiProvider>,
+    user_request: &str,
+    feedback: &str,
+) -> Result<DesignPlan, AppError> {
+    let messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: GEOMETRY_ADVISOR_PROMPT.to_string(),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: user_request.to_string(),
+        },
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: "(Previous plan was rejected by the validator.)".to_string(),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "{}\n\nPlease generate a REVISED geometry plan that addresses these concerns.",
+                feedback
+            ),
+        },
+    ];
+
+    let plan_text = provider.complete(&messages, Some(2048)).await?;
+    Ok(DesignPlan { text: plan_text })
+}
 
 /// Call the AI to produce a geometry design plan for the user's request.
 ///
@@ -91,5 +457,209 @@ mod tests {
             text: "Test plan".to_string(),
         };
         assert_eq!(plan.text, "Test plan");
+    }
+
+    // -----------------------------------------------------------------------
+    // Parsing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_operations_finds_known_ops() {
+        let text = "We will revolve a profile, then shell it, and add a fillet.";
+        let ops = extract_operations(text);
+        assert!(ops.contains(&"revolve".to_string()));
+        assert!(ops.contains(&"shell".to_string()));
+        assert!(ops.contains(&"fillet".to_string()));
+    }
+
+    #[test]
+    fn test_extract_operations_empty_for_no_ops() {
+        let text = "This is a plain description of a rectangular object.";
+        let ops = extract_operations(text);
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_extract_dimensions_multi_format() {
+        let text = "Start with a box 50x30x20mm.";
+        let dims = extract_dimensions(text);
+        assert!(dims.contains(&50.0));
+        assert!(dims.contains(&30.0));
+        assert!(dims.contains(&20.0));
+    }
+
+    #[test]
+    fn test_extract_dimensions_single_format() {
+        let text = "Use a 3mm fillet and a 100 mm radius.";
+        let dims = extract_dimensions(text);
+        assert!(dims.contains(&3.0));
+        assert!(dims.contains(&100.0));
+    }
+
+    #[test]
+    fn test_extract_dimensions_negative() {
+        let text = "Offset by -2mm from the edge.";
+        let dims = extract_dimensions(text);
+        assert!(dims.contains(&-2.0));
+    }
+
+    #[test]
+    fn test_extract_fillet_radii() {
+        let text = "Apply fillet 5mm on top edges and fillet(2.0) on bottom.";
+        let radii = extract_fillet_radii(text);
+        assert!(radii.contains(&5.0));
+        assert!(radii.contains(&2.0));
+    }
+
+    #[test]
+    fn test_count_boolean_mentions_multiple() {
+        let text = "Cut the slot, cut the hole, union the boss, fuse the cap.";
+        let count = count_boolean_mentions(text);
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn test_has_section_present() {
+        let text = "Some intro\n### Build Plan\n1. Start with a box";
+        assert!(has_section(text, "Build Plan"));
+    }
+
+    #[test]
+    fn test_has_section_missing() {
+        let text = "Some intro\n### Object Analysis\nA box.";
+        assert!(!has_section(text, "Build Plan"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Risk score tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_simple_plan_low_risk() {
+        let text = "### Build Plan\n1. Extrude a 50x30x20mm box.\n\nUse extrude to create the base.";
+        let v = validate_plan(text);
+        assert!(v.is_valid);
+        assert!(v.risk_score <= 3);
+    }
+
+    #[test]
+    fn test_validate_shell_after_many_booleans() {
+        let text = "### Build Plan\n\
+            Dimensions: 100x80x50mm\n\
+            1. Cut a slot. 2. Cut a hole. 3. Cut another slot. 4. Cut a pocket. 5. Cut a vent.\n\
+            6. Apply shell to hollow it out.";
+        let v = validate_plan(text);
+        // Rule 1: shell + 5 booleans = +3, Rule 3: 5 booleans = +2 → score >= 5
+        assert!(v.risk_score >= 5);
+        assert!(v.warnings.iter().any(|w| w.contains("shell()")));
+    }
+
+    #[test]
+    fn test_validate_negative_dimension() {
+        let text = "### Build Plan\nCreate a box with -50mm height.";
+        let v = validate_plan(text);
+        assert!(v.risk_score >= 4);
+        assert!(v.warnings.iter().any(|w| w.contains("negative dimension")));
+    }
+
+    #[test]
+    fn test_validate_huge_dimension() {
+        let text = "### Build Plan\nCreate a beam 50000mm long, 10mm wide.";
+        let v = validate_plan(text);
+        assert!(v.risk_score >= 3);
+        assert!(v.warnings.iter().any(|w| w.contains("exceeds 10 meters")));
+    }
+
+    #[test]
+    fn test_validate_tiny_dimension() {
+        let text = "### Build Plan\nAdd a 0.005mm detail and a 50mm base.";
+        let v = validate_plan(text);
+        assert!(v.risk_score >= 3);
+        assert!(v.warnings.iter().any(|w| w.contains("below manufacturing precision")));
+    }
+
+    #[test]
+    fn test_validate_missing_build_plan() {
+        let text = "Just extrude a 50x30x20mm box.";
+        let v = validate_plan(text);
+        assert!(v.risk_score >= 2);
+        assert!(v.warnings.iter().any(|w| w.contains("missing a 'Build Plan'")));
+    }
+
+    #[test]
+    fn test_validate_no_dimensions() {
+        let text = "### Build Plan\n1. Make a box.\n2. Add a hole.";
+        let v = validate_plan(text);
+        assert!(v.warnings.iter().any(|w| w.contains("no concrete dimensions")));
+    }
+
+    #[test]
+    fn test_validate_fillet_on_small_feature() {
+        let text = "### Build Plan\nCreate a 15x15x10mm bracket.\nApply fillet 8mm on edges.";
+        let v = validate_plan(text);
+        assert!(v.warnings.iter().any(|w| w.contains("fillet radius") && w.contains("too large")));
+    }
+
+    #[test]
+    fn test_validate_accumulates_to_rejection() {
+        // shell + 5 booleans (+3 + +2) + negative dim (+4) = 9, clamped to 9 > 7
+        let text = "Cut slot, cut hole, cut pocket, union boss, fuse cap.\n\
+            Shell the result. Dimension: -10mm.";
+        let v = validate_plan(text);
+        assert!(!v.is_valid);
+        assert!(v.risk_score > 7);
+        assert!(v.rejected_reason.is_some());
+    }
+
+    #[test]
+    fn test_validate_risk_score_clamped_to_10() {
+        // Stack many rules: shell + 6 booleans (+3), booleans >= 5 (+2), negative (-50mm, +4),
+        // huge (50000mm, +3), no build plan (+2), loft (+1), sweep (+1) = 16 → clamped to 10
+        let text = "Cut, cut, cut, cut, union, fuse.\n\
+            Shell the result. Loft profiles. Sweep along path.\n\
+            Dimensions: -50mm, 50000mm.";
+        let v = validate_plan(text);
+        assert_eq!(v.risk_score, 10);
+        assert!(!v.is_valid);
+    }
+
+    // -----------------------------------------------------------------------
+    // Feedback tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_rejection_feedback_includes_reason() {
+        let v = PlanValidation {
+            is_valid: false,
+            risk_score: 8,
+            warnings: vec!["shell() after 5 boolean operations is very likely to fail".to_string()],
+            rejected_reason: Some("shell() after 5 boolean operations is very likely to fail".to_string()),
+            extracted_operations: vec!["shell".to_string()],
+            extracted_dimensions: vec![100.0],
+        };
+        let fb = build_rejection_feedback(&v);
+        assert!(fb.contains("risk score 8/10"));
+        assert!(fb.contains("shell()"));
+        assert!(fb.contains("Instructions for revision"));
+    }
+
+    #[test]
+    fn test_build_rejection_feedback_lists_all_warnings() {
+        let v = PlanValidation {
+            is_valid: false,
+            risk_score: 9,
+            warnings: vec![
+                "warning one".to_string(),
+                "warning two".to_string(),
+                "warning three".to_string(),
+            ],
+            rejected_reason: Some("warning one".to_string()),
+            extracted_operations: vec![],
+            extracted_dimensions: vec![],
+        };
+        let fb = build_rejection_feedback(&v);
+        assert!(fb.contains("warning one"));
+        assert!(fb.contains("warning two"));
+        assert!(fb.contains("warning three"));
     }
 }
