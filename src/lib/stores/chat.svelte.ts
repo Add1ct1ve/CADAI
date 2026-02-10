@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import type { ChatMessage } from '$lib/types';
 
 let messages = $state<ChatMessage[]>([]);
@@ -35,6 +36,7 @@ export function getChatStore() {
       messages = [];
       isStreaming = false;
       generationId++;
+      invoke('clear_session_memory').catch(() => {});
     },
   };
 }

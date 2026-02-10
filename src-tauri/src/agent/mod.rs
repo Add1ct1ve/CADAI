@@ -5,6 +5,7 @@ pub mod design;
 pub mod executor;
 pub mod extract;
 pub mod iterative;
+pub mod memory;
 pub mod modify;
 pub mod prompts;
 pub mod review;

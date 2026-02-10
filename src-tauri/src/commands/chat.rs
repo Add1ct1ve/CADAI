@@ -450,6 +450,12 @@ pub async fn auto_retry(
     })
 }
 
+#[tauri::command]
+pub fn clear_session_memory(state: State<'_, AppState>) -> Result<(), AppError> {
+    state.session_memory.lock().unwrap().reset();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
