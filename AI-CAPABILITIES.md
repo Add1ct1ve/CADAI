@@ -333,18 +333,22 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| "When to guess" rules | ⬜ | OK to guess: common objects (mug, bolt). NOT OK: custom parts |
-| Proportional reasoning rules | ⬜ | "A handle is ~120mm long, a knob is ~30mm diameter" |
-| Scale reference anchors | ⬜ | "A human hand is ~190mm long" for ergonomic parts |
-| "Ask vs guess" decision tree | ⬜ | If user says "small" → 20-40mm. "Large" → 100-300mm |
-| Relative sizing rules | ⬜ | "The lid should be 2mm larger than the box in X and Y" |
+| "When to guess" rules | ✅ | OK to guess: common objects (mug, bolt). NOT OK: custom parts |
+| Proportional reasoning rules | ✅ | "A handle is ~120mm long, a knob is ~30mm diameter" |
+| Scale reference anchors | ✅ | "A human hand is ~190mm long" for ergonomic parts |
+| "Ask vs guess" decision tree | ✅ | If user says "small" → 20-40mm. "Large" → 100-300mm |
+| Relative sizing rules | ✅ | "The lid should be 2mm larger than the box in X and Y" |
 
 **Implementation notes:**
-- New YAML section: `dimension_guidance` in `default.yaml`
-- Rules for when the AI should pick reasonable defaults vs ask the user
-- Currently the prompt says "never assume dimensions" — this is too strict
-- New guidance: "For real-world objects, use typical dimensions. For custom/abstract parts, ask."
-- Include size-class mapping: tiny (<20mm), small (20-60mm), medium (60-150mm), large (150-500mm)
+- New YAML section: `dimension_guidance` with 5 sub-categories in all 3 presets
+- `when_to_estimate`: decision rules for guess vs ask
+- `size_classes`: tiny/small/medium/large/extra-large with mm ranges
+- `scale_anchors`: human hand, finger, battery, credit card references
+- `proportional_reasoning`: typical dimensions for common objects (mug, knob, hook, etc.)
+- `relative_sizing`: clearance, wall thickness, press-fit, nesting rules
+- Old "Never assume dimensions" rule replaced with softer guidance
+- Rendered into both code generation prompt (`prompts.rs`) and geometry advisor (`design.rs`)
+- `parallel.rs` passes combined manufacturing + dimension guidance to geometry advisor
 - Estimated token cost: ~800 tokens
 
 ---

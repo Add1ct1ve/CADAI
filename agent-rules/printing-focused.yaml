@@ -353,7 +353,7 @@ response_format:
 
   never:
     - "Never generate code for ambiguous requests without asking"
-    - "Never assume dimensions - always ask if not specified"
+    - "For custom/abstract parts, ask for dimensions if not specified. For real-world objects, use typical dimensions and state your assumptions"
     - "Never skip printability validation"
     - "Never create geometry with walls thinner than 1.2mm without warning"
 
@@ -1855,6 +1855,53 @@ dimension_tables:
       - "K-factor (neutral axis): 0.33 for air bend, 0.44 for bottoming, 0.50 for coining"
       - "Minimum flange length: 4t + R (material thickness × 4 + bend radius)"
       - "Hole-to-bend distance: >=2.5t + R to avoid distortion"
+
+# =============================================================================
+# DIMENSION ESTIMATION GUIDANCE
+# =============================================================================
+# Decision rules for when to guess dimensions vs ask, size-class mappings,
+# scale anchors, and relative sizing rules.
+
+dimension_guidance:
+  when_to_estimate:
+    - "For real-world objects (mug, bolt, phone case, bracket), use typical dimensions from the dimension tables or common knowledge"
+    - "For abstract or custom parts ('make a bracket for my project'), ask the user for critical dimensions"
+    - "If the user specifies ANY dimension, respect it exactly and derive others proportionally"
+    - "If the user says 'small', 'medium', or 'large', use the size class mapping below"
+    - "When in doubt, pick reasonable defaults and state your assumptions in the response"
+
+  size_classes:
+    - "Tiny: < 20mm (jewelry, pins, screws, electronic components)"
+    - "Small: 20-60mm (knobs, buttons, small brackets, connectors)"
+    - "Medium: 60-150mm (handles, phone cases, small enclosures, cups)"
+    - "Large: 150-500mm (helmets, laptop stands, large enclosures, boxes)"
+    - "Extra-large: > 500mm (furniture, structural parts, shelving)"
+
+  scale_anchors:
+    - "Human hand: ~190mm long, ~85mm wide"
+    - "Human finger: ~20mm diameter, ~80mm long"
+    - "Desktop objects: typically 50-300mm"
+    - "Pocket-sized objects: 40-120mm longest dimension"
+    - "AA battery: 50.5mm long, 14.5mm diameter"
+    - "Credit card: 85.6 x 54.0mm"
+
+  proportional_reasoning:
+    - "A handle/grip: ~120mm long, ~30mm diameter"
+    - "A knob: ~25-40mm diameter, ~15-25mm tall"
+    - "A wall hook: ~50mm projection, ~80mm tall"
+    - "A mug/cup: ~80mm diameter, ~95mm tall, ~2mm wall"
+    - "A coaster: ~90mm diameter, ~5mm thick"
+    - "A phone stand: ~80mm wide, ~120mm tall, ~100mm deep"
+    - "A pen holder: ~40mm diameter, ~100mm tall"
+    - "A soap dish: ~120mm long, ~80mm wide, ~15mm deep"
+
+  relative_sizing:
+    - "Lid or cap: 0.5-1.0mm clearance over container in X and Y"
+    - "Container wall thickness: 2-3mm (3D printing), 1-2mm (CNC milling)"
+    - "Screw hole clearance: hole diameter = screw diameter + 0.3mm"
+    - "Press-fit: hole diameter = shaft diameter - 0.1mm"
+    - "Nesting parts: inner dimension = outer dimension - 2 x wall_thickness"
+    - "Fillet radius: typically 10-20% of the smallest adjacent feature dimension"
 
 # =============================================================================
 # FEW-SHOT EXAMPLES: Design-to-Code Workflow
