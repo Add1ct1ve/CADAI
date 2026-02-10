@@ -468,6 +468,9 @@ async fn run_design_plan_phase(
         let cookbook_ref = confidence_rules
             .as_ref()
             .and_then(|r| r.cookbook.as_deref());
+        let patterns_ref = confidence_rules
+            .as_ref()
+            .and_then(|r| r.design_patterns.as_deref());
 
         let final_validation = design::PlanValidation {
             is_valid: final_is_valid,
@@ -478,7 +481,7 @@ async fn run_design_plan_phase(
             extracted_dimensions: vec![],
         };
 
-        let conf = confidence::assess_confidence(&final_validation, cookbook_ref);
+        let conf = confidence::assess_confidence(&final_validation, cookbook_ref, patterns_ref);
         let _ = on_event.send(MultiPartEvent::ConfidenceAssessment {
             level: match conf.level {
                 confidence::ConfidenceLevel::High => "high".to_string(),

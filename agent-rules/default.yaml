@@ -2134,3 +2134,294 @@ few_shot_examples:
           .extrude(LIP_H)
       )
       result = base.union(support).union(lip).edges().fillet(1.5)
+
+# =============================================================================
+# DESIGN PATTERNS — Parameterized Templates
+# =============================================================================
+# Higher-level templates for common object categories. Each pattern describes
+# a category of objects with named parameters, base code, variants, and gotchas.
+# Use these as starting points and customize parameters to match the user request.
+
+design_patterns:
+  - name: "Enclosure"
+    description: "Box-shaped housing with base + lid, screw bosses, lip/groove alignment"
+    keywords: ["enclosure", "housing", "case", "box with lid", "container", "electronics case"]
+    parameters:
+      - "INNER_W (mm): Interior width"
+      - "INNER_D (mm): Interior depth"
+      - "INNER_H (mm): Interior height (base portion)"
+      - "WALL (mm): Wall thickness, typically 2-3mm"
+      - "LIP_H (mm): Alignment lip on base, typically 2-3mm"
+      - "BOSS_OD (mm): Screw boss outer diameter"
+      - "BOSS_ID (mm): Screw hole diameter (M3=3.2, M2.5=2.7)"
+    base_code: |
+      import cadquery as cq
+      INNER_W, INNER_D, INNER_H = 60.0, 40.0, 25.0
+      WALL, LIP_H = 2.5, 2.0
+      BOSS_OD, BOSS_ID = 7.0, 3.2
+      LID_H = 8.0
+      # Base box — shell it BEFORE adding bosses
+      base = (cq.Workplane("XY")
+          .box(INNER_W + 2*WALL, INNER_D + 2*WALL, INNER_H + WALL)
+          .faces(">Z").shell(-WALL))
+      # Corner screw bosses inside the base
+      bx, by = INNER_W/2 - BOSS_OD/2, INNER_D/2 - BOSS_OD/2
+      bosses = (cq.Workplane("XY")
+          .pushPoints([(bx,by),(-bx,by),(-bx,-by),(bx,-by)])
+          .circle(BOSS_OD/2).extrude(INNER_H)
+          .pushPoints([(bx,by),(-bx,by),(-bx,-by),(bx,-by)])
+          .circle(BOSS_ID/2).cutThruAll())
+      base = base.union(bosses)
+      # Alignment lip
+      lip = (cq.Workplane("XY").workplane(offset=INNER_H + WALL)
+          .rect(INNER_W - 0.4, INNER_D - 0.4).extrude(LIP_H))
+      base = base.union(lip)
+      # Lid
+      lid = (cq.Workplane("XY")
+          .box(INNER_W + 2*WALL, INNER_D + 2*WALL, LID_H))
+      result = base.union(lid.translate((0, 0, INNER_H + WALL + LIP_H + 5)))
+    variants:
+      - "Snap-fit: replace screw bosses with snap-fit hooks on walls"
+      - "Gasket groove: add 1mm wide, 0.8mm deep groove around lip"
+      - "Ventilation: add slot array on side walls"
+    gotchas:
+      - "Shell the base BEFORE adding screw bosses (shell fails on complex topology)"
+      - "Lip height must be less than base interior height"
+      - "Leave 0.3-0.5mm clearance between lip and lid groove for fit"
+
+  - name: "Shaft / Axle"
+    description: "Cylindrical body with stepped diameters, keyway, snap ring grooves"
+    keywords: ["shaft", "axle", "spindle", "rod", "pin", "stepped shaft"]
+    parameters:
+      - "TOTAL_LEN (mm): Overall shaft length"
+      - "MAIN_DIA (mm): Main body diameter"
+      - "STEP_DIA (mm): Reduced step diameter"
+      - "STEP_LEN (mm): Length of reduced step"
+      - "KEY_W (mm): Keyway width"
+      - "KEY_D (mm): Keyway depth"
+      - "KEY_L (mm): Keyway length"
+    base_code: |
+      import cadquery as cq
+      TOTAL_LEN, MAIN_DIA = 80.0, 20.0
+      STEP_DIA, STEP_LEN = 12.0, 20.0
+      KEY_W, KEY_D, KEY_L = 5.0, 2.5, 25.0
+      GROOVE_W, GROOVE_D = 1.5, 1.0
+      # Main shaft body
+      shaft = (cq.Workplane("XY")
+          .circle(MAIN_DIA / 2).extrude(TOTAL_LEN - STEP_LEN))
+      # Stepped-down end
+      step = (cq.Workplane("XY").workplane(offset=TOTAL_LEN - STEP_LEN)
+          .circle(STEP_DIA / 2).extrude(STEP_LEN))
+      shaft = shaft.union(step)
+      # Keyway slot cut into main section
+      shaft = (shaft.faces(">Z").workplane(offset=-(TOTAL_LEN - STEP_LEN) / 2)
+          .center(MAIN_DIA / 2 - KEY_D / 2, 0)
+          .rect(KEY_D, KEY_W).cutBlind(-KEY_L))
+      # Snap ring groove near step transition
+      groove_pos = TOTAL_LEN - STEP_LEN - 3.0
+      shaft = (shaft.faces("<Z").workplane(offset=groove_pos)
+          .circle(MAIN_DIA / 2 + 0.1)
+          .circle(MAIN_DIA / 2 - GROOVE_D)
+          .cutBlind(GROOVE_W))
+      result = shaft
+    variants:
+      - "Hollow shaft: add center bore with .circle(bore_dia/2).cutThruAll()"
+      - "D-shaft: cut flat on one side for set-screw attachment"
+      - "Splined shaft: multiple keyways evenly spaced via polarArray"
+    gotchas:
+      - "Build shaft along Z (vertical) — easier face selection"
+      - "Cut keyway AFTER union of all cylindrical sections"
+      - "Snap ring groove width is typically 1.0-1.5mm for standard rings"
+
+  - name: "Rotational Body"
+    description: "Revolve a 2D profile: bottles, cups, vases, turned parts"
+    keywords: ["revolve", "vase", "bottle", "cup", "bowl", "turned", "lathe", "rotational"]
+    parameters:
+      - "PROFILE_PTS: list of (radius, z) tuples defining half-profile"
+      - "WALL_T (mm): Wall thickness if hollow (0 for solid)"
+      - "ANGLE (deg): Revolve angle, 360 for full rotation"
+    base_code: |
+      import cadquery as cq
+      # Profile points (radius, z) — a simple vase shape
+      PROFILE = [(0, 0), (30, 0), (25, 20), (15, 60), (18, 90), (20, 100), (0, 100)]
+      WALL_T = 2.5
+      # Build wire from profile points
+      pts = [(r, z) for r, z in PROFILE]
+      body = (cq.Workplane("XZ")
+          .polyline(pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0)))
+      # Hollow out if wall thickness specified
+      if WALL_T > 0:
+          body = body.faces(">Z").shell(-WALL_T)
+      result = body
+    variants:
+      - "Solid body: set WALL_T = 0, skip shell step"
+      - "Threaded neck: add helix thread on top cylindrical section"
+      - "Flanged base: widen bottom profile points for a stable foot"
+    gotchas:
+      - "Profile must stay entirely on one side of the rotation axis (all r >= 0)"
+      - "Close the profile by returning to (0, z_top) then the polyline .close() connects back"
+      - "Shell after revolve can fail on thin sections — check min wall vs shell thickness"
+
+  - name: "Plate / Bracket"
+    description: "Flat plate with holes, stiffening ribs, mounting features"
+    keywords: ["plate", "bracket", "mount", "L-bracket", "mounting plate", "panel", "baseplate"]
+    parameters:
+      - "WIDTH (mm): Plate width"
+      - "HEIGHT (mm): Plate height"
+      - "THICK (mm): Plate thickness"
+      - "HOLE_DIA (mm): Mounting hole diameter"
+      - "HOLE_SPACING (mm): Distance between holes"
+      - "RIB_T (mm): Rib thickness (0 for no ribs)"
+    base_code: |
+      import cadquery as cq
+      WIDTH, HEIGHT, THICK = 80.0, 60.0, 4.0
+      HOLE_DIA, HOLE_MARGIN = 5.0, 10.0
+      RIB_T, RIB_H = 2.0, 8.0
+      # Main plate
+      plate = cq.Workplane("XY").box(WIDTH, HEIGHT, THICK)
+      # 4-corner mounting holes
+      hx, hy = WIDTH/2 - HOLE_MARGIN, HEIGHT/2 - HOLE_MARGIN
+      plate = (plate.faces(">Z").workplane()
+          .pushPoints([(hx,hy),(-hx,hy),(-hx,-hy),(hx,-hy)])
+          .hole(HOLE_DIA))
+      # Stiffening ribs on underside
+      if RIB_T > 0:
+          rib = (cq.Workplane("XY").workplane(offset=-THICK/2 - RIB_H/2)
+              .rect(WIDTH * 0.8, RIB_T).extrude(RIB_H))
+          plate = plate.union(rib)
+      result = plate
+    variants:
+      - "L-bracket: add a perpendicular flange via second extrusion on an edge face"
+      - "T-bracket: add flanges on both sides"
+      - "Slotted holes: use .slot2D(length, dia) instead of .hole() for adjustment"
+    gotchas:
+      - "Place holes AFTER creating the plate (not before boolean ops)"
+      - "Rib height should not exceed 3x plate thickness for printability"
+      - "Use pushPoints for hole patterns — more reliable than rarray for non-rectangular layouts"
+
+  - name: "Tube / Pipe"
+    description: "Hollow cylinder with optional bends, flanges, fittings"
+    keywords: ["tube", "pipe", "elbow", "conduit", "cylinder hollow", "piping"]
+    parameters:
+      - "OUTER_DIA (mm): Outer diameter"
+      - "INNER_DIA (mm): Inner diameter (wall = (outer-inner)/2)"
+      - "LENGTH (mm): Straight length"
+      - "BEND_RADIUS (mm): Center-line bend radius (0 for straight)"
+      - "BEND_ANGLE (deg): Bend angle (90 for standard elbow)"
+    base_code: |
+      import cadquery as cq
+      OUTER_DIA, INNER_DIA, LENGTH = 25.0, 20.0, 60.0
+      BEND_RADIUS, BEND_ANGLE = 40.0, 90.0
+      WALL = (OUTER_DIA - INNER_DIA) / 2
+      if BEND_RADIUS > 0 and BEND_ANGLE > 0:
+          # Bent pipe: sweep annular profile along arc
+          import math
+          path = (cq.Workplane("XZ")
+              .radiusArc((BEND_RADIUS * (1 - math.cos(math.radians(BEND_ANGLE))),
+                          BEND_RADIUS * math.sin(math.radians(BEND_ANGLE))),
+                         -BEND_RADIUS)
+              .val())
+          pipe = (cq.Workplane("XY")
+              .circle(OUTER_DIA / 2).circle(INNER_DIA / 2)
+              .sweep(path))
+      else:
+          # Straight pipe
+          pipe = (cq.Workplane("XY")
+              .circle(OUTER_DIA / 2).circle(INNER_DIA / 2)
+              .extrude(LENGTH))
+      result = pipe
+    variants:
+      - "Flanged ends: union a larger-diameter disc at each end"
+      - "T-junction: union a perpendicular pipe with boolean cuts for flow path"
+      - "Reducer: loft between two different-diameter annular profiles"
+    gotchas:
+      - "Inner circle MUST be drawn on same workplane as outer (concentric annulus)"
+      - "Bend radius should be >= 1.5x outer diameter to avoid self-intersection"
+      - "For T-junction, use boolean cylinder subtraction rather than shell (more reliable)"
+
+  - name: "Spring"
+    description: "Helical geometry: compression, extension, torsion springs"
+    keywords: ["spring", "coil", "helix", "compression spring", "extension spring"]
+    parameters:
+      - "WIRE_DIA (mm): Wire cross-section diameter"
+      - "COIL_DIA (mm): Mean coil diameter (center of wire)"
+      - "NUM_COILS: Number of active coils"
+      - "PITCH (mm): Distance between coil centers"
+      - "FREE_LEN (mm): Free length (= num_coils * pitch + wire_dia)"
+    base_code: |
+      import cadquery as cq
+      WIRE_DIA = 2.0
+      COIL_DIA = 15.0
+      NUM_COILS = 6
+      PITCH = 5.0
+      FREE_LEN = NUM_COILS * PITCH + WIRE_DIA
+      # Create helix path
+      helix = cq.Wire.makeHelix(
+          pitch=PITCH,
+          height=FREE_LEN - WIRE_DIA,
+          radius=COIL_DIA / 2)
+      # Sweep wire cross-section along helix
+      result = (cq.Workplane("XY")
+          .center(COIL_DIA / 2, 0)
+          .circle(WIRE_DIA / 2)
+          .sweep(helix, isFrenet=True))
+    variants:
+      - "Ground ends: add flat half-coils at top and bottom (pitch=0 for end coils)"
+      - "Extension spring: use pitch = wire_dia (tight coils) + add hooks at ends"
+      - "Torsion spring: add straight leg tangent lines at each end"
+    gotchas:
+      - "Use Wire.makeHelix(), not Edge — sweep needs a Wire path"
+      - "isFrenet=True prevents twist artifacts on helix sweeps"
+      - "Keep wire_dia < pitch, otherwise coils will self-intersect"
+
+  - name: "Gear"
+    description: "Toothed wheel: spur gear with involute-approximation teeth"
+    keywords: ["gear", "spur gear", "cog", "toothed wheel", "gear pair", "pinion"]
+    parameters:
+      - "MODULE (mm): Gear module (tooth size parameter)"
+      - "TOOTH_COUNT: Number of teeth"
+      - "FACE_WIDTH (mm): Gear thickness"
+      - "PRESSURE_ANGLE (deg): Typically 20"
+      - "BORE_DIA (mm): Center bore diameter"
+    base_code: |
+      import cadquery as cq
+      import math
+      MODULE = 2.0
+      TEETH = 20
+      FACE_W = 10.0
+      PA = math.radians(20)
+      BORE = 8.0
+      # Derived dimensions
+      R_PITCH = MODULE * TEETH / 2
+      R_BASE = R_PITCH * math.cos(PA)
+      R_OUTER = R_PITCH + MODULE
+      R_ROOT = R_PITCH - 1.25 * MODULE
+      # Simplified tooth profile (one tooth as a polyline wedge)
+      tooth_half_angle = math.pi / TEETH
+      pts = []
+      for i in range(8):
+          a = -tooth_half_angle + i * (2 * tooth_half_angle / 7)
+          r = R_ROOT + (R_OUTER - R_ROOT) * (1 - abs(2 * i / 7 - 1))
+          pts.append((r * math.cos(a), r * math.sin(a)))
+      # Build one tooth and polar-pattern it
+      gear = cq.Workplane("XY").circle(R_ROOT)
+      for t in range(TEETH):
+          angle = t * 360 / TEETH
+          rotated = [(x * math.cos(math.radians(angle)) - y * math.sin(math.radians(angle)),
+                       x * math.sin(math.radians(angle)) + y * math.cos(math.radians(angle)))
+                      for x, y in pts]
+          tooth = cq.Workplane("XY").polyline(rotated).close().extrude(FACE_W)
+          gear = gear.extrude(FACE_W) if t == 0 else gear
+          gear = gear.union(tooth)
+      # Center bore
+      gear = gear.faces(">Z").workplane().hole(BORE)
+      result = gear
+    variants:
+      - "Hub with keyway: add a raised hub cylinder and keyway slot"
+      - "Gear pair: generate two meshing gears at correct center distance"
+      - "Helical gear: twist the tooth extrusion using a swept profile"
+    gotchas:
+      - "This is a simplified involute — adequate for 3D printing, not for precision machining"
+      - "Use polyline tooth profile + union loop — polarArray on complex profiles is unreliable"
+      - "Bore hole should be cut LAST after all tooth unions complete"

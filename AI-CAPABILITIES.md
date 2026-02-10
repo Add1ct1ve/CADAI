@@ -572,14 +572,14 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Enclosure pattern | ⬜ | Template: base + lid + screw bosses + lip + gasket groove |
-| Shaft/axle pattern | ⬜ | Template: cylindrical with keyways, shoulders, snap ring grooves |
-| Rotational body pattern | ⬜ | Template: revolve profile with standard features (threads, grooves, flanges) |
-| Plate/bracket pattern | ⬜ | Template: flat plate with holes, stiffening ribs, mounting features |
-| Tube/pipe pattern | ⬜ | Template: hollow cylinder with fittings, bends, flanges |
-| Spring pattern | ⬜ | Template: compression, tension, torsion — helix parameters |
-| Gear pattern | ⬜ | Template: spur, bevel — module, tooth count, pressure angle |
-| Pattern selection logic | ⬜ | Detect which pattern matches the user's request |
+| Enclosure pattern | ✅ | Template: base + lid + screw bosses + lip + gasket groove |
+| Shaft/axle pattern | ✅ | Template: cylindrical with keyways, shoulders, snap ring grooves |
+| Rotational body pattern | ✅ | Template: revolve profile with standard features (threads, grooves, flanges) |
+| Plate/bracket pattern | ✅ | Template: flat plate with holes, stiffening ribs, mounting features |
+| Tube/pipe pattern | ✅ | Template: hollow cylinder with fittings, bends, flanges |
+| Spring pattern | ✅ | Template: compression, tension, torsion — helix parameters |
+| Gear pattern | ✅ | Template: spur, bevel — module, tooth count, pressure angle |
+| Pattern selection logic | ✅ | Keyword + operation overlap matching in confidence scoring |
 
 **Implementation notes:**
 - New YAML section: `design_patterns` in `default.yaml`
