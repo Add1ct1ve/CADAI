@@ -8,6 +8,7 @@ use crate::ai::message::ChatMessage;
 use crate::ai::cost;
 use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::agent::design;
+use crate::agent::executor;
 use crate::agent::prompts;
 use crate::agent::review;
 use crate::error::AppError;
@@ -82,6 +83,7 @@ pub enum MultiPartEvent {
     },
     FinalCode {
         code: String,
+        stl_base64: Option<String>,
     },
     ReviewStatus {
         message: String,
@@ -97,9 +99,25 @@ pub enum MultiPartEvent {
         total_tokens: u32,
         cost_usd: Option<f64>,
     },
+    ValidationAttempt {
+        attempt: u32,
+        max_attempts: u32,
+        message: String,
+    },
+    ValidationSuccess {
+        attempt: u32,
+        message: String,
+    },
+    ValidationFailed {
+        attempt: u32,
+        error_category: String,
+        error_message: String,
+        will_retry: bool,
+    },
     Done {
         success: bool,
         error: Option<String>,
+        validated: bool,
     },
 }
 
@@ -271,6 +289,24 @@ pub async fn generate_parallel(
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
 
+    // Resolve execution context for backend validation (None if Python not set up)
+    let execution_ctx = {
+        let venv_path = state.venv_path.lock().unwrap().clone();
+        match venv_path {
+            Some(venv_dir) => {
+                match super::find_python_script("runner.py") {
+                    Ok(runner_script) => Some(executor::ExecutionContext {
+                        venv_dir,
+                        runner_script,
+                        config: config.clone(),
+                    }),
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    };
+
     // -----------------------------------------------------------------------
     // Phase 0: Geometry Design Plan (always runs)
     // -----------------------------------------------------------------------
@@ -408,7 +444,7 @@ pub async fn generate_parallel(
 
         let mut messages_list = vec![ChatMessage {
             role: "system".to_string(),
-            content: system_prompt,
+            content: system_prompt.clone(),
         }];
         messages_list.extend(history);
         // Use the enhanced message that includes the geometry design plan
@@ -451,15 +487,18 @@ pub async fn generate_parallel(
             full_response: full_response.clone(),
         });
 
-        // Review step: verify the generated code matches the request
+        // Determine final code: review may modify it
+        let mut final_code = extract_code_from_response(&full_response);
+        let mut final_response = full_response.clone();
+
         if config.enable_code_review {
-            if let Some(code) = extract_code_from_response(&full_response) {
+            if let Some(ref code) = final_code {
                 let _ = on_event.send(MultiPartEvent::ReviewStatus {
                     message: "Reviewing generated code...".to_string(),
                 });
 
                 let review_provider = create_provider(&config)?;
-                match review::review_code(review_provider, &user_request, &code, Some(&design_plan.text)).await {
+                match review::review_code(review_provider, &user_request, code, Some(&design_plan.text)).await {
                     Ok((result, review_usage)) => {
                         if let Some(ref u) = review_usage {
                             total_usage.add(u);
@@ -470,34 +509,80 @@ pub async fn generate_parallel(
                             explanation: result.explanation.clone(),
                         });
                         if result.was_modified {
-                            let _ = on_event.send(MultiPartEvent::FinalCode {
-                                code: result.code.clone(),
-                            });
-                            // Replace code in the response text
-                            let updated_response = full_response.replace(
-                                &code,
-                                &result.code,
-                            );
-                            // Emit total usage
-                            if total_usage.total() > 0 {
-                                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
-                            }
-                            let _ = on_event.send(MultiPartEvent::Done {
-                                success: true,
-                                error: None,
-                            });
-                            return Ok(updated_response);
+                            final_response = full_response.replace(code, &result.code);
+                            final_code = Some(result.code);
                         }
                     }
                     Err(e) => {
-                        // Review failed, continue with original code
                         eprintln!("Code review failed: {}", e);
                     }
                 }
             }
         }
 
-        // Emit total usage before Done
+        // Backend validation: execute code and retry if it fails
+        if let (Some(code), Some(ref ctx)) = (&final_code, &execution_ctx) {
+            let on_validation_event = |evt: executor::ValidationEvent| {
+                match evt {
+                    executor::ValidationEvent::Attempt { attempt, max_attempts, message } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationAttempt {
+                            attempt, max_attempts, message,
+                        });
+                    }
+                    executor::ValidationEvent::Success { attempt, message } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationSuccess {
+                            attempt, message,
+                        });
+                    }
+                    executor::ValidationEvent::Failed { attempt, error_category, error_message, will_retry } => {
+                        let _ = on_event.send(MultiPartEvent::ValidationFailed {
+                            attempt, error_category, error_message, will_retry,
+                        });
+                    }
+                }
+            };
+
+            let validation_result = executor::validate_and_retry(
+                code.clone(), ctx, &system_prompt, &on_validation_event,
+            ).await?;
+
+            // Accumulate retry token usage
+            if validation_result.retry_usage.total() > 0 {
+                total_usage.add(&validation_result.retry_usage);
+                emit_usage(&on_event, "validation", &validation_result.retry_usage, &provider_id, &model_id);
+            }
+
+            let _ = on_event.send(MultiPartEvent::FinalCode {
+                code: validation_result.code.clone(),
+                stl_base64: validation_result.stl_base64.clone(),
+            });
+
+            // Update final_response if code changed during retries
+            if validation_result.code != *code {
+                final_response = final_response.replace(code, &validation_result.code);
+            }
+
+            if total_usage.total() > 0 {
+                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+            }
+
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: validation_result.success,
+                error: validation_result.error,
+                validated: true,
+            });
+
+            return Ok(final_response);
+        }
+
+        // No execution context — emit as-is (frontend will execute)
+        if let Some(ref code) = final_code {
+            let _ = on_event.send(MultiPartEvent::FinalCode {
+                code: code.clone(),
+                stl_base64: None,
+            });
+        }
+
         if total_usage.total() > 0 {
             emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
         }
@@ -505,9 +590,10 @@ pub async fn generate_parallel(
         let _ = on_event.send(MultiPartEvent::Done {
             success: true,
             error: None,
+            validated: false,
         });
 
-        return Ok(full_response);
+        return Ok(final_response);
     }
 
     // -----------------------------------------------------------------------
@@ -632,6 +718,7 @@ pub async fn generate_parallel(
         let _ = on_event.send(MultiPartEvent::Done {
             success: false,
             error: Some("All parts failed to generate".to_string()),
+            validated: false,
         });
         return Err(AppError::AiProviderError(
             "All parts failed to generate".to_string(),
@@ -683,15 +770,65 @@ pub async fn generate_parallel(
                 code
             };
 
-            // Emit total usage before Done
+            // Backend validation for assembled code
+            if let Some(ref ctx) = execution_ctx {
+                let on_validation_event = |evt: executor::ValidationEvent| {
+                    match evt {
+                        executor::ValidationEvent::Attempt { attempt, max_attempts, message } => {
+                            let _ = on_event.send(MultiPartEvent::ValidationAttempt {
+                                attempt, max_attempts, message,
+                            });
+                        }
+                        executor::ValidationEvent::Success { attempt, message } => {
+                            let _ = on_event.send(MultiPartEvent::ValidationSuccess {
+                                attempt, message,
+                            });
+                        }
+                        executor::ValidationEvent::Failed { attempt, error_category, error_message, will_retry } => {
+                            let _ = on_event.send(MultiPartEvent::ValidationFailed {
+                                attempt, error_category, error_message, will_retry,
+                            });
+                        }
+                    }
+                };
+
+                let validation_result = executor::validate_and_retry(
+                    final_code.clone(), ctx, &system_prompt, &on_validation_event,
+                ).await?;
+
+                if validation_result.retry_usage.total() > 0 {
+                    total_usage.add(&validation_result.retry_usage);
+                    emit_usage(&on_event, "validation", &validation_result.retry_usage, &provider_id, &model_id);
+                }
+
+                let _ = on_event.send(MultiPartEvent::FinalCode {
+                    code: validation_result.code.clone(),
+                    stl_base64: validation_result.stl_base64.clone(),
+                });
+
+                if total_usage.total() > 0 {
+                    emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+                }
+
+                let _ = on_event.send(MultiPartEvent::Done {
+                    success: validation_result.success,
+                    error: validation_result.error,
+                    validated: true,
+                });
+
+                return Ok(validation_result.code);
+            }
+
+            // No execution context — emit as-is
             if total_usage.total() > 0 {
                 emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
             }
 
-            let _ = on_event.send(MultiPartEvent::FinalCode { code: final_code.clone() });
+            let _ = on_event.send(MultiPartEvent::FinalCode { code: final_code.clone(), stl_base64: None });
             let _ = on_event.send(MultiPartEvent::Done {
                 success: true,
                 error: None,
+                validated: false,
             });
             Ok(final_code)
         }
@@ -699,6 +836,7 @@ pub async fn generate_parallel(
             let _ = on_event.send(MultiPartEvent::Done {
                 success: false,
                 error: Some(e.clone()),
+                validated: false,
             });
             Err(AppError::AiProviderError(e))
         }
