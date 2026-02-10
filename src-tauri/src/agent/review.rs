@@ -1,5 +1,3 @@
-use regex::Regex;
-
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::error::AppError;
@@ -135,17 +133,13 @@ fn parse_review_response(response: &str, original_code: &str) -> ReviewResult {
         };
 
         // Extract the fixed code
-        let code_re = Regex::new(r"```python\s*\n([\s\S]*?)```").ok();
-        if let Some(re) = code_re {
-            if let Some(cap) = re.captures(trimmed) {
-                let fixed_code = cap[1].trim().to_string();
-                if !fixed_code.is_empty() {
-                    return ReviewResult {
-                        was_modified: true,
-                        code: fixed_code,
-                        explanation,
-                    };
-                }
+        if let Some(fixed_code) = crate::agent::extract::extract_code(trimmed) {
+            if !fixed_code.is_empty() {
+                return ReviewResult {
+                    was_modified: true,
+                    code: fixed_code,
+                    explanation,
+                };
             }
         }
     }

@@ -295,12 +295,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Strict response template in prompt | ⬜ | `## Design Plan\n...\n## Code\n```python\n...\n``` ` |
-| Separator tokens for parsing | ⬜ | `<DESIGN_PLAN>...</DESIGN_PLAN><CODE>...</CODE>` |
-| Response validation before extraction | ⬜ | Verify expected sections exist before regex |
-| Fallback extraction for non-compliant responses | ⬜ | Graceful degradation when AI ignores format |
-| Multi-format extraction | ⬜ | Handle both ` ```python ` and `<CODE>` tags |
-| Extraction success rate tracking | ⬜ | Log when extraction fails for debugging |
+| Strict response template in prompt | ✅ | Output Structure section in `prompts.rs` with `<CODE>` tag instructions |
+| Separator tokens for parsing | ✅ | `<CODE>...</CODE>` tags added to prompt and YAML presets |
+| Response validation before extraction | ✅ | 3-tier cascade in `extract.rs` validates each format before accepting |
+| Fallback extraction for non-compliant responses | ✅ | Heuristic tier catches bare code blocks with CadQuery markers |
+| Multi-format extraction | ✅ | XML tags → markdown fence → heuristic cascade in `extract.rs` |
+| Extraction success rate tracking | ✅ | `log::warn!` when no code block found; `ExtractionFormat` enum tracks which tier matched |
 
 **Implementation notes:**
 - Update `response_format` section in `default.yaml` with strict template

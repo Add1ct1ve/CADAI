@@ -126,12 +126,30 @@ export async function generateParallel(
 }
 
 /**
- * Extract Python code from a markdown response containing ```python code blocks.
+ * Extract Python code from an AI response using a 3-tier cascade:
+ * 1. <CODE>...</CODE> XML tags (case-insensitive)
+ * 2. ```python ... ``` markdown fence
+ * 3. Any ``` block containing CadQuery markers (import cadquery / cq.)
  * Returns the first matched code block content, or null if none found.
  */
 export function extractPythonCode(text: string): string | null {
-  const match = text.match(/```python\s*\n([\s\S]*?)```/);
-  return match ? match[1].trim() : null;
+  // Tier 1: <CODE>...</CODE> XML tags
+  const xmlMatch = text.match(/<CODE>([\s\S]*?)<\/CODE>/i);
+  if (xmlMatch && xmlMatch[1].trim()) return xmlMatch[1].trim();
+
+  // Tier 2: ```python ... ``` markdown fence
+  const fenceMatch = text.match(/```python\s*\n([\s\S]*?)```/);
+  if (fenceMatch && fenceMatch[1].trim()) return fenceMatch[1].trim();
+
+  // Tier 3: Any ``` block with CadQuery markers
+  const heuristicRe = /```\w*\s*\n([\s\S]*?)```/g;
+  let m;
+  while ((m = heuristicRe.exec(text)) !== null) {
+    const code = m[1].trim();
+    if (code.includes('import cadquery') || code.includes('cq.')) return code;
+  }
+
+  return null;
 }
 
 /**

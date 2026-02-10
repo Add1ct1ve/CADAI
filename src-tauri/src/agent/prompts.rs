@@ -394,6 +394,13 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         );
     }
 
+    // -- Output structure (always present) --
+    prompt.push_str("\n## Output Structure\n");
+    prompt.push_str("When generating CadQuery code, wrap it in XML-style tags:\n\n");
+    prompt.push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
+    prompt.push_str("You may also use ```python fences inside or outside the tags.\n");
+    prompt.push_str("The <CODE> tags help the system reliably extract your code.\n");
+
     prompt
 }
 

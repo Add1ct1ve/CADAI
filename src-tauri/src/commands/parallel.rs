@@ -161,7 +161,7 @@ fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str)
         Constraints:\n{}\n\n\
         The final result variable MUST contain ONLY this single part.\n\
         Do NOT generate any other parts. Do NOT create an assembly.\n\
-        Wrap your code in a ```python code block.",
+        Wrap your code in <CODE>...</CODE> tags (```python fences also accepted).",
         system_prompt,
         design_context,
         part.name,
@@ -702,6 +702,5 @@ fn parse_plan(json_str: &str) -> GenerationPlan {
 
 /// Extract a Python code block from an AI response.
 fn extract_code_from_response(response: &str) -> Option<String> {
-    let re = Regex::new(r"```python\s*\n([\s\S]*?)```").ok()?;
-    re.captures(response).map(|cap| cap[1].trim().to_string())
+    crate::agent::extract::extract_code(response)
 }
