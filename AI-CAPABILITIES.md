@@ -620,12 +620,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Track failures within conversation | ⬜ | Remember which operations failed in this session |
-| Avoid repeated failure patterns | ⬜ | "Shell failed twice → don't try shell again, use manual hollowing" |
-| Accumulate working patterns | ⬜ | "Revolve worked for this shape → use revolve for similar features" |
-| Session context injection | ⬜ | Append "In this session, the following approaches failed: ..." to prompt |
-| Cross-generation learning | ⬜ | If retry 1 failed with loft, retry 2 knows not to try loft |
-| Session summary on completion | ⬜ | "This session: 3 generations, 2 retries, shell failure resolved by manual hollowing" |
+| Track failures within conversation | ✅ | SessionMemory records operations, success/failure, error category per attempt |
+| Avoid repeated failure patterns | ✅ | Session learnings injected into system prompt with "Do NOT repeat failed approaches" |
+| Accumulate working patterns | ✅ | Successful operation combos tracked as "reliable combinations" |
+| Session context injection | ✅ | build_context_section() appended to system prompt in generate_parallel/generate_from_plan |
+| Cross-generation learning | ✅ | PipelineOutcome captures success/error, recorded in session memory after each generation |
+| Session summary on completion | ✅ | Session Context section lists all attempts with numbered outcomes + learnings |
 
 **Implementation notes:**
 - New module: `src-tauri/src/agent/memory.rs`

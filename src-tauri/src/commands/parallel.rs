@@ -13,9 +13,11 @@ use crate::agent::consensus;
 use crate::agent::design;
 use crate::agent::executor;
 use crate::agent::iterative;
+use crate::agent::memory;
 use crate::agent::modify;
 use crate::agent::prompts;
 use crate::agent::review;
+use crate::agent::validate::ErrorCategory;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -206,6 +208,38 @@ pub struct DesignPlanResult {
     pub is_valid: bool,
 }
 
+/// Outcome from the generation pipeline, used for session memory recording.
+struct PipelineOutcome {
+    response: String,
+    final_code: Option<String>,
+    success: bool,
+    error: Option<String>,
+}
+
+/// Record a generation attempt into the session memory.
+fn record_generation_attempt(
+    state: &AppState,
+    user_request: &str,
+    code: Option<&str>,
+    success: bool,
+    error_category: Option<ErrorCategory>,
+    failing_operation: Option<String>,
+    error_summary: Option<String>,
+) {
+    let operations = code
+        .map(memory::extract_operations_from_code)
+        .unwrap_or_default();
+    let attempt = memory::GenerationAttempt {
+        user_request: user_request.chars().take(80).collect(),
+        operations_used: operations,
+        success,
+        error_category,
+        failing_operation,
+        error_summary: error_summary.map(|s| s.chars().take(120).collect()),
+    };
+    state.session_memory.lock().unwrap().record_attempt(attempt);
+}
+
 // ---------------------------------------------------------------------------
 // Prompts
 // ---------------------------------------------------------------------------
@@ -366,6 +400,7 @@ async fn run_design_plan_phase(
     total_usage: &mut TokenUsage,
     provider_id: &str,
     model_id: &str,
+    state: &AppState,
 ) -> Result<(design::DesignPlan, DesignPlanResult), AppError> {
     let _ = on_event.send(MultiPartEvent::PlanStatus {
         message: "Designing geometry...".to_string(),
@@ -393,6 +428,14 @@ async fn run_design_plan_phase(
                 ctx.push_str(&crate::agent::design::format_failure_prevention(fp));
             }
         }
+        // Append session memory context so the geometry advisor knows what failed
+        if let Some(session_ctx) = state.session_memory.lock().unwrap().build_context_section() {
+            if !ctx.is_empty() {
+                ctx.push_str("\n\n");
+            }
+            ctx.push_str(&session_ctx);
+        }
+
         if ctx.is_empty() {
             None
         } else {
@@ -506,7 +549,7 @@ async fn run_design_plan_phase(
 }
 
 /// Phase 1+: Planner decomposition, code generation (single/multi/iterative/consensus),
-/// review, and validation. Returns the final AI response string.
+/// review, and validation. Returns a `PipelineOutcome` for session memory recording.
 #[allow(clippy::too_many_arguments)]
 async fn run_generation_pipeline(
     plan_text: &str,
@@ -519,7 +562,7 @@ async fn run_generation_pipeline(
     total_usage: &mut TokenUsage,
     provider_id: &str,
     model_id: &str,
-) -> Result<String, AppError> {
+) -> Result<PipelineOutcome, AppError> {
     let enhanced_message = format!(
         "## Geometry Design Plan\n{}\n\n## User Request\n{}",
         plan_text, user_request
@@ -663,17 +706,23 @@ async fn run_generation_pipeline(
                     emit_usage(on_event, "total", total_usage, provider_id, model_id);
                 }
 
+                let iter_error = if result.success {
+                    None
+                } else {
+                    Some("Iterative build failed".to_string())
+                };
                 let _ = on_event.send(MultiPartEvent::Done {
                     success: result.success,
-                    error: if result.success {
-                        None
-                    } else {
-                        Some("Iterative build failed".to_string())
-                    },
+                    error: iter_error.clone(),
                     validated: true,
                 });
 
-                return Ok(result.final_code);
+                return Ok(PipelineOutcome {
+                    response: result.final_code.clone(),
+                    final_code: Some(result.final_code),
+                    success: result.success,
+                    error: iter_error,
+                });
             }
             // No Python execution context → fall through to single-shot
         }
@@ -862,7 +911,12 @@ async fn run_generation_pipeline(
                         validated: true,
                     });
 
-                    return Ok(response_text);
+                    return Ok(PipelineOutcome {
+                        response: response_text,
+                        final_code: Some(final_code),
+                        success: true,
+                        error: None,
+                    });
                 }
 
                 // Consensus failed — fall through
@@ -1026,11 +1080,16 @@ async fn run_generation_pipeline(
 
             let _ = on_event.send(MultiPartEvent::Done {
                 success: validation_result.success,
-                error: validation_result.error,
+                error: validation_result.error.clone(),
                 validated: true,
             });
 
-            return Ok(final_response);
+            return Ok(PipelineOutcome {
+                response: final_response,
+                final_code: Some(validation_result.code),
+                success: validation_result.success,
+                error: validation_result.error,
+            });
         }
 
         // No execution context — emit as-is
@@ -1051,7 +1110,12 @@ async fn run_generation_pipeline(
             validated: false,
         });
 
-        return Ok(final_response);
+        return Ok(PipelineOutcome {
+            response: final_response,
+            final_code,
+            success: true,
+            error: None,
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -1329,11 +1393,16 @@ async fn run_generation_pipeline(
 
                 let _ = on_event.send(MultiPartEvent::Done {
                     success: validation_result.success,
-                    error: validation_result.error,
+                    error: validation_result.error.clone(),
                     validated: true,
                 });
 
-                return Ok(validation_result.code);
+                return Ok(PipelineOutcome {
+                    response: validation_result.code.clone(),
+                    final_code: Some(validation_result.code),
+                    success: validation_result.success,
+                    error: validation_result.error,
+                });
             }
 
             // No execution context — emit as-is
@@ -1350,7 +1419,12 @@ async fn run_generation_pipeline(
                 error: None,
                 validated: false,
             });
-            Ok(final_code)
+            Ok(PipelineOutcome {
+                response: final_code.clone(),
+                final_code: Some(final_code),
+                success: true,
+                error: None,
+            })
         }
         Err(e) => {
             let _ = on_event.send(MultiPartEvent::Done {
@@ -1376,8 +1450,14 @@ pub async fn generate_parallel(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
-    let system_prompt =
-        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+    let system_prompt = {
+        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        let session_ctx = state.session_memory.lock().unwrap().build_context_section();
+        match session_ctx {
+            Some(ctx) => format!("{}\n\n{}", base, ctx),
+            None => base,
+        }
+    };
     let user_request = message.clone();
 
     let provider_id = config.ai_provider.clone();
@@ -1566,9 +1646,19 @@ pub async fn generate_parallel(
 
             let _ = on_event.send(MultiPartEvent::Done {
                 success: validation_result.success,
-                error: validation_result.error,
+                error: validation_result.error.clone(),
                 validated: true,
             });
+
+            record_generation_attempt(
+                &state,
+                &user_request,
+                Some(&validation_result.code),
+                validation_result.success,
+                None,
+                None,
+                validation_result.error,
+            );
 
             return Ok(final_response);
         }
@@ -1604,6 +1694,16 @@ pub async fn generate_parallel(
             validated: false,
         });
 
+        record_generation_attempt(
+            &state,
+            &user_request,
+            final_code.as_deref(),
+            true,
+            None,
+            None,
+            None,
+        );
+
         return Ok(final_response);
     }
 
@@ -1617,13 +1717,14 @@ pub async fn generate_parallel(
         &mut total_usage,
         &provider_id,
         &model_id,
+        &state,
     )
     .await?;
 
     // -----------------------------------------------------------------------
     // Phase 1+: Generation pipeline (planner, code gen, review, validation)
     // -----------------------------------------------------------------------
-    run_generation_pipeline(
+    let outcome = run_generation_pipeline(
         &design_plan.text,
         &user_request,
         history,
@@ -1635,7 +1736,19 @@ pub async fn generate_parallel(
         &provider_id,
         &model_id,
     )
-    .await
+    .await?;
+
+    record_generation_attempt(
+        &state,
+        &user_request,
+        outcome.final_code.as_deref(),
+        outcome.success,
+        None,
+        None,
+        outcome.error,
+    );
+
+    Ok(outcome.response)
 }
 
 // ---------------------------------------------------------------------------
@@ -1661,6 +1774,7 @@ pub async fn generate_design_plan(
         &mut total_usage,
         &provider_id,
         &model_id,
+        &state,
     )
     .await?;
 
@@ -1682,8 +1796,14 @@ pub async fn generate_from_plan(
 ) -> Result<String, AppError> {
     let _ = existing_code; // reserved for future use
     let config = state.config.lock().unwrap().clone();
-    let system_prompt =
-        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+    let system_prompt = {
+        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        let session_ctx = state.session_memory.lock().unwrap().build_context_section();
+        match session_ctx {
+            Some(ctx) => format!("{}\n\n{}", base, ctx),
+            None => base,
+        }
+    };
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
@@ -1703,7 +1823,7 @@ pub async fn generate_from_plan(
         }
     };
 
-    run_generation_pipeline(
+    let outcome = run_generation_pipeline(
         &plan_text,
         &user_request,
         history,
@@ -1715,7 +1835,19 @@ pub async fn generate_from_plan(
         &provider_id,
         &model_id,
     )
-    .await
+    .await?;
+
+    record_generation_attempt(
+        &state,
+        &user_request,
+        outcome.final_code.as_deref(),
+        outcome.success,
+        None,
+        None,
+        outcome.error,
+    );
+
+    Ok(outcome.response)
 }
 
 // ---------------------------------------------------------------------------

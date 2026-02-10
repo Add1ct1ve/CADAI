@@ -21,6 +21,7 @@ pub fn run() {
         config: std::sync::Mutex::new(loaded_config),
         python_path: std::sync::Mutex::new(None),
         venv_path: std::sync::Mutex::new(None),
+        session_memory: std::sync::Mutex::new(agent::memory::SessionMemory::new()),
     };
 
     tauri::Builder::default()
@@ -33,6 +34,7 @@ pub fn run() {
             greet,
             commands::chat::send_message,
             commands::chat::auto_retry,
+            commands::chat::clear_session_memory,
             commands::cad::execute_code,
             commands::cad::check_python,
             commands::cad::setup_python,
