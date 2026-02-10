@@ -1,3 +1,4 @@
+use base64::Engine;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -89,6 +90,16 @@ pub enum MultiPartEvent {
         part_name: String,
         success: bool,
         error: Option<String>,
+    },
+    PartCodeExtracted {
+        part_index: usize,
+        part_name: String,
+        code: String,
+    },
+    PartStlReady {
+        part_index: usize,
+        part_name: String,
+        stl_base64: String,
     },
     AssemblyStatus {
         message: String,
@@ -1109,6 +1120,12 @@ async fn run_generation_pipeline(
                 let code = extract_code_from_response(&response);
                 match code {
                     Some(c) => {
+                        // Emit PartCodeExtracted before PartComplete
+                        let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
+                            part_index: idx,
+                            part_name: name.clone(),
+                            code: c.clone(),
+                        });
                         part_codes[idx] = Some((name.clone(), c, position));
                         any_success = true;
                         let _ = on_event.send(MultiPartEvent::PartComplete {
@@ -1149,6 +1166,45 @@ async fn run_generation_pipeline(
 
     if total_usage.total() > 0 {
         emit_usage(on_event, "generate", total_usage, provider_id, model_id);
+    }
+
+    // Spawn background per-part STL tasks (non-blocking, for individual part preview)
+    if let Some(ctx) = execution_ctx {
+        for part_entry in &part_codes {
+            if let Some((name, code, _pos)) = part_entry {
+                let part_name = name.clone();
+                let part_code = code.clone();
+                let part_idx = part_codes.iter().position(|p| {
+                    p.as_ref().map(|(n, _, _)| n == &part_name).unwrap_or(false)
+                }).unwrap_or(0);
+                let venv_dir = ctx.venv_dir.clone();
+                let runner_script = ctx.runner_script.clone();
+                let evt_channel = on_event.clone();
+
+                tokio::spawn(async move {
+                    match executor::execute_with_timeout_isolated(
+                        &part_code,
+                        &venv_dir,
+                        &runner_script,
+                    )
+                    .await
+                    {
+                        Ok(exec_result) => {
+                            let stl_base64 = base64::engine::general_purpose::STANDARD
+                                .encode(&exec_result.stl_data);
+                            let _ = evt_channel.send(MultiPartEvent::PartStlReady {
+                                part_index: part_idx,
+                                part_name,
+                                stl_base64,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Background part STL failed for {}: {}", part_name, e);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     if !any_success {
@@ -1838,4 +1894,151 @@ pub async fn retry_skipped_steps(
     });
 
     Ok(result.final_code)
+}
+
+// ---------------------------------------------------------------------------
+// Retry a single failed part
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn retry_part(
+    part_index: usize,
+    part_spec: PartSpec,
+    design_plan_text: String,
+    _user_request: String,
+    on_event: Channel<MultiPartEvent>,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    let config = state.config.lock().unwrap().clone();
+    let system_prompt =
+        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+    let provider_id = config.ai_provider.clone();
+    let model_id = config.model.clone();
+    let mut total_usage = TokenUsage::default();
+
+    // Build part prompt
+    let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text);
+
+    let part_messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: part_prompt,
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: format!("Generate the CadQuery code for: {}", part_spec.description),
+        },
+    ];
+
+    // Stream generation for the single part
+    let provider = create_provider(&config)?;
+    let (tx, mut rx) = mpsc::channel::<StreamDelta>(100);
+    let provider_handle =
+        tokio::spawn(async move { provider.stream(&part_messages, tx).await });
+
+    let mut full_response = String::new();
+    while let Some(delta) = rx.recv().await {
+        full_response.push_str(&delta.content);
+        let _ = on_event.send(MultiPartEvent::PartDelta {
+            part_index,
+            part_name: part_spec.name.clone(),
+            delta: delta.content,
+        });
+    }
+
+    match provider_handle.await {
+        Ok(Ok(stream_usage)) => {
+            if let Some(ref u) = stream_usage {
+                total_usage.add(u);
+                emit_usage(&on_event, "retry_part", u, &provider_id, &model_id);
+            }
+        }
+        Ok(Err(e)) => return Err(e),
+        Err(e) => {
+            return Err(AppError::AiProviderError(format!(
+                "Provider task panicked: {}",
+                e
+            )));
+        }
+    }
+
+    // Extract code
+    let code = extract_code_from_response(&full_response);
+    match code {
+        Some(c) => {
+            let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
+                part_index,
+                part_name: part_spec.name.clone(),
+                code: c.clone(),
+            });
+            let _ = on_event.send(MultiPartEvent::PartComplete {
+                part_index,
+                part_name: part_spec.name.clone(),
+                success: true,
+                error: None,
+            });
+
+            // Spawn background STL execution for the retried part
+            let venv_path = state.venv_path.lock().unwrap().clone();
+            if let Some(venv_dir) = venv_path {
+                if let Ok(runner_script) = super::find_python_script("runner.py") {
+                    let part_code = c.clone();
+                    let part_name = part_spec.name.clone();
+                    let evt_channel = on_event.clone();
+                    let pi = part_index;
+
+                    tokio::spawn(async move {
+                        match executor::execute_with_timeout_isolated(
+                            &part_code,
+                            &venv_dir,
+                            &runner_script,
+                        )
+                        .await
+                        {
+                            Ok(exec_result) => {
+                                let stl_base64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&exec_result.stl_data);
+                                let _ = evt_channel.send(MultiPartEvent::PartStlReady {
+                                    part_index: pi,
+                                    part_name,
+                                    stl_base64,
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("Background part STL failed for {}: {}", part_name, e);
+                            }
+                        }
+                    });
+                }
+            }
+
+            if total_usage.total() > 0 {
+                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+            }
+
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: true,
+                error: None,
+                validated: false,
+            });
+
+            Ok(c)
+        }
+        None => {
+            let _ = on_event.send(MultiPartEvent::PartComplete {
+                part_index,
+                part_name: part_spec.name.clone(),
+                success: false,
+                error: Some("No code block found in response".to_string()),
+            });
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: false,
+                error: Some("No code extracted from retry response".to_string()),
+                validated: false,
+            });
+            Err(AppError::AiProviderError(
+                "No code extracted from retry response".to_string(),
+            ))
+        }
+    }
 }

@@ -121,6 +121,83 @@ pub fn execute_python_script(
     })
 }
 
+/// Execute CadQuery Python code in an isolated temp subdirectory.
+///
+/// Unlike `execute_cadquery()`, this creates a unique subdirectory per call
+/// so multiple executions can run concurrently without file collisions.
+pub fn execute_cadquery_isolated(
+    venv_dir: &Path,
+    runner_script: &Path,
+    code: &str,
+) -> Result<ExecutionResult, AppError> {
+    let python = venv::get_venv_python(venv_dir);
+
+    if !python.exists() {
+        return Err(AppError::PythonNotFound);
+    }
+
+    // Create a unique subdirectory using PID + timestamp nanos
+    let unique_id = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_dir = std::env::temp_dir()
+        .join("cadai-studio")
+        .join(unique_id);
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let input_file = temp_dir.join("input.py");
+    let output_file = temp_dir.join("output.stl");
+
+    std::fs::write(&input_file, code)?;
+
+    let output = Command::new(&python)
+        .args([
+            runner_script.to_string_lossy().as_ref(),
+            input_file.to_string_lossy().as_ref(),
+            output_file.to_string_lossy().as_ref(),
+        ])
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        let exit_code = output.status.code().unwrap_or(-1);
+        let error_msg = match exit_code {
+            2 => format!("CadQuery execution error:\n{}", stderr),
+            3 => "Code must assign final geometry to 'result' variable.".to_string(),
+            4 => format!("STL export error:\n{}", stderr),
+            _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
+        };
+        // Cleanup subdirectory before returning error
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(AppError::CadQueryError(error_msg));
+    }
+
+    if !output_file.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(AppError::CadQueryError(
+            "STL file was not generated".into(),
+        ));
+    }
+
+    let stl_data = std::fs::read(&output_file)?;
+
+    // Cleanup the entire subdirectory
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    Ok(ExecutionResult {
+        stl_data,
+        stdout,
+        stderr,
+    })
+}
+
 /// Execute CadQuery Python code and export directly to a specific file path.
 ///
 /// The runner script auto-detects the export format based on the output file extension

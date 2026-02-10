@@ -135,6 +135,8 @@ export type MultiPartEvent =
   | { kind: 'SingleDone'; full_response: string }
   | { kind: 'PartDelta'; part_index: number; part_name: string; delta: string }
   | { kind: 'PartComplete'; part_index: number; part_name: string; success: boolean; error?: string }
+  | { kind: 'PartCodeExtracted'; part_index: number; part_name: string; code: string }
+  | { kind: 'PartStlReady'; part_index: number; part_name: string; stl_base64: string }
   | { kind: 'AssemblyStatus'; message: string }
   | { kind: 'FinalCode'; code: string; stl_base64?: string }
   | { kind: 'ReviewStatus'; message: string }
@@ -166,6 +168,11 @@ export interface PartProgress {
   status: 'pending' | 'generating' | 'complete' | 'failed';
   streamedText: string;
   error?: string;
+  description: string;
+  constraints: string[];
+  position: [number, number, number];
+  code?: string;
+  stl_base64?: string;
 }
 
 export interface IterativeStepProgress {
