@@ -357,17 +357,18 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Self-diagnosis scenarios | ⬜ | "If your fillet fails, the radius is probably too large" |
-| Pre-emptive warning triggers | ⬜ | "If you're using shell after >3 booleans, simplify first" |
-| Alternative operation suggestions | ⬜ | "If loft fails, try stacked extrudes with fillets" |
-| Complexity self-assessment | ⬜ | "If your code has >50 lines, consider breaking into sub-parts" |
-| Error recovery checklist | ⬜ | In-prompt checklist for the AI to self-check before outputting code |
+| Self-diagnosis scenarios | ✅ | 7 rules: fillet, shell, loft, revolve, boolean, sweep, chamfer |
+| Pre-emptive warning triggers | ✅ | 6 rules: shell-after-booleans, fillet-before-boolean, loft profiles, etc. |
+| Alternative operation suggestions | ✅ | 6 rules: loft→extrude, shell→hollow, sweep→segments, etc. |
+| Complexity self-assessment | ✅ | 5 rules: line count, operation count, build order, tag usage |
+| Error recovery checklist | ✅ | 8-item pre-output checklist for the AI to self-check before outputting code |
 
 **Implementation notes:**
-- New YAML section: `failure_prevention` in `default.yaml`
-- These are "if X then Y" rules embedded in the system prompt
-- The AI reads these before generating, proactively avoiding known failures
-- Complements anti-patterns (1.2) — those are examples, these are rules
+- New YAML section: `failure_prevention` in all 3 presets (default, printing, cnc)
+- 5 categories, 32 rules total as "if X then Y" rules embedded in the system prompt
+- Rendered in both code generation prompt (`prompts.rs`) and geometry advisor (`design.rs`)
+- `parallel.rs` passes failure prevention context to geometry advisor
+- Complements anti-patterns (1.2) — those are code examples, these are proactive decision rules
 - Estimated token cost: ~1,500 tokens
 
 ---

@@ -366,6 +366,19 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         prompt.push('\n');
     }
 
+    // -- Failure Prevention (proactive rules) --
+    if let Some(ref fp) = rules.failure_prevention {
+        prompt.push_str("## Failure Prevention — Proactive Rules\n");
+        prompt.push_str("Follow these rules BEFORE generating code to avoid common CadQuery failures.\n\n");
+        for (category, items) in fp {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- Few-Shot Examples (design-to-code workflow demonstrations) --
     if let Some(ref examples) = rules.few_shot_examples {
         prompt.push_str("## Few-Shot Examples: Design-to-Code Workflow\n");
@@ -720,6 +733,11 @@ mod tests {
                 "preset {:?} missing few-shot examples",
                 preset
             );
+            assert!(
+                prompt.contains("## Failure Prevention"),
+                "preset {:?} missing failure prevention",
+                preset
+            );
         }
     }
 
@@ -923,8 +941,11 @@ mod tests {
         assert!(dimguide_pos < mfg_pos, "Dimension Guidance should come before Manufacturing");
         // Error Handling after Manufacturing
         assert!(mfg_pos < err_pos, "Manufacturing should come before Error Handling");
-        // Few-Shot Examples after Error Handling
-        assert!(err_pos < fse_pos, "Error Handling should come before Few-Shot Examples");
+        // Failure Prevention after Error Handling
+        let fp_pos = prompt.find("## Failure Prevention").unwrap();
+        assert!(err_pos < fp_pos, "Error Handling should come before Failure Prevention");
+        // Few-Shot Examples after Failure Prevention
+        assert!(fp_pos < fse_pos, "Failure Prevention should come before Few-Shot Examples");
         // Response Format last
         assert!(fse_pos < resp_pos, "Few-Shot Examples should come before Response Format");
     }
@@ -948,6 +969,7 @@ mod tests {
         assert!(!prompt.contains("## CadQuery API Quick-Reference"));
         assert!(!prompt.contains("## Real-World Dimension Tables"));
         assert!(!prompt.contains("## Dimension Estimation Guidance"));
+        assert!(!prompt.contains("## Failure Prevention"));
         assert!(!prompt.contains("## Few-Shot Examples"));
     }
 
@@ -1005,6 +1027,41 @@ mod tests {
             assert!(
                 !prompt.contains("Never assume dimensions"),
                 "preset {:?} still has old 'Never assume dimensions' rule",
+                preset
+            );
+        }
+    }
+
+    // ── Failure Prevention in prompt ──────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_failure_prevention_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Failure Prevention — Proactive Rules"),
+            "prompt should have failure prevention section"
+        );
+        assert!(prompt.contains("Follow these rules BEFORE generating code"));
+    }
+
+    #[test]
+    fn test_prompt_failure_prevention_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Spot-check each category
+        assert!(prompt.contains("fillet() fails"), "missing self_diagnosis content");
+        assert!(prompt.contains("about to use shell()"), "missing preemptive_warnings content");
+        assert!(prompt.contains("loft() fails between two profiles"), "missing alternative_operations content");
+        assert!(prompt.contains("exceeds 50 lines"), "missing complexity_assessment content");
+        assert!(prompt.contains("Before outputting code, verify"), "missing pre_output_checklist content");
+    }
+
+    #[test]
+    fn test_all_presets_have_failure_prevention_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Failure Prevention"),
+                "preset {:?} missing failure prevention section",
                 preset
             );
         }

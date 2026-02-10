@@ -278,7 +278,7 @@ pub async fn generate_parallel(
         message: "Designing geometry...".to_string(),
     });
 
-    // Extract extra context for the geometry advisor (manufacturing + dimension guidance)
+    // Extract extra context for the geometry advisor (manufacturing + dimension guidance + failure prevention)
     let design_extra_context = {
         let rules = crate::agent::rules::AgentRules::from_preset(
             config.agent_rules_preset.as_deref()
@@ -291,6 +291,10 @@ pub async fn generate_parallel(
             if let Some(ref d) = r.dimension_guidance {
                 if !ctx.is_empty() { ctx.push_str("\n\n"); }
                 ctx.push_str(&crate::agent::design::format_dimension_guidance(d));
+            }
+            if let Some(ref fp) = r.failure_prevention {
+                if !ctx.is_empty() { ctx.push_str("\n\n"); }
+                ctx.push_str(&crate::agent::design::format_failure_prevention(fp));
             }
         }
         if ctx.is_empty() { None } else { Some(ctx) }

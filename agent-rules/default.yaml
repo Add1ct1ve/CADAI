@@ -1892,6 +1892,55 @@ dimension_guidance:
     - "Fillet radius: typically 10-20% of the smallest adjacent feature dimension"
 
 # =============================================================================
+# FAILURE PREVENTION — Proactive "If X Then Y" Rules
+# =============================================================================
+# These rules help the AI avoid common CadQuery failures BEFORE they happen.
+# Read these before generating code and follow them proactively.
+
+failure_prevention:
+  self_diagnosis:
+    - "If fillet() fails, the radius is almost certainly too large — reduce to 1/5 of shortest adjacent edge"
+    - "If shell() raises 'Standard_ConstructionError', geometry has thin walls, sharp internal corners, or non-manifold edges — simplify first"
+    - "If loft() fails with 'profiles are incompatible', sections have different edge counts — use same number of points/edges in each profile"
+    - "If revolve() produces unexpected geometry, the profile likely crosses the rotation axis — ensure all profile points are on one side"
+    - "If a boolean cut produces no visible change, the cutting tool does not intersect the target body — check position and size"
+    - "If sweep() fails, the path is probably not a valid Wire — ensure .wire() is called and path does not self-intersect"
+    - "If chamfer() fails after multiple booleans, OpenCascade cannot resolve edge topology — apply chamfer earlier or use fillet instead"
+
+  preemptive_warnings:
+    - "If you are about to use shell() after more than 3 boolean operations, STOP — simplify by reducing booleans, or apply shell() before the cuts"
+    - "If you are about to fillet edges at a boolean intersection, STOP — do booleans first, THEN fillet the result (never fillet before boolean)"
+    - "If you are about to loft() between more than 3 profiles, consider whether stacked extrudes with fillets would be more robust"
+    - "If your design requires more than 6 boolean operations, split into sub-bodies: build each region separately, then union at the end"
+    - "If you are using nested .faces() selectors more than 2 levels deep, use .tag() to name important faces instead"
+    - "If a wall thickness in your design is below 1.5mm, shell() and boolean operations become very fragile — increase thickness or skip shell"
+
+  alternative_operations:
+    - "If loft() fails between two profiles: extrude the base profile, then use fillet/chamfer to approximate the shape transition"
+    - "If shell() fails on a complex body: build the shape as hollow from the start using boolean subtraction of an inner body"
+    - "If a complex sweep() fails: break the path into straight segments and use extrude + rotate + union for each segment"
+    - "If fillet() fails on specific edges: try chamfer() instead (more tolerant of edge topology issues)"
+    - "If a circular pattern fails: build one instance and use a Python loop with .rotate() and .union() to replicate"
+    - "If a complex 2D profile causes extrude to fail: simplify the profile to straight lines and arcs only (no splines)"
+
+  complexity_assessment:
+    - "If your code exceeds 50 lines, consider whether it can be split into named helper variables for each major feature"
+    - "If you are planning more than 8 distinct operations, list them in a comment block first to verify the sequence"
+    - "If the object has more than 4 distinct feature types (holes, slots, fillets, bosses, ribs), plan build order: base shape → large features → small details → fillets last"
+    - "If you are tempted to use more than 2 workplane offsets, use .tag() on key faces and reference them by tag instead"
+    - "If you need to select a face that is not a simple min/max face, use .tag() during construction rather than complex selector strings"
+
+  pre_output_checklist:
+    - "Before outputting code, verify: Does every fillet radius stay below half the smallest adjacent edge?"
+    - "Before outputting code, verify: Are all boolean cutting tools positioned to actually intersect the target body?"
+    - "Before outputting code, verify: Is shell() applied BEFORE small features and holes are cut (or not at all)?"
+    - "Before outputting code, verify: Does the code assign the final solid to 'result'?"
+    - "Before outputting code, verify: Are all dimensions realistic (no zero-thickness walls, no negative sizes, no features larger than the body)?"
+    - "Before outputting code, verify: If using loft(), do all profiles have the same number of edges/points?"
+    - "Before outputting code, verify: If using revolve(), is the profile entirely on one side of the rotation axis?"
+    - "Before outputting code, verify: Are fillets and chamfers applied as the LAST operations (after all booleans)?"
+
+# =============================================================================
 # FEW-SHOT EXAMPLES: Design-to-Code Workflow
 # =============================================================================
 # Complete workflow demonstrations: user request → design plan → working code.
