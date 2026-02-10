@@ -2,9 +2,12 @@
   import { getChatStore } from '$lib/stores/chat.svelte';
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
-  import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
+  import { generateParallel, generateDesignPlan, generateFromPlan, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
+  import { getSettingsStore } from '$lib/stores/settings.svelte';
   import ChatMessageComponent from './ChatMessage.svelte';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine } from '$lib/types';
+  import DesignPlanEditor from './DesignPlanEditor.svelte';
+  import { PLAN_TEMPLATES } from '$lib/data/plan-templates';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -12,6 +15,7 @@
   const chatStore = getChatStore();
   const project = getProjectStore();
   const viewportStore = getViewportStore();
+  const settingsStore = getSettingsStore();
 
   let inputText = $state('');
   let messagesContainer = $state<HTMLElement | null>(null);
@@ -29,6 +33,12 @@
   let isModification = $state(false);
   let isConsensus = $state(false);
   let consensusProgress = $state<{ label: string; status: string; temperature?: number; hasCode?: boolean; executionSuccess?: boolean }[]>([]);
+
+  // Plan editor state (two-phase flow)
+  let showPlanEditor = $state(false);
+  let pendingPlan = $state<DesignPlanResult | null>(null);
+  let pendingUserRequest = $state('');
+  let pendingHistory = $state<RustChatMessage[]>([]);
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -59,6 +69,8 @@
     diffData = null;
     isConsensus = false;
     consensusProgress = [];
+    showPlanEditor = false;
+    pendingPlan = null;
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -518,105 +530,33 @@
     return `Building step by step (${completed}/${steps.length}):\n${lines.join('\n')}`;
   }
 
-  async function handleSend() {
-    const text = inputText.trim();
-    if (!text || chatStore.isStreaming) return;
-
+  /**
+   * Run code generation from an approved (possibly edited) design plan.
+   */
+  async function runFromPlan(
+    planText: string,
+    userRequest: string,
+    rustHistory: RustChatMessage[],
+    existingCode: string | null,
+  ) {
     const myGen = chatStore.generationId;
-    isMultiPart = false;
-    partProgress = [];
-    designPlanText = '';
-    tokenUsageSummary = null;
-    isIterative = false;
-    iterativeSteps = [];
-    skippedStepsData = [];
-    isModification = false;
-    diffData = null;
-    isConsensus = false;
-    consensusProgress = [];
-    lastUserRequest = text;
+    chatStore.setStreaming(true);
+    let streamingContent = '';
     let validatedStl: string | null = null;
     let backendValidated = false;
 
-    // Add user message
-    const userMsg: ChatMessage = {
-      id: generateId(),
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    };
-    chatStore.addMessage(userMsg);
-    inputText = '';
-
-    // Add empty assistant message for streaming
-    const assistantMsg: ChatMessage = {
-      id: generateId(),
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-    };
-    chatStore.addMessage(assistantMsg);
-
-    // Build history from existing messages (excluding the empty assistant placeholder)
-    const rustHistory = toRustHistory(
-      chatStore.messages.filter((m) => m.content.length > 0),
-    );
-
-    chatStore.setStreaming(true);
-    let streamingContent = '';
-    const planStartTime = Date.now();
-    let planTimerInterval: ReturnType<typeof setInterval> | null = null;
-
-    // Determine if we should send existing code for modification detection
-    const DEFAULT_CODE_TEMPLATE = `import cadquery as cq\n\n# Create your 3D model here\nresult = cq.Workplane("XY").box(10, 10, 10)\n`;
-    const existingCode = project.code;
-    const hasExistingCode = existingCode.trim() !== DEFAULT_CODE_TEMPLATE.trim()
-      && existingCode.trim().split('\n').length > 3;
-
     try {
-      const result = await generateParallel(text, rustHistory, (event: MultiPartEvent) => {
+      const result = await generateFromPlan(planText, userRequest, rustHistory, (event: MultiPartEvent) => {
         if (chatStore.generationId !== myGen) return;
 
         switch (event.kind) {
-          case 'DesignPlan':
-            designPlanText = event.plan_text;
-            lastDesignPlanText = event.plan_text;
-            break;
-
-          case 'PlanValidation':
-            if (!event.is_valid) {
-              const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-              chatStore.updateLastMessage(
-                `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
-              );
-            }
-            break;
-
           case 'PlanStatus':
             {
-              // Start elapsed timer for planning phase
-              const elapsed = Math.round((Date.now() - planStartTime) / 1000);
-              chatStore.updateLastMessage(`${event.message} (${elapsed}s)`);
-              if (!planTimerInterval) {
-                planTimerInterval = setInterval(() => {
-                  if (chatStore.generationId !== myGen) {
-                    if (planTimerInterval) clearInterval(planTimerInterval);
-                    planTimerInterval = null;
-                    return;
-                  }
-                  const el = Math.round((Date.now() - planStartTime) / 1000);
-                  chatStore.updateLastMessage(`${event.message} (${el}s)`);
-                }, 1000);
-              }
+              chatStore.updateLastMessage(event.message);
             }
             break;
 
           case 'PlanResult':
-            // Stop the planning timer
-            if (planTimerInterval) {
-              clearInterval(planTimerInterval);
-              planTimerInterval = null;
-            }
             if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
               isMultiPart = true;
               partProgress = event.plan.parts.map((p) => ({
@@ -627,14 +567,11 @@
               const desc = event.plan.description
                 ? `${event.plan.description}\n\n`
                 : '';
-              chatStore.updateLastMessage(
-                `${desc}${formatPartProgress(partProgress)}`
-              );
+              chatStore.updateLastMessage(`${desc}${formatPartProgress(partProgress)}`);
             }
             break;
 
           case 'SingleDelta':
-            // Single-mode fallback: stream like normal
             streamingContent += event.delta;
             chatStore.updateLastMessage(streamingContent);
             break;
@@ -648,28 +585,20 @@
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].status = 'generating';
               partProgress[event.part_index].streamedText += event.delta;
-              // Update progress display
               const desc1 = chatStore.messages[chatStore.messages.length - 1]?.content.split('\nGenerating')[0] || '';
               const prefix = desc1.includes('Generating') ? '' : desc1 + '\n';
-              chatStore.updateLastMessage(
-                `${prefix}${formatPartProgress(partProgress)}`
-              );
+              chatStore.updateLastMessage(`${prefix}${formatPartProgress(partProgress)}`);
             }
             break;
 
           case 'PartComplete':
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].status = event.success ? 'complete' : 'failed';
-              if (event.error) {
-                partProgress[event.part_index].error = event.error;
-              }
-              // Rebuild the progress message
+              if (event.error) partProgress[event.part_index].error = event.error;
               const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
               const descPart = lastContent.split('\nGenerating')[0];
               const prefix2 = descPart.includes('Generating') ? '' : descPart + '\n';
-              chatStore.updateLastMessage(
-                `${prefix2}${formatPartProgress(partProgress)}`
-              );
+              chatStore.updateLastMessage(`${prefix2}${formatPartProgress(partProgress)}`);
             }
             break;
 
@@ -752,14 +681,9 @@
               const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
               if (stepIdx >= 0) {
                 iterativeSteps[stepIdx].status = event.success ? 'complete' : 'skipped';
-                if (event.stl_base64) {
-                  iterativeSteps[stepIdx].stl_base64 = event.stl_base64;
-                }
+                if (event.stl_base64) iterativeSteps[stepIdx].stl_base64 = event.stl_base64;
                 chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
-                // Update viewport with intermediate STL so user sees model being built
-                if (event.success && event.stl_base64) {
-                  viewportStore.setPendingStl(event.stl_base64);
-                }
+                if (event.success && event.stl_base64) viewportStore.setPendingStl(event.stl_base64);
               }
             }
             break;
@@ -801,17 +725,6 @@
             }
             break;
 
-          case 'TokenUsage':
-            if (event.phase === 'total') {
-              tokenUsageSummary = {
-                input_tokens: event.input_tokens,
-                output_tokens: event.output_tokens,
-                total_tokens: event.total_tokens,
-                cost_usd: event.cost_usd,
-              };
-            }
-            break;
-
           case 'ConsensusStarted':
             isConsensus = true;
             consensusProgress = [
@@ -843,68 +756,49 @@
             }
             break;
 
-          case 'ModificationDetected':
-            isModification = true;
-            break;
-
-          case 'CodeDiff':
-            diffData = {
-              diff_lines: event.diff_lines,
-              additions: event.additions,
-              deletions: event.deletions,
-            };
+          case 'TokenUsage':
+            if (event.phase === 'total') {
+              tokenUsageSummary = {
+                input_tokens: event.input_tokens,
+                output_tokens: event.output_tokens,
+                total_tokens: event.total_tokens,
+                cost_usd: event.cost_usd,
+              };
+            }
             break;
 
           case 'Done':
             if (event.validated) backendValidated = true;
             break;
         }
-      }, hasExistingCode ? existingCode : null);
+      }, existingCode);
 
       if (chatStore.generationId !== myGen) return;
 
-      // Iterative mode: STL already set via StepComplete events, skip frontend execution
       if (isIterative && validatedStl) {
         viewportStore.setPendingStl(validatedStl);
-      } else if (isIterative) {
-        // Iterative completed (possibly with skipped steps), code already set via FinalCode
       } else if (validatedStl) {
         viewportStore.setPendingStl(validatedStl);
       } else if (backendValidated) {
-        // Backend validated but failed — code is already set in editor via FinalCode event.
-        // User can manually retry or edit.
+        // Backend validated — code already in editor
       } else if (isMultiPart) {
-        // Multi-part, no backend validation: execute assembled code in frontend
         const assembledCode = result;
         project.setCode(assembledCode);
         chatStore.updateLastMessage(
           chatStore.messages[chatStore.messages.length - 1]?.content +
             '\n\nAssembly complete! Executing code...'
         );
-
         try {
           const execResult = await executeCode(assembledCode);
           if (chatStore.generationId !== myGen) return;
           if (execResult.success && execResult.stl_base64) {
             viewportStore.setPendingStl(execResult.stl_base64);
-            chatStore.addMessage({
-              id: generateId(),
-              role: 'system',
-              content: 'Assembly executed successfully.',
-              timestamp: Date.now(),
-            });
           } else if (!execResult.success) {
             const errorInfo = execResult.stderr || 'Code execution failed';
             chatStore.addMessage({
-              id: generateId(),
-              role: 'system',
-              content: `Execution error: ${errorInfo}`,
-              timestamp: Date.now(),
-              isError: true,
-              failedCode: assembledCode,
-              errorMessage: errorInfo,
+              id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
+              timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errorInfo,
             });
-
             chatStore.setStreaming(false);
             await handleAutoRetry(assembledCode, errorInfo, 1);
             return;
@@ -912,25 +806,17 @@
         } catch (execErr) {
           const errMsg = `${execErr}`;
           chatStore.addMessage({
-            id: generateId(),
-            role: 'system',
-            content: `Failed to execute code: ${errMsg}`,
-            timestamp: Date.now(),
-            isError: true,
-            failedCode: assembledCode,
-            errorMessage: errMsg,
+            id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
+            timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errMsg,
           });
-
           chatStore.setStreaming(false);
           await handleAutoRetry(assembledCode, errMsg, 1);
           return;
         }
       } else {
-        // Single mode, no backend validation: execute in frontend
         const code = extractPythonCode(result);
         if (code) {
           project.setCode(code);
-
           try {
             const execResult = await executeCode(code);
             if (chatStore.generationId !== myGen) return;
@@ -939,17 +825,450 @@
             } else if (!execResult.success) {
               const errorInfo = execResult.stderr || 'Code execution failed';
               chatStore.addMessage({
+                id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
+                timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errorInfo,
+              });
+              chatStore.setStreaming(false);
+              await handleAutoRetry(code, errorInfo, 1);
+              return;
+            }
+          } catch (execErr) {
+            const errMsg = `${execErr}`;
+            chatStore.addMessage({
+              id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
+              timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errMsg,
+            });
+            chatStore.setStreaming(false);
+            await handleAutoRetry(code, errMsg, 1);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      if (streamingContent.length === 0 && !isMultiPart) {
+        chatStore.updateLastMessage(`Error: ${err}`);
+      } else {
+        chatStore.addMessage({
+          id: generateId(), role: 'system', content: `Error: ${err}`,
+          timestamp: Date.now(), isError: true,
+        });
+      }
+    } finally {
+      if (chatStore.generationId === myGen) {
+        chatStore.setStreaming(false);
+        isMultiPart = false;
+        partProgress = [];
+        isIterative = false;
+        iterativeSteps = [];
+        isConsensus = false;
+        consensusProgress = [];
+      }
+    }
+  }
+
+  function handlePlanApprove(editedPlanText: string) {
+    showPlanEditor = false;
+    const req = pendingUserRequest;
+    const hist = pendingHistory;
+    pendingPlan = null;
+    runFromPlan(editedPlanText, req, hist, null);
+  }
+
+  function handlePlanReject() {
+    showPlanEditor = false;
+    pendingPlan = null;
+    chatStore.setStreaming(false);
+    chatStore.addMessage({
+      id: generateId(),
+      role: 'system',
+      content: 'Plan generation cancelled.',
+      timestamp: Date.now(),
+    });
+  }
+
+  async function handleSend() {
+    const text = inputText.trim();
+    if (!text || chatStore.isStreaming) return;
+
+    const myGen = chatStore.generationId;
+    isMultiPart = false;
+    partProgress = [];
+    designPlanText = '';
+    tokenUsageSummary = null;
+    isIterative = false;
+    iterativeSteps = [];
+    skippedStepsData = [];
+    isModification = false;
+    diffData = null;
+    isConsensus = false;
+    consensusProgress = [];
+    lastUserRequest = text;
+    let validatedStl: string | null = null;
+    let backendValidated = false;
+
+    // Add user message
+    const userMsg: ChatMessage = {
+      id: generateId(),
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    };
+    chatStore.addMessage(userMsg);
+    inputText = '';
+
+    // Add empty assistant message for streaming
+    const assistantMsg: ChatMessage = {
+      id: generateId(),
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+    chatStore.addMessage(assistantMsg);
+
+    // Build history from existing messages (excluding the empty assistant placeholder)
+    const rustHistory = toRustHistory(
+      chatStore.messages.filter((m) => m.content.length > 0),
+    );
+
+    chatStore.setStreaming(true);
+    let streamingContent = '';
+    const planStartTime = Date.now();
+    let planTimerInterval: ReturnType<typeof setInterval> | null = null;
+
+    // Determine if we should send existing code for modification detection
+    const DEFAULT_CODE_TEMPLATE = `import cadquery as cq\n\n# Create your 3D model here\nresult = cq.Workplane("XY").box(10, 10, 10)\n`;
+    const existingCode = project.code;
+    const hasExistingCode = existingCode.trim() !== DEFAULT_CODE_TEMPLATE.trim()
+      && existingCode.trim().split('\n').length > 3;
+
+    try {
+      if (hasExistingCode) {
+        // ── Modification path: call generateParallel directly (no plan editor) ──
+        const result = await generateParallel(text, rustHistory, (event: MultiPartEvent) => {
+          if (chatStore.generationId !== myGen) return;
+
+          switch (event.kind) {
+            case 'DesignPlan':
+              designPlanText = event.plan_text;
+              lastDesignPlanText = event.plan_text;
+              break;
+
+            case 'PlanValidation':
+              if (!event.is_valid) {
+                const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(
+                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
+                );
+              }
+              break;
+
+            case 'PlanStatus':
+              {
+                const elapsed = Math.round((Date.now() - planStartTime) / 1000);
+                chatStore.updateLastMessage(`${event.message} (${elapsed}s)`);
+                if (!planTimerInterval) {
+                  planTimerInterval = setInterval(() => {
+                    if (chatStore.generationId !== myGen) {
+                      if (planTimerInterval) clearInterval(planTimerInterval);
+                      planTimerInterval = null;
+                      return;
+                    }
+                    const el = Math.round((Date.now() - planStartTime) / 1000);
+                    chatStore.updateLastMessage(`${event.message} (${el}s)`);
+                  }, 1000);
+                }
+              }
+              break;
+
+            case 'PlanResult':
+              if (planTimerInterval) {
+                clearInterval(planTimerInterval);
+                planTimerInterval = null;
+              }
+              if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
+                isMultiPart = true;
+                partProgress = event.plan.parts.map((p) => ({
+                  name: p.name,
+                  status: 'pending' as const,
+                  streamedText: '',
+                }));
+                const desc = event.plan.description
+                  ? `${event.plan.description}\n\n`
+                  : '';
+                chatStore.updateLastMessage(
+                  `${desc}${formatPartProgress(partProgress)}`
+                );
+              }
+              break;
+
+            case 'SingleDelta':
+              streamingContent += event.delta;
+              chatStore.updateLastMessage(streamingContent);
+              break;
+
+            case 'SingleDone':
+              streamingContent = event.full_response;
+              chatStore.updateLastMessage(streamingContent);
+              break;
+
+            case 'PartDelta':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = 'generating';
+                partProgress[event.part_index].streamedText += event.delta;
+                const desc1 = chatStore.messages[chatStore.messages.length - 1]?.content.split('\nGenerating')[0] || '';
+                const prefix = desc1.includes('Generating') ? '' : desc1 + '\n';
+                chatStore.updateLastMessage(
+                  `${prefix}${formatPartProgress(partProgress)}`
+                );
+              }
+              break;
+
+            case 'PartComplete':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = event.success ? 'complete' : 'failed';
+                if (event.error) {
+                  partProgress[event.part_index].error = event.error;
+                }
+                const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const descPart = lastContent.split('\nGenerating')[0];
+                const prefix2 = descPart.includes('Generating') ? '' : descPart + '\n';
+                chatStore.updateLastMessage(
+                  `${prefix2}${formatPartProgress(partProgress)}`
+                );
+              }
+              break;
+
+            case 'AssemblyStatus':
+              {
+                const lastContent2 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(`${lastContent2}\n\n${event.message}`);
+              }
+              break;
+
+            case 'FinalCode':
+              project.setCode(event.code);
+              if (event.stl_base64) validatedStl = event.stl_base64;
+              break;
+
+            case 'ReviewStatus':
+              {
+                const lastContent3 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(`${lastContent3}\n\n${event.message}`);
+              }
+              break;
+
+            case 'ReviewComplete':
+              {
+                const lastContent4 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const reviewNote = event.was_modified
+                  ? `Code corrected by reviewer: ${event.explanation}`
+                  : `Code approved by reviewer.`;
+                chatStore.updateLastMessage(`${lastContent4}\n${reviewNote}`);
+              }
+              break;
+
+            case 'ValidationAttempt':
+              {
+                const lastContent5 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(`${lastContent5}\n\n${event.message}`);
+              }
+              break;
+
+            case 'ValidationSuccess':
+              {
+                const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+              }
+              break;
+
+            case 'ValidationFailed':
+              {
+                const lastContent7 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const note = event.will_retry
+                  ? `Execution failed (${event.error_category}), retrying...`
+                  : `Execution failed: ${event.error_message}`;
+                chatStore.updateLastMessage(`${lastContent7}\n${note}`);
+              }
+              break;
+
+            case 'IterativeStart':
+              isIterative = true;
+              iterativeSteps = event.steps.map((s) => ({
+                index: s.index,
+                name: s.name,
+                description: s.description,
+                status: 'pending' as const,
+              }));
+              chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+              break;
+
+            case 'IterativeStepStarted':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'generating';
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'IterativeStepComplete':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = event.success ? 'complete' : 'skipped';
+                  if (event.stl_base64) {
+                    iterativeSteps[stepIdx].stl_base64 = event.stl_base64;
+                  }
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                  if (event.success && event.stl_base64) {
+                    viewportStore.setPendingStl(event.stl_base64);
+                  }
+                }
+              }
+              break;
+
+            case 'IterativeStepRetry':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'retrying';
+                  iterativeSteps[stepIdx].attempt = event.attempt;
+                  iterativeSteps[stepIdx].error = event.error;
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'IterativeStepSkipped':
+              {
+                const stepIdx = iterativeSteps.findIndex((s) => s.index === event.step_index);
+                if (stepIdx >= 0) {
+                  iterativeSteps[stepIdx].status = 'skipped';
+                  iterativeSteps[stepIdx].error = event.error;
+                  chatStore.updateLastMessage(formatIterativeProgress(iterativeSteps));
+                }
+              }
+              break;
+
+            case 'IterativeComplete':
+              if (event.skipped_steps.length > 0) {
+                skippedStepsData = event.skipped_steps;
+                const skippedNames = event.skipped_steps.map((s) => s.name).join(', ');
+                chatStore.addMessage({
+                  id: generateId(),
+                  role: 'system',
+                  content: `Build complete with ${event.skipped_steps.length} skipped step(s): ${skippedNames}. You can retry them below.`,
+                  timestamp: Date.now(),
+                  hasSkippedSteps: true,
+                });
+              }
+              break;
+
+            case 'TokenUsage':
+              if (event.phase === 'total') {
+                tokenUsageSummary = {
+                  input_tokens: event.input_tokens,
+                  output_tokens: event.output_tokens,
+                  total_tokens: event.total_tokens,
+                  cost_usd: event.cost_usd,
+                };
+              }
+              break;
+
+            case 'ConsensusStarted':
+              isConsensus = true;
+              consensusProgress = [
+                { label: 'A', status: 'pending' },
+                { label: 'B', status: 'pending' },
+              ];
+              chatStore.updateLastMessage(formatConsensusProgress(consensusProgress));
+              break;
+
+            case 'ConsensusCandidate':
+              {
+                const cidx = consensusProgress.findIndex((c) => c.label === event.label);
+                if (cidx >= 0) {
+                  consensusProgress[cidx].status = event.status;
+                  consensusProgress[cidx].temperature = event.temperature;
+                  if (event.has_code != null) consensusProgress[cidx].hasCode = event.has_code;
+                  if (event.execution_success != null) consensusProgress[cidx].executionSuccess = event.execution_success;
+                  chatStore.updateLastMessage(formatConsensusProgress(consensusProgress));
+                }
+              }
+              break;
+
+            case 'ConsensusWinner':
+              {
+                const lastContent8 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(
+                  `${lastContent8}\n\nWinner: Candidate ${event.label} (score ${event.score}) — ${event.reason}`
+                );
+              }
+              break;
+
+            case 'ModificationDetected':
+              isModification = true;
+              break;
+
+            case 'CodeDiff':
+              diffData = {
+                diff_lines: event.diff_lines,
+                additions: event.additions,
+                deletions: event.deletions,
+              };
+              break;
+
+            case 'Done':
+              if (event.validated) backendValidated = true;
+              break;
+          }
+        }, existingCode);
+
+        if (chatStore.generationId !== myGen) return;
+
+        // Post-generation execution for modification path
+        if (isIterative && validatedStl) {
+          viewportStore.setPendingStl(validatedStl);
+        } else if (isIterative) {
+          // Iterative completed (possibly with skipped steps), code already set via FinalCode
+        } else if (validatedStl) {
+          viewportStore.setPendingStl(validatedStl);
+        } else if (backendValidated) {
+          // Backend validated but failed — code is already set in editor via FinalCode event.
+        } else if (isMultiPart) {
+          const assembledCode = result;
+          project.setCode(assembledCode);
+          chatStore.updateLastMessage(
+            chatStore.messages[chatStore.messages.length - 1]?.content +
+              '\n\nAssembly complete! Executing code...'
+          );
+
+          try {
+            const execResult = await executeCode(assembledCode);
+            if (chatStore.generationId !== myGen) return;
+            if (execResult.success && execResult.stl_base64) {
+              viewportStore.setPendingStl(execResult.stl_base64);
+              chatStore.addMessage({
+                id: generateId(),
+                role: 'system',
+                content: 'Assembly executed successfully.',
+                timestamp: Date.now(),
+              });
+            } else if (!execResult.success) {
+              const errorInfo = execResult.stderr || 'Code execution failed';
+              chatStore.addMessage({
                 id: generateId(),
                 role: 'system',
                 content: `Execution error: ${errorInfo}`,
                 timestamp: Date.now(),
                 isError: true,
-                failedCode: code,
+                failedCode: assembledCode,
                 errorMessage: errorInfo,
               });
 
               chatStore.setStreaming(false);
-              await handleAutoRetry(code, errorInfo, 1);
+              await handleAutoRetry(assembledCode, errorInfo, 1);
               return;
             }
           } catch (execErr) {
@@ -960,14 +1279,126 @@
               content: `Failed to execute code: ${errMsg}`,
               timestamp: Date.now(),
               isError: true,
-              failedCode: code,
+              failedCode: assembledCode,
               errorMessage: errMsg,
             });
 
             chatStore.setStreaming(false);
-            await handleAutoRetry(code, errMsg, 1);
+            await handleAutoRetry(assembledCode, errMsg, 1);
             return;
           }
+        } else {
+          const code = extractPythonCode(result);
+          if (code) {
+            project.setCode(code);
+
+            try {
+              const execResult = await executeCode(code);
+              if (chatStore.generationId !== myGen) return;
+              if (execResult.success && execResult.stl_base64) {
+                viewportStore.setPendingStl(execResult.stl_base64);
+              } else if (!execResult.success) {
+                const errorInfo = execResult.stderr || 'Code execution failed';
+                chatStore.addMessage({
+                  id: generateId(),
+                  role: 'system',
+                  content: `Execution error: ${errorInfo}`,
+                  timestamp: Date.now(),
+                  isError: true,
+                  failedCode: code,
+                  errorMessage: errorInfo,
+                });
+
+                chatStore.setStreaming(false);
+                await handleAutoRetry(code, errorInfo, 1);
+                return;
+              }
+            } catch (execErr) {
+              const errMsg = `${execErr}`;
+              chatStore.addMessage({
+                id: generateId(),
+                role: 'system',
+                content: `Failed to execute code: ${errMsg}`,
+                timestamp: Date.now(),
+                isError: true,
+                failedCode: code,
+                errorMessage: errMsg,
+              });
+
+              chatStore.setStreaming(false);
+              await handleAutoRetry(code, errMsg, 1);
+              return;
+            }
+          }
+        }
+      } else {
+        // ── New geometry: two-phase plan flow ──
+        const planResult = await generateDesignPlan(text, rustHistory, (event: MultiPartEvent) => {
+          if (chatStore.generationId !== myGen) return;
+
+          switch (event.kind) {
+            case 'PlanStatus':
+              {
+                const elapsed = Math.round((Date.now() - planStartTime) / 1000);
+                chatStore.updateLastMessage(`${event.message} (${elapsed}s)`);
+                if (!planTimerInterval) {
+                  planTimerInterval = setInterval(() => {
+                    if (chatStore.generationId !== myGen) {
+                      if (planTimerInterval) clearInterval(planTimerInterval);
+                      planTimerInterval = null;
+                      return;
+                    }
+                    const el = Math.round((Date.now() - planStartTime) / 1000);
+                    chatStore.updateLastMessage(`${event.message} (${el}s)`);
+                  }, 1000);
+                }
+              }
+              break;
+
+            case 'PlanValidation':
+              if (!event.is_valid) {
+                const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(
+                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
+                );
+              }
+              break;
+
+            case 'DesignPlan':
+              designPlanText = event.plan_text;
+              lastDesignPlanText = event.plan_text;
+              break;
+
+            case 'TokenUsage':
+              if (event.phase === 'total') {
+                tokenUsageSummary = {
+                  input_tokens: event.input_tokens,
+                  output_tokens: event.output_tokens,
+                  total_tokens: event.total_tokens,
+                  cost_usd: event.cost_usd,
+                };
+              }
+              break;
+          }
+        });
+
+        if (chatStore.generationId !== myGen) return;
+        if (planTimerInterval) {
+          clearInterval(planTimerInterval);
+          planTimerInterval = null;
+        }
+
+        if (settingsStore.config.auto_approve_plan) {
+          // Auto-approve: immediately proceed to code generation
+          chatStore.updateLastMessage('Plan approved (auto). Generating code...');
+          await runFromPlan(planResult.plan_text, text, rustHistory, null);
+        } else {
+          // Show editor, pause for user approval
+          pendingPlan = planResult;
+          pendingUserRequest = text;
+          pendingHistory = rustHistory;
+          showPlanEditor = true;
+          chatStore.setStreaming(false);
         }
       }
     } catch (err) {
@@ -997,6 +1428,8 @@
         isModification = false;
         isConsensus = false;
         consensusProgress = [];
+        showPlanEditor = false;
+        pendingPlan = null;
       }
     }
   }
@@ -1068,7 +1501,18 @@
         disableActions={chatStore.isStreaming || isRetrying}
       />
     {/each}
-    {#if designPlanText}
+    {#if showPlanEditor && pendingPlan}
+      <DesignPlanEditor
+        planText={pendingPlan.plan_text}
+        previousPlanText={lastDesignPlanText && lastDesignPlanText !== pendingPlan.plan_text ? lastDesignPlanText : null}
+        riskScore={pendingPlan.risk_score}
+        warnings={pendingPlan.warnings}
+        isValid={pendingPlan.is_valid}
+        onApprove={handlePlanApprove}
+        onReject={handlePlanReject}
+        templates={PLAN_TEMPLATES}
+      />
+    {:else if designPlanText}
       <details class="design-plan-block">
         <summary class="design-plan-summary">Geometry Design Plan</summary>
         <div class="design-plan-content">{designPlanText}</div>

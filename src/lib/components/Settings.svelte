@@ -33,6 +33,7 @@
   let agentPreset = $state('default');
   let enableCodeReview = $state(true);
   let enableConsensus = $state(false);
+  let autoApprovePlan = $state(false);
 
   // New settings
   let theme = $state<ThemeId>('dark');
@@ -68,6 +69,7 @@
       agentPreset = settings.config.agent_rules_preset || 'default';
       enableCodeReview = settings.config.enable_code_review ?? true;
       enableConsensus = settings.config.enable_consensus ?? false;
+      autoApprovePlan = settings.config.auto_approve_plan ?? false;
       theme = (settings.config.theme as ThemeId) || 'dark';
       displayUnits = settings.config.display_units || 'mm';
       gridSize = settings.config.grid_size ?? 100;
@@ -139,6 +141,7 @@
       agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
       enable_code_review: enableCodeReview,
       enable_consensus: enableConsensus,
+      auto_approve_plan: autoApprovePlan,
       theme,
       display_units: displayUnits,
       grid_size: gridSize,
@@ -430,6 +433,17 @@
             Enable consensus mode
           </label>
           <span class="form-hint">Runs 2 generation attempts at different temperatures and picks the best result. Uses ~2x tokens.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label-inline">
+            <input
+              type="checkbox"
+              bind:checked={autoApprovePlan}
+            />
+            Auto-approve design plan
+          </label>
+          <span class="form-hint">Skip the plan editor and generate code immediately. Faster but no chance to review the plan.</span>
         </div>
       </div>
 
