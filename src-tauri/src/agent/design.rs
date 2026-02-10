@@ -60,6 +60,75 @@ What can't CadQuery do perfectly? What's the closest buildable shape? Where shou
 - NEVER write Python or CadQuery code — only describe geometry in plain English"#;
 
 // ---------------------------------------------------------------------------
+// Manufacturing constraints formatting
+// ---------------------------------------------------------------------------
+
+/// Recursively format a YAML value into indented bullet-point markdown.
+fn format_yaml_value(out: &mut String, value: &serde_yaml::Value, indent: usize) {
+    let prefix = "  ".repeat(indent);
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (k, v) in map {
+                let key = match k {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    other => format!("{:?}", other),
+                };
+                match v {
+                    serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_) => {
+                        out.push_str(&format!("{}- **{}**:\n", prefix, key));
+                        format_yaml_value(out, v, indent + 1);
+                    }
+                    _ => {
+                        let val = format_yaml_scalar(v);
+                        out.push_str(&format!("{}- **{}**: {}\n", prefix, key, val));
+                    }
+                }
+            }
+        }
+        serde_yaml::Value::Sequence(seq) => {
+            for item in seq {
+                match item {
+                    serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_) => {
+                        out.push_str(&format!("{}- \n", prefix));
+                        format_yaml_value(out, item, indent + 1);
+                    }
+                    _ => {
+                        let val = format_yaml_scalar(item);
+                        out.push_str(&format!("{}- {}\n", prefix, val));
+                    }
+                }
+            }
+        }
+        _ => {
+            let val = format_yaml_scalar(value);
+            out.push_str(&format!("{}{}\n", prefix, val));
+        }
+    }
+}
+
+/// Format a scalar YAML value as a string.
+fn format_yaml_scalar(value: &serde_yaml::Value) -> String {
+    match value {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_yaml::Value::Null => "null".to_string(),
+        _ => format!("{:?}", value),
+    }
+}
+
+/// Format manufacturing constraints from AgentRules into a prompt-ready string.
+/// Returns a markdown section that can be appended to the geometry advisor prompt.
+pub fn format_manufacturing_constraints(manufacturing: &serde_yaml::Value) -> String {
+    let mut out = String::new();
+    out.push_str("## Manufacturing Constraints\n");
+    out.push_str("The user's active manufacturing profile imposes these constraints. ");
+    out.push_str("Your geometry plan MUST respect them.\n\n");
+    format_yaml_value(&mut out, manufacturing, 0);
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Parsing helpers (private)
 // ---------------------------------------------------------------------------
 
@@ -384,11 +453,18 @@ pub async fn plan_geometry_with_feedback(
     provider: Box<dyn AiProvider>,
     user_request: &str,
     feedback: &str,
+    manufacturing_context: Option<&str>,
 ) -> Result<(DesignPlan, Option<TokenUsage>), AppError> {
+    let mut system_prompt = GEOMETRY_ADVISOR_PROMPT.to_string();
+    if let Some(ctx) = manufacturing_context {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(ctx);
+    }
+
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: GEOMETRY_ADVISOR_PROMPT.to_string(),
+            content: system_prompt,
         },
         ChatMessage {
             role: "user".to_string(),
@@ -419,11 +495,18 @@ pub async fn plan_geometry_with_feedback(
 pub async fn plan_geometry(
     provider: Box<dyn AiProvider>,
     user_request: &str,
+    manufacturing_context: Option<&str>,
 ) -> Result<(DesignPlan, Option<TokenUsage>), AppError> {
+    let mut system_prompt = GEOMETRY_ADVISOR_PROMPT.to_string();
+    if let Some(ctx) = manufacturing_context {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(ctx);
+    }
+
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: GEOMETRY_ADVISOR_PROMPT.to_string(),
+            content: system_prompt,
         },
         ChatMessage {
             role: "user".to_string(),
@@ -661,5 +744,69 @@ mod tests {
         assert!(fb.contains("warning one"));
         assert!(fb.contains("warning two"));
         assert!(fb.contains("warning three"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Manufacturing constraints formatting tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_manufacturing_constraints_basic() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(r#"
+process: "3D Printing"
+min_wall: 0.8
+max_overhang: 45
+"#).unwrap();
+        let result = format_manufacturing_constraints(&yaml);
+        assert!(result.contains("## Manufacturing Constraints"));
+        assert!(result.contains("MUST respect"));
+        assert!(result.contains("process"));
+        assert!(result.contains("3D Printing"));
+        assert!(result.contains("min_wall"));
+        assert!(result.contains("0.8"));
+        assert!(result.contains("max_overhang"));
+        assert!(result.contains("45"));
+    }
+
+    #[test]
+    fn test_format_manufacturing_constraints_nested() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(r#"
+process: "3D Printing (FDM/SLA)"
+wall_thickness:
+  minimum: 1.2
+  recommended: 1.6
+  rule: "All walls must be >= 1.2mm thick"
+overhangs:
+  max_angle: 45
+  mitigation:
+    - "Add chamfers instead of sharp overhangs"
+    - "Use 45-degree angles where possible"
+"#).unwrap();
+        let result = format_manufacturing_constraints(&yaml);
+        assert!(result.contains("## Manufacturing Constraints"));
+        assert!(result.contains("wall_thickness"));
+        assert!(result.contains("minimum"));
+        assert!(result.contains("1.2"));
+        assert!(result.contains("recommended"));
+        assert!(result.contains("1.6"));
+        assert!(result.contains("rule"));
+        assert!(result.contains(">= 1.2mm"));
+        assert!(result.contains("overhangs"));
+        assert!(result.contains("max_angle"));
+        assert!(result.contains("45"));
+        assert!(result.contains("mitigation"));
+        assert!(result.contains("Add chamfers"));
+        assert!(result.contains("45-degree angles"));
+    }
+
+    #[test]
+    fn test_format_manufacturing_constraints_empty_mapping() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+        let result = format_manufacturing_constraints(&yaml);
+        assert!(result.contains("## Manufacturing Constraints"));
+        assert!(result.contains("MUST respect"));
+        // Header present but no bullet items beyond it
+        let after_header = result.split("\n\n").last().unwrap_or("");
+        assert!(after_header.trim().is_empty() || !after_header.contains("- **"));
     }
 }

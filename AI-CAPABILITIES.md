@@ -316,16 +316,15 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Inject active preset into geometry advisor | ⬜ | If preset is "3d-printing", advisor knows constraints |
-| Manufacturing constraints in design plan | ⬜ | "min wall 0.8mm", "max overhang 45°" in plan |
-| Preset-specific design guidance | ⬜ | Printing: add fillets for strength. CNC: avoid deep pockets |
-| Cross-reference plan against manufacturing rules | ⬜ | Flag plan features that violate preset constraints |
+| Inject active preset into geometry advisor | ✅ | Manufacturing YAML appended to geometry advisor system prompt |
+| Manufacturing constraints in design plan | ✅ | format_manufacturing_constraints() renders YAML as markdown |
+| Preset-specific design guidance | ✅ | Printing/CNC/default presets each inject their constraints |
+| Cross-reference plan against manufacturing rules | ✅ | Advisor prompt instructs plan MUST respect constraints |
 
 **Implementation notes:**
-- Modify `plan_geometry()` in `design.rs` to accept optional `AgentRules` or manufacturing section
-- Append manufacturing constraints to `GEOMETRY_ADVISOR_PROMPT`
-- The advisor should output a "Manufacturing Considerations" section in its plan
-- The reviewer can then check code against these considerations
+- `plan_geometry()` and `plan_geometry_with_feedback()` accept optional `manufacturing_context: Option<&str>`
+- `format_manufacturing_constraints()` renders YAML manufacturing data as markdown bullets
+- `parallel.rs` loads AgentRules at call site, extracts manufacturing text, passes to design phase
 - Estimated token cost: ~800 tokens (varies by preset)
 
 ---
