@@ -26,6 +26,7 @@ pub struct AgentRules {
     pub api_reference: Option<Vec<ApiReferenceEntry>>,
     pub dimension_tables: Option<Vec<DimensionTableEntry>>,
     pub dimension_guidance: Option<HashMap<String, Vec<String>>>,
+    pub failure_prevention: Option<HashMap<String, Vec<String>>>,
     pub few_shot_examples: Option<Vec<FewShotExample>>,
 }
 
@@ -152,6 +153,7 @@ impl AgentRules {
             api_reference: None,
             dimension_tables: None,
             dimension_guidance: None,
+            failure_prevention: None,
             few_shot_examples: None,
         }
     }
@@ -607,6 +609,7 @@ mod tests {
         assert!(rules.api_reference.is_none());
         assert!(rules.dimension_tables.is_none());
         assert!(rules.dimension_guidance.is_none());
+        assert!(rules.failure_prevention.is_none());
         assert!(rules.few_shot_examples.is_none());
     }
 
@@ -768,5 +771,39 @@ mod tests {
         assert!(dg.contains_key("scale_anchors"), "missing scale_anchors");
         assert!(dg.contains_key("proportional_reasoning"), "missing proportional_reasoning");
         assert!(dg.contains_key("relative_sizing"), "missing relative_sizing");
+    }
+
+    // ── Failure Prevention ────────────────────────────────────────────
+
+    #[test]
+    fn test_default_has_failure_prevention() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        assert!(
+            rules.failure_prevention.is_some(),
+            "default preset should have failure_prevention"
+        );
+    }
+
+    #[test]
+    fn test_all_presets_have_failure_prevention() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            assert!(
+                rules.failure_prevention.is_some(),
+                "preset {:?} should have failure_prevention",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn test_failure_prevention_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let fp = rules.failure_prevention.as_ref().unwrap();
+        assert!(fp.contains_key("self_diagnosis"), "missing self_diagnosis");
+        assert!(fp.contains_key("preemptive_warnings"), "missing preemptive_warnings");
+        assert!(fp.contains_key("alternative_operations"), "missing alternative_operations");
+        assert!(fp.contains_key("complexity_assessment"), "missing complexity_assessment");
+        assert!(fp.contains_key("pre_output_checklist"), "missing pre_output_checklist");
     }
 }

@@ -154,6 +154,32 @@ pub fn format_dimension_guidance(guidance: &std::collections::HashMap<String, Ve
     out
 }
 
+/// Format failure prevention rules into a prompt-ready string for the geometry advisor.
+pub fn format_failure_prevention(prevention: &std::collections::HashMap<String, Vec<String>>) -> String {
+    let mut out = String::new();
+    out.push_str("## Failure Prevention Rules\n");
+    out.push_str("Follow these rules when planning geometry to avoid operations that commonly fail.\n\n");
+    for (category, items) in prevention {
+        let title: String = category
+            .split('_')
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push_str(&format!("### {}\n", title));
+        for item in items {
+            out.push_str(&format!("- {}\n", item));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Parsing helpers (private)
 // ---------------------------------------------------------------------------
@@ -856,5 +882,28 @@ overhangs:
         assert!(result.contains("Follow these rules when choosing dimensions"));
         assert!(result.contains("real-world objects"));
         assert!(result.contains("Tiny: < 20mm"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Failure prevention formatting tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_failure_prevention_basic() {
+        let mut prevention = std::collections::HashMap::new();
+        prevention.insert("self_diagnosis".to_string(), vec![
+            "If fillet() fails, reduce the radius".to_string(),
+            "If shell() raises an error, simplify first".to_string(),
+        ]);
+        prevention.insert("preemptive_warnings".to_string(), vec![
+            "If you are about to use shell() after booleans, STOP".to_string(),
+        ]);
+        let result = format_failure_prevention(&prevention);
+        assert!(result.contains("## Failure Prevention Rules"));
+        assert!(result.contains("Follow these rules when planning geometry"));
+        assert!(result.contains("Self Diagnosis"));
+        assert!(result.contains("Preemptive Warnings"));
+        assert!(result.contains("fillet() fails"));
+        assert!(result.contains("shell() after booleans"));
     }
 }
