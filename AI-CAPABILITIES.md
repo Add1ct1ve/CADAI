@@ -541,25 +541,24 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ---
 
-### 5.4 Generation History & Comparison
+### 5.4 Generation History & Comparison ✅
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Store generation attempts | ⬜ | Save code + result for each generation attempt |
-| Side-by-side code diff | ⬜ | Compare two attempts line by line |
-| Side-by-side 3D comparison | ⬜ | Two 3D viewports showing different results |
-| Pin/favorite a generation | ⬜ | Mark a good result to prevent overwriting |
-| Roll back to previous attempt | ⬜ | Click to restore a previous generation |
-| Generation metadata | ⬜ | Show: tokens used, model, time taken, retry count |
+| Store generation attempts | ✅ | In-memory store, 20 entries max, auto-evicts oldest non-pinned |
+| Side-by-side code diff | ✅ | LCS line-by-line diff with green/red highlighting |
+| Click-to-preview 3D comparison | ✅ | Preview A/B buttons swap STL in main viewport |
+| Pin/favorite a generation | ✅ | Pinned entries survive eviction, confirm before delete |
+| Roll back to previous attempt | ✅ | Restore code + STL from any entry via custom event |
+| Generation metadata | ✅ | Tokens (in/out/total), cost, model, provider, duration, confidence, type, retries |
 
 **Implementation notes:**
-- New store: `generationHistory.svelte.ts`
-- Store array of `{ code, stl_base64, timestamp, tokens, model, success }` entries
-- New component: `GenerationHistory.svelte` — collapsible sidebar panel
-- Side-by-side view: split viewport, each with its own Three.js renderer
-- Diff view: simple line-by-line diff with green/red highlighting
-- Limit history to last 20 generations per session (memory)
-- Persistent storage via `localStorage` or Tauri file system
+- New store: `generationHistory.svelte.ts` — `$state` + `getGenerationHistoryStore()` factory
+- New component: `GenerationHistory.svelte` — list/detail/compare views in RightPanel History tab
+- New utility: `utils/diff.ts` — LCS diff producing `DiffLine[]` (reuses existing type)
+- Click-to-preview (not split viewport) — avoids duplicating WebGL setup
+- Custom event `generation-history:restore` for cross-component restore
+- In-memory only (STL base64 ~100KB-1MB each); resets on app restart
 
 ---
 
@@ -711,7 +710,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 5.1 Plan Editor | ✅ | Medium | Medium | User control over geometry planning |
 | 5.2 Confidence Indicator | ✅ | Low | Low | Manages expectations |
 | 5.3 Multi-Part Progress | ✅ | Medium | Medium | Better visibility for multi-part |
-| 5.4 Generation History | P2 | Medium | Medium | Compare and roll back attempts |
+| 5.4 Generation History | ✅ | Medium | Medium | Compare and roll back attempts |
 | 6.1 Design Patterns | P2 | Medium | Medium | Higher-level templates |
 | 6.2 Operation Interactions | P1 | Low | High | Tribal knowledge codified |
 | 6.3 Session Memory | P2 | Medium | Medium | Learns from failures within session |

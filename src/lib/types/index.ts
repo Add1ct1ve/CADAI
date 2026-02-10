@@ -199,6 +199,25 @@ export interface DesignPlanResult {
   is_valid: boolean;
 }
 
+export interface GenerationEntry {
+  id: string;
+  timestamp: number;
+  userPrompt: string;
+  code: string;
+  stl_base64?: string;
+  success: boolean;
+  error?: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+  tokenUsage?: TokenUsageData;
+  confidenceScore?: number;
+  confidenceLevel?: 'high' | 'medium' | 'low';
+  generationType: 'single' | 'multi-part' | 'iterative' | 'modification';
+  retryCount: number;
+  pinned: boolean;
+}
+
 export interface PlanTemplate {
   id: string;
   name: string;
