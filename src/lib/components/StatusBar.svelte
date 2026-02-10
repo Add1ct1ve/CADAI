@@ -26,7 +26,8 @@
     if (!pythonInfo.python_found) return 'Python: Not found';
     if (!pythonInfo.venv_ready) return `Python: ${pythonInfo.python_version ?? 'found'} (no venv)`;
     if (!pythonInfo.cadquery_installed) return `Python: ${pythonInfo.python_version} (no CadQuery)`;
-    return `Python: ${pythonInfo.python_version} + CadQuery`;
+    const cqVer = pythonInfo.cadquery_version ? ` ${pythonInfo.cadquery_version}` : '';
+    return `Python: ${pythonInfo.python_version} + CadQuery${cqVer}`;
   });
 
   let unitsText = $derived(() => {

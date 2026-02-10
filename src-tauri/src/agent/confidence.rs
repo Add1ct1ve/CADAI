@@ -293,26 +293,31 @@ mod tests {
                 title: "Hollow box (shell operation)".to_string(),
                 description: Some("Create a box and shell it to make hollow".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)".to_string(),
+                min_version: None,
             },
             CookbookEntry {
                 title: "Revolve wine glass".to_string(),
                 description: Some("Revolve a profile to create a wine glass shape".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').revolve()".to_string(),
+                min_version: None,
             },
             CookbookEntry {
                 title: "Loft between profiles".to_string(),
                 description: Some("Loft between two different cross-section profiles".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').loft()".to_string(),
+                min_version: None,
             },
             CookbookEntry {
                 title: "Simple extrude box".to_string(),
                 description: Some("Extrude a rectangle to create a box".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)".to_string(),
+                min_version: None,
             },
             CookbookEntry {
                 title: "Sweep pipe along path".to_string(),
                 description: Some("Sweep a circular profile along a path to create a pipe".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').sweep()".to_string(),
+                min_version: None,
             },
         ]
     }
@@ -445,6 +450,7 @@ mod tests {
                 title: format!("Recipe {} with extrude and shell and cut", i),
                 description: Some("Uses extrude, shell, cut".to_string()),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+                min_version: None,
             });
         }
         let matches = match_cookbook(&ops, "", &cookbook);

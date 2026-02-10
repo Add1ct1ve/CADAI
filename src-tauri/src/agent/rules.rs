@@ -37,6 +37,7 @@ pub struct CookbookEntry {
     pub title: String,
     pub description: Option<String>,
     pub code: String,
+    pub min_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

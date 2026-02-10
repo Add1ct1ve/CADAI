@@ -642,12 +642,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Detect installed CadQuery version | ⬜ | Run `python -c "import cadquery; print(cadquery.__version__)"` on startup |
-| Version-specific API availability | ⬜ | CQ 2.3 vs 2.4 have different features |
-| Disable unavailable operations in prompt | ⬜ | "Do NOT use .tag() — not available in CQ 2.3" |
-| Version-specific cookbook filtering | ⬜ | Only include recipes that work on installed version |
-| Version check on app startup | ⬜ | Cache version in AppState |
-| Upgrade recommendation | ⬜ | If old version detected, suggest upgrade |
+| Detect installed CadQuery version | ✅ | `detect_cadquery_version()` in installer.rs |
+| Version-specific API availability | ✅ | CQ 2.3 vs 2.4 feature detection with warnings in prompt |
+| Disable unavailable operations in prompt | ✅ | Version notes section warns about `.tag()`, `cq.Sketch()` etc. |
+| Version-specific cookbook filtering | ✅ | Recipes with `min_version` filtered at prompt build time |
+| Version check on app startup | ✅ | Cached in `AppState.cadquery_version`, shown in StatusBar |
+| Upgrade recommendation | ✅ | Prompt includes "Consider upgrading" for older versions |
 
 **Implementation notes:**
 - New function in `commands/python.rs`: `detect_cadquery_version() -> String`
@@ -714,7 +714,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 6.1 Design Patterns | P2 | Medium | Medium | Higher-level templates |
 | 6.2 Operation Interactions | P1 | Low | High | Tribal knowledge codified |
 | 6.3 Session Memory | P2 | Medium | Medium | Learns from failures within session |
-| 6.4 Version-Aware Prompts | P3 | Low | Low | Only matters for older CQ installs |
+| 6.4 Version-Aware Prompts | ✅ | Low | Low | Detects CQ version, filters prompt/cookbook |
 
 ---
 

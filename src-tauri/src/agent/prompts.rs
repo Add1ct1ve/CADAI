@@ -1,4 +1,5 @@
 use crate::agent::rules::AgentRules;
+use crate::python::installer::version_gte;
 
 /// Convert a snake_case key name into a Title Case heading.
 fn format_category_name(name: &str) -> String {
@@ -73,7 +74,7 @@ fn render_yaml_value(prompt: &mut String, value: &serde_yaml::Value, depth: usiz
 }
 
 /// Build a system prompt for the CAD AI agent from the loaded agent rules.
-pub fn build_system_prompt(rules: &AgentRules) -> String {
+pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> String {
     let mut prompt = String::new();
 
     prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code. ");
@@ -87,6 +88,29 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
     prompt.push_str("- Use CadQuery's fluent API (method chaining)\n");
     prompt.push_str("- Do NOT use show_object(), display(), or any GUI calls\n");
     prompt.push_str("- Do NOT read/write files or use any external resources\n\n");
+
+    // -- CadQuery Version Notes --
+    prompt.push_str("## CadQuery Version Notes\n");
+    match cq_version {
+        Some(ver) => {
+            prompt.push_str(&format!("Installed CadQuery version: {}\n", ver));
+            if !version_gte(ver, "2.3.0") {
+                prompt.push_str("- WARNING: `.tag()` is NOT available in this version (added in 2.3). Do NOT use `.tag()` or `.faces(tag=...)`.\n");
+                prompt.push_str("- WARNING: `.transformed()` with `rotate` parameter is NOT available. Use `.rotate()` separately.\n");
+            }
+            if !version_gte(ver, "2.4.0") {
+                prompt.push_str("- WARNING: `cq.Sketch()` API is NOT available in this version (added in 2.4). Use workplane-based 2D operations instead.\n");
+                prompt.push_str("- Consider upgrading CadQuery for access to newer features.\n");
+            }
+            if version_gte(ver, "2.4.0") {
+                prompt.push_str("- All CadQuery features are available including `.tag()`, `cq.Sketch()`, and `.transformed()`.\n");
+            }
+        }
+        None => {
+            prompt.push_str("- CadQuery version unknown. Avoid version-specific features like `cq.Sketch()` or `.tag()` unless requested.\n");
+        }
+    }
+    prompt.push('\n');
 
     if let Some(ref reqs) = rules.code_requirements {
         if let Some(ref mandatory) = reqs.mandatory {
@@ -261,9 +285,20 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
 
     // -- Cookbook (concrete code recipes) --
     if let Some(ref cookbook) = rules.cookbook {
+        // Filter recipes by version compatibility
+        let filtered: Vec<&crate::agent::rules::CookbookEntry> = cookbook
+            .iter()
+            .filter(|entry| {
+                match (&entry.min_version, cq_version) {
+                    (Some(min_ver), Some(installed)) => version_gte(installed, min_ver),
+                    _ => true, // no min_version or unknown installed version → include
+                }
+            })
+            .collect();
+
         prompt.push_str("## CadQuery Cookbook - Reference Patterns\n");
         prompt.push_str("Use these as reference for correct CadQuery API usage.\n\n");
-        for (i, entry) in cookbook.iter().enumerate() {
+        for (i, entry) in filtered.iter().enumerate() {
             prompt.push_str(&format!("### Recipe {}: {}\n", i + 1, entry.title));
             if let Some(ref desc) = entry.description {
                 prompt.push_str(&format!("{}\n", desc));
@@ -478,16 +513,16 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
 }
 
 /// Build a system prompt for a specific preset (e.g. "3d-printing", "cnc", or None for default).
-pub fn build_system_prompt_for_preset(preset_name: Option<&str>) -> String {
+pub fn build_system_prompt_for_preset(preset_name: Option<&str>, cq_version: Option<&str>) -> String {
     let rules = AgentRules::from_preset(preset_name)
         .unwrap_or_else(|_| AgentRules::from_preset(None).unwrap());
-    build_system_prompt(&rules)
+    build_system_prompt(&rules, cq_version)
 }
 
 /// Build a system prompt with default rules.
 #[allow(dead_code)]
 pub fn build_default_system_prompt() -> String {
-    build_system_prompt_for_preset(None)
+    build_system_prompt_for_preset(None, None)
 }
 
 #[cfg(test)]
@@ -600,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_design_thinking_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Design Thinking"),
             "prompt should have design thinking section"
@@ -612,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_capabilities_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Capabilities & Limitations"),
             "prompt should have capabilities section"
@@ -621,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_advanced_techniques_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Advanced Techniques"),
             "prompt should have advanced techniques section"
@@ -630,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_validation_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Validation Checks"),
             "prompt should have validation section"
@@ -641,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_manufacturing_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Manufacturing Awareness"),
             "prompt should have manufacturing section"
@@ -650,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_prompt_capabilities_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Check that the capabilities content is actually rendered
         assert!(prompt.contains("organic"));
         assert!(prompt.contains("NURBS"));
@@ -659,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_prompt_advanced_techniques_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("revolve()"));
         assert!(prompt.contains("sweep()"));
         assert!(prompt.contains("loft()"));
@@ -668,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_prompt_validation_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Validation checks should be rendered with bold check names
         assert!(prompt.contains("**Dimensions Realistic**"));
         assert!(prompt.contains("**Mesh Watertight**"));
@@ -676,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_prompt_manufacturing_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Manufacturing data from default.yaml
         assert!(prompt.contains("3d Printing") || prompt.contains("3D") || prompt.contains("3d_printing"));
     }
@@ -685,26 +720,26 @@ mod tests {
 
     #[test]
     fn test_prompt_still_has_code_requirements() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Code Requirements"));
         assert!(prompt.contains("import cadquery as cq"));
     }
 
     #[test]
     fn test_prompt_still_has_coordinate_system() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Coordinate System"));
     }
 
     #[test]
     fn test_prompt_still_has_spatial_rules() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Spatial Rules"));
     }
 
     #[test]
     fn test_prompt_still_has_cookbook() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## CadQuery Cookbook"));
         assert!(prompt.contains("### Recipe 1:"));
         // New recipes should also be present
@@ -713,19 +748,19 @@ mod tests {
 
     #[test]
     fn test_prompt_still_has_error_handling() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Error Handling"));
     }
 
     #[test]
     fn test_prompt_still_has_response_format() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Response Format"));
     }
 
     #[test]
     fn test_prompt_still_has_code_style() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Code Style"));
     }
 
@@ -734,7 +769,7 @@ mod tests {
     #[test]
     fn test_all_presets_produce_prompt_with_new_sections() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Design Thinking"),
                 "preset {:?} missing design thinking",
@@ -802,7 +837,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_design_patterns_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Design Patterns"),
             "prompt should have design patterns section"
@@ -812,7 +847,7 @@ mod tests {
 
     #[test]
     fn test_prompt_design_patterns_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("Enclosure"), "missing Enclosure pattern");
         assert!(prompt.contains("Shaft"), "missing Shaft pattern");
         assert!(prompt.contains("Rotational"), "missing Rotational pattern");
@@ -830,7 +865,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_design_patterns_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Design Patterns"),
                 "preset {:?} missing design patterns section",
@@ -843,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_anti_patterns_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Common Anti-Patterns"),
             "prompt should have anti-patterns section"
@@ -853,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_prompt_anti_patterns_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("### Anti-Pattern 1:"));
         assert!(prompt.contains("Fillet before boolean"));
         assert!(prompt.contains("translate() wrong signature"));
@@ -867,7 +902,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_anti_patterns_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Common Anti-Patterns"),
                 "preset {:?} missing anti-patterns section",
@@ -880,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_api_reference_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## CadQuery API Quick-Reference"),
             "prompt should have API reference section"
@@ -890,7 +925,7 @@ mod tests {
 
     #[test]
     fn test_prompt_api_reference_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Check operation names are rendered
         assert!(prompt.contains("### `loft()`"));
         assert!(prompt.contains("### `sweep()`"));
@@ -910,7 +945,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_api_reference_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## CadQuery API Quick-Reference"),
                 "preset {:?} missing API reference section",
@@ -923,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_dimension_tables_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Real-World Dimension Tables"),
             "prompt should have dimension tables section"
@@ -933,7 +968,7 @@ mod tests {
 
     #[test]
     fn test_prompt_dimension_tables_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check representative data from each category
         assert!(prompt.contains("M6: shaft=6.0"), "missing M6 fastener data");
         assert!(prompt.contains("Raspberry Pi"), "missing Raspberry Pi data");
@@ -947,7 +982,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_dimension_tables_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Real-World Dimension Tables"),
                 "preset {:?} missing dimension tables section",
@@ -960,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_few_shot_examples_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Few-Shot Examples: Design-to-Code Workflow"),
             "prompt should have few-shot examples section"
@@ -970,7 +1005,7 @@ mod tests {
 
     #[test]
     fn test_prompt_few_shot_examples_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check all 5 examples are present
         assert!(prompt.contains("coffee mug"), "missing coffee mug example");
         assert!(prompt.contains("motor mount"), "missing motor mount example");
@@ -988,7 +1023,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_few_shot_examples_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Few-Shot Examples: Design-to-Code Workflow"),
                 "preset {:?} missing few-shot examples section",
@@ -1001,7 +1036,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_operation_interactions_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Operation Interactions — Cross-Operation Reasoning Rules"),
             "prompt should have operation interactions section"
@@ -1011,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_prompt_operation_interactions_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check category names (formatted from snake_case)
         assert!(prompt.contains("Fillet After Boolean"), "missing fillet_after_boolean category");
         assert!(prompt.contains("Shell After Fillet"), "missing shell_after_fillet category");
@@ -1026,7 +1061,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_operation_interactions_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Operation Interactions"),
                 "preset {:?} missing operation interactions section",
@@ -1039,7 +1074,7 @@ mod tests {
 
     #[test]
     fn test_prompt_section_order() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         let dt_pos = prompt.find("## Design Thinking").unwrap();
         let caps_pos = prompt.find("## Capabilities & Limitations").unwrap();
         let tech_pos = prompt.find("## Advanced Techniques").unwrap();
@@ -1097,7 +1132,7 @@ mod tests {
     #[test]
     fn test_empty_rules_produce_minimal_prompt() {
         let rules = AgentRules::default_empty();
-        let prompt = build_system_prompt(&rules);
+        let prompt = build_system_prompt(&rules, None);
         // Should have the hard-coded intro and requirements
         assert!(prompt.contains("You are a CAD AI assistant"));
         assert!(prompt.contains("## Code Requirements"));
@@ -1121,7 +1156,7 @@ mod tests {
 
     #[test]
     fn test_spatial_rules_use_formatted_names() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // spatial_rules keys like "boolean_cut" should appear as "Boolean Cut"
         assert!(
             prompt.contains("Boolean Cut") || prompt.contains("boolean_cut"),
@@ -1133,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_dimension_guidance_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Dimension Estimation Guidance"),
             "prompt should have dimension estimation guidance section"
@@ -1144,7 +1179,7 @@ mod tests {
     #[test]
     fn test_all_presets_have_dimension_guidance_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Dimension Estimation Guidance"),
                 "preset {:?} missing dimension estimation guidance section",
@@ -1155,7 +1190,7 @@ mod tests {
 
     #[test]
     fn test_prompt_dimension_guidance_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check key content from each category
         assert!(prompt.contains("real-world objects"), "missing when_to_estimate content");
         assert!(prompt.contains("Tiny: < 20mm"), "missing size_classes content");
@@ -1167,7 +1202,7 @@ mod tests {
     #[test]
     fn test_prompt_no_never_assume_dimensions() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 !prompt.contains("Never assume dimensions"),
                 "preset {:?} still has old 'Never assume dimensions' rule",
@@ -1180,7 +1215,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_failure_prevention_section() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         assert!(
             prompt.contains("## Failure Prevention — Proactive Rules"),
             "prompt should have failure prevention section"
@@ -1190,7 +1225,7 @@ mod tests {
 
     #[test]
     fn test_prompt_failure_prevention_content() {
-        let prompt = build_system_prompt_for_preset(None);
+        let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check each category
         assert!(prompt.contains("fillet() fails"), "missing self_diagnosis content");
         assert!(prompt.contains("about to use shell()"), "missing preemptive_warnings content");
@@ -1202,12 +1237,85 @@ mod tests {
     #[test]
     fn test_all_presets_have_failure_prevention_in_prompt() {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
-            let prompt = build_system_prompt_for_preset(*preset);
+            let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
                 prompt.contains("## Failure Prevention"),
                 "preset {:?} missing failure prevention section",
                 preset
             );
         }
+    }
+
+    // ── CadQuery Version Notes in prompt ─────────────────────────────────
+
+    #[test]
+    fn test_prompt_version_none_shows_unknown() {
+        let prompt = build_system_prompt_for_preset(None, None);
+        assert!(prompt.contains("## CadQuery Version Notes"));
+        assert!(prompt.contains("version unknown"));
+    }
+
+    #[test]
+    fn test_prompt_version_2_2_warns_tag_and_sketch() {
+        let prompt = build_system_prompt_for_preset(None, Some("2.2.0"));
+        assert!(prompt.contains("Installed CadQuery version: 2.2.0"));
+        assert!(prompt.contains("`.tag()` is NOT available"));
+        assert!(prompt.contains("`cq.Sketch()` API is NOT available"));
+        assert!(prompt.contains("Consider upgrading"));
+    }
+
+    #[test]
+    fn test_prompt_version_2_3_warns_sketch_only() {
+        let prompt = build_system_prompt_for_preset(None, Some("2.3.0"));
+        assert!(prompt.contains("Installed CadQuery version: 2.3.0"));
+        assert!(!prompt.contains("`.tag()` is NOT available"));
+        assert!(prompt.contains("`cq.Sketch()` API is NOT available"));
+        assert!(prompt.contains("Consider upgrading"));
+    }
+
+    #[test]
+    fn test_prompt_version_2_4_all_features() {
+        let prompt = build_system_prompt_for_preset(None, Some("2.4.0"));
+        assert!(prompt.contains("Installed CadQuery version: 2.4.0"));
+        assert!(prompt.contains("All CadQuery features are available"));
+        assert!(!prompt.contains("is NOT available"));
+        assert!(!prompt.contains("Consider upgrading"));
+    }
+
+    #[test]
+    fn test_prompt_cookbook_filtering_by_version() {
+        use crate::agent::rules::AgentRules;
+
+        // Create rules with a cookbook entry that requires 2.4
+        let mut rules = AgentRules::default_empty();
+        rules.cookbook = Some(vec![
+            crate::agent::rules::CookbookEntry {
+                title: "Basic Box".to_string(),
+                description: None,
+                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+                min_version: None,
+            },
+            crate::agent::rules::CookbookEntry {
+                title: "Sketch Circle".to_string(),
+                description: None,
+                code: "import cadquery as cq\nresult = cq.Sketch().circle(5)".to_string(),
+                min_version: Some("2.4.0".to_string()),
+            },
+        ]);
+
+        // With version 2.3, the Sketch recipe should be filtered out
+        let prompt_23 = build_system_prompt(&rules, Some("2.3.0"));
+        assert!(prompt_23.contains("Basic Box"));
+        assert!(!prompt_23.contains("Sketch Circle"));
+
+        // With version 2.4, both should be present
+        let prompt_24 = build_system_prompt(&rules, Some("2.4.0"));
+        assert!(prompt_24.contains("Basic Box"));
+        assert!(prompt_24.contains("Sketch Circle"));
+
+        // With None version, both should be present (permissive)
+        let prompt_none = build_system_prompt(&rules, None);
+        assert!(prompt_none.contains("Basic Box"));
+        assert!(prompt_none.contains("Sketch Circle"));
     }
 }
