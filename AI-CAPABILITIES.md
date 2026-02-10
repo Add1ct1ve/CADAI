@@ -596,14 +596,14 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Fillet-after-boolean interaction rules | ⬜ | "New edges from boolean are often short → use smaller fillet" |
-| Shell-after-fillet interaction rules | ⬜ | "Shell on filleted body can fail → shell first, fillet after" |
-| Loft-then-shell interaction rules | ⬜ | "Lofted bodies often have thin regions → check min thickness" |
-| Boolean-chain-limit rules | ⬜ | "After 5+ booleans, tolerances accumulate → merge intermediate results" |
-| Extrude-on-face interaction rules | ⬜ | "Face selectors may become ambiguous after booleans → use tags" |
-| Sweep-with-boolean interaction rules | ⬜ | "Swept bodies have complex topology → avoid shell/fillet on them" |
-| Revolve-then-cut interaction rules | ⬜ | "Cuts on revolved bodies need careful face selection" |
-| Operation ordering meta-rules | ⬜ | "General order: base shape → features → booleans → fillets → shell" |
+| Fillet-after-boolean interaction rules | ✅ | "New edges from boolean are often short → use smaller fillet" |
+| Shell-after-fillet interaction rules | ✅ | "Shell on filleted body can fail → shell first, fillet after" |
+| Loft-then-shell interaction rules | ✅ | "Lofted bodies often have thin regions → check min thickness" |
+| Boolean-chain-limit rules | ✅ | "After 5+ booleans, tolerances accumulate → merge intermediate results" |
+| Extrude-on-face interaction rules | ✅ | "Face selectors may become ambiguous after booleans → use tags" |
+| Sweep-with-boolean interaction rules | ✅ | "Swept bodies have complex topology → avoid shell/fillet on them" |
+| Revolve-then-cut interaction rules | ✅ | "Cuts on revolved bodies need careful face selection" |
+| Operation ordering meta-rules | ✅ | "General order: base shape → features → booleans → fillets → shell" |
 
 **Implementation notes:**
 - New YAML section: `operation_interactions` in `default.yaml`

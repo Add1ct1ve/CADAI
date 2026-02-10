@@ -2425,3 +2425,53 @@ design_patterns:
       - "This is a simplified involute — adequate for 3D printing, not for precision machining"
       - "Use polyline tooth profile + union loop — polarArray on complex profiles is unreliable"
       - "Bore hole should be cut LAST after all tooth unions complete"
+
+# =============================================================================
+# OPERATION INTERACTIONS — CROSS-OPERATION REASONING RULES
+# =============================================================================
+# These rules codify how CadQuery operations interact with each other in
+# sequence. Unlike anti-patterns (single-operation failures) or failure
+# prevention (proactive conditional rules), these focus on operation A followed
+# by operation B producing unexpected results.
+
+operation_interactions:
+  fillet_after_boolean:
+    - "New edges created by boolean operations (cut/union) are often very short — use a smaller fillet radius (≤1mm) on boolean-created edges"
+    - "Fillet ALL edges at once as the very last step, not after each individual boolean operation"
+    - "If fillet fails on boolean edges, try chamfer as an alternative — chamfer is more tolerant of short edges"
+
+  shell_after_fillet:
+    - "Shell on a filleted body frequently fails — always perform shell() BEFORE fillet()"
+    - "Fillet creates curved blend surfaces that the shell algorithm struggles to offset correctly"
+    - "If you must hollow a filleted body, use manual boolean subtraction (cut a slightly smaller solid from inside) instead of shell()"
+
+  loft_then_shell:
+    - "Lofted bodies often have thin regions where cross-sections taper — verify that the minimum wall cross-section is greater than 2× the shell thickness"
+    - "Shell on lofted geometry fails if the wall thickness varies below the requested shell amount at any point"
+    - "Alternative: loft two separate profiles (an outer and an inner shape) and boolean-subtract the inner from the outer to create a hollow lofted body"
+
+  boolean_chain_limit:
+    - "After 5+ consecutive boolean operations, geometric tolerances accumulate and later operations may fail — union intermediate results in groups of 2-3 first"
+    - "Build complex geometry in groups: create 2-3 features, union them into one solid, then continue adding the next group"
+    - "If a late boolean fails unexpectedly, rebuild the model with fewer intermediate boolean steps by grouping features"
+
+  extrude_on_face:
+    - "Face selectors like '>Z' become ambiguous after boolean operations create new faces — use .tag() on important faces before performing booleans"
+    - "After a boolean cut, '>Z' may select a different face than expected because the cut created a new topmost face"
+    - "Tag key working faces during construction with .tag('top_face'), then re-select them reliably with .faces(tag='top_face')"
+
+  sweep_with_boolean:
+    - "Swept bodies have complex underlying topology — avoid applying shell() or fillet() directly to sweep results"
+    - "Boolean cuts on swept geometry can fail due to the complex curved surface representation"
+    - "If you need to cut a swept body, keep the cuts simple (through-holes or straight cutBlind) — avoid pockets or complex cut profiles on swept surfaces"
+
+  revolve_then_cut:
+    - "Revolved bodies create multiple symmetric faces — standard selectors like '>X' or '>Y' may pick the wrong symmetric face"
+    - "Use workplane offsets or .tag() instead of face selectors when placing features on revolved geometry"
+    - "Cuts perpendicular to the revolution axis are more reliable than cuts tangential to the curved surface"
+
+  operation_ordering:
+    - "General safe operation order: base shape → additive features (boss, pad) → subtractive features (holes, pockets) → fillets/chamfers"
+    - "Never fillet before boolean operations — always apply fillets as the LAST modeling step"
+    - "Never shell after fillet — perform shell early in the sequence or use manual hollowing via boolean subtraction"
+    - "If sweep or loft is needed, perform it early in the build sequence before any boolean operations"
