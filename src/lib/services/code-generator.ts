@@ -3,6 +3,59 @@ import { getDatumStore } from '$lib/stores/datum.svelte';
 import { getComponentStore } from '$lib/stores/component.svelte';
 import { getMateStore } from '$lib/stores/mate.svelte';
 import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
+import type { SymbolMap } from '$lib/types/symbol-map';
+
+const PYTHON_RESERVED_WORDS = new Set([
+  'false', 'none', 'true', 'and', 'as', 'assert', 'async', 'await', 'break',
+  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
+  'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal',
+  'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+  'match', 'case',
+]);
+
+function sanitizeIdentifier(raw: string, fallback: string): string {
+  const trimmed = raw.trim();
+  const base = (trimmed || fallback).replace(/[^a-zA-Z0-9_]/g, '_');
+  const normalized = base.replace(/_+/g, '_').replace(/^_+/, '');
+  const withPrefix = normalized.length > 0 ? normalized : fallback;
+  const startsValid = /^[a-zA-Z_]/.test(withPrefix);
+  const candidate = startsValid ? withPrefix : `_${withPrefix}`;
+  return PYTHON_RESERVED_WORDS.has(candidate.toLowerCase())
+    ? `${candidate}_var`
+    : candidate;
+}
+
+function symbolForId(prefix: string, id: string): string {
+  return sanitizeIdentifier(`${prefix}_${id}`, `${prefix}_feature`);
+}
+
+function buildSymbolMap(
+  objects: SceneObject[],
+  sketches: Sketch[],
+  components: Component[],
+): SymbolMap {
+  const map: SymbolMap = {};
+  for (const obj of objects) map[obj.id] = symbolForId('obj', obj.id);
+  for (const sketch of sketches) map[sketch.id] = symbolForId('sketch', sketch.id);
+  for (const component of components) map[component.id] = symbolForId('comp', component.id);
+  return map;
+}
+
+function symbolForFeature(symbolMap: SymbolMap, id: string, fallbackPrefix: string): string {
+  return symbolMap[id] ?? symbolForId(fallbackPrefix, id);
+}
+
+function sketchCutterSymbol(symbolMap: SymbolMap, sketchId: string): string {
+  return `${symbolForFeature(symbolMap, sketchId, 'sketch')}_cutter`;
+}
+
+function sketchPathSymbol(symbolMap: SymbolMap, sketchId: string): string {
+  return `${symbolForFeature(symbolMap, sketchId, 'sketch')}_path`;
+}
+
+function pyString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
 
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
@@ -181,20 +234,21 @@ function workplaneString(plane: SketchPlane, origin: [number, number, number]): 
   return `cq.Workplane(cq.Plane(origin=(${fmt(p1[0])}, ${fmt(p1[1])}, ${fmt(p1[2])}), normal=(${fmt(normal[0])}, ${fmt(normal[1])}, ${fmt(normal[2])})))`;
 }
 
-function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
+function generateSketchBase(sketch: Sketch, symbolMap: SymbolMap, allSketches?: Sketch[]): string[] {
   const lines: string[] = [];
   const constraintCount = (sketch.constraints ?? []).length;
   const constraintInfo = constraintCount > 0 ? ` [${constraintCount} constraint${constraintCount !== 1 ? 's' : ''}]` : '';
   lines.push(`# --- ${sketch.name} (${sketch.plane} plane) ---${constraintInfo}`);
 
   const op = sketch.operation;
-  const varName = op?.mode === 'cut' ? `${sketch.name}_cutter` : sketch.name;
+  const baseVarName = symbolForFeature(symbolMap, sketch.id, 'sketch');
+  const varName = op?.mode === 'cut' ? sketchCutterSymbol(symbolMap, sketch.id) : baseVarName;
 
   // For sweep, generate path sketch inline first
   if (op?.type === 'sweep' && allSketches) {
     const pathSketch = allSketches.find(s => s.id === op.pathSketchId);
     if (pathSketch) {
-      lines.push(...generatePathWire(`${sketch.name}_path`, pathSketch));
+      lines.push(...generatePathWire(sketchPathSymbol(symbolMap, sketch.id), pathSketch));
     }
   }
 
@@ -212,7 +266,7 @@ function generateSketchBase(sketch: Sketch, allSketches?: Sketch[]): string[] {
   } else if (op?.type === 'revolve') {
     lines.push(`    .revolve(${fmt(op.angle)}, ${revolveAxis(sketch.plane, op)})`);
   } else if (op?.type === 'sweep') {
-    lines.push(`    .sweep(${sketch.name}_path)`);
+    lines.push(`    .sweep(${sketchPathSymbol(symbolMap, sketch.id)})`);
   }
 
   lines.push(`)`);
@@ -333,6 +387,8 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   }
 
   const lines: string[] = ['import cadquery as cq', ''];
+  const componentStore = getComponentStore();
+  const symbolMap = buildSymbolMap(objects, nonEmptySketches, componentStore.components);
 
   // Separate sketches into add-mode and cut-mode
   const addSketches = nonEmptySketches.filter((s) => !s.operation || s.operation.mode === 'add');
@@ -342,72 +398,85 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
 
   // Generate add-mode sketches (including non-operated for code display)
   for (const sketch of addSketches) {
-    lines.push(...generateSketchBase(sketch, nonEmptySketches));
+    lines.push(...generateSketchBase(sketch, symbolMap, nonEmptySketches));
   }
 
   // Generate objects (primitives)
   const visibleObjects = objects.filter((o) => o.visible);
 
   for (const obj of visibleObjects) {
+    const objVar = symbolForFeature(symbolMap, obj.id, 'obj');
     lines.push(`# --- ${obj.name} ---`);
-    lines.push(generatePrimitive(obj.name, obj.params));
+    lines.push(generatePrimitive(objVar, obj.params));
 
-    const transformLines = generateTransform(obj.name, obj.transform);
+    const transformLines = generateTransform(objVar, obj.transform);
     lines.push(...transformLines);
 
     // Fillet/chamfer on primitives
-    lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
-    lines.push(...generateShell(obj.name, obj.shell));
-    lines.push(...generateHoles(obj.name, obj.holes));
+    lines.push(...generateFilletChamfer(objVar, obj.fillet, obj.chamfer));
+    lines.push(...generateShell(objVar, obj.shell));
+    lines.push(...generateHoles(objVar, obj.holes));
 
     lines.push('');
   }
 
   // Generate cut-mode sketches
   for (const sketch of cutSketches) {
-    lines.push(...generateSketchBase(sketch, nonEmptySketches));
+    lines.push(...generateSketchBase(sketch, symbolMap, nonEmptySketches));
 
     // Apply cut to target
-    const targetId = sketch.operation?.mode === 'cut' ? (sketch.operation as any).cutTargetId : undefined;
+    const targetId = sketch.operation?.mode === 'cut'
+      ? (sketch.operation as { cutTargetId?: string }).cutTargetId
+      : undefined;
     if (targetId) {
-      // Find target name (could be another sketch or a primitive)
+      // Find target symbol (could be another sketch or a primitive)
       const targetSketch = nonEmptySketches.find((s) => s.id === targetId);
       const targetObj = visibleObjects.find((o) => o.id === targetId);
-      const targetName = targetSketch?.name ?? targetObj?.name;
-      if (targetName) {
-        lines.push(`${targetName} = ${targetName}.cut(${sketch.name}_cutter)`);
+      const targetVar = targetSketch || targetObj
+        ? symbolForFeature(symbolMap, targetId, targetSketch ? 'sketch' : 'obj')
+        : undefined;
+      if (targetVar) {
+        lines.push(`${targetVar} = ${targetVar}.cut(${sketchCutterSymbol(symbolMap, sketch.id)})`);
         lines.push('');
       }
     }
   }
 
-  // Collect all named results for assembly
-  // Only include operated add-sketches and visible primitives
-  const allNames: string[] = [
-    ...operatedAddSketches.map((s) => s.name),
-    ...visibleObjects.map((o) => o.name),
+  // Collect all generated results for assembly
+  const assemblyEntries: Array<{
+    varName: string;
+    displayName: string;
+    isCone: boolean;
+  }> = [
+    ...operatedAddSketches.map((s) => ({
+      varName: symbolForFeature(symbolMap, s.id, 'sketch'),
+      displayName: s.name,
+      isCone: false,
+    })),
+    ...visibleObjects.map((o) => ({
+      varName: symbolForFeature(symbolMap, o.id, 'obj'),
+      displayName: o.name,
+      isCone: o.params.type === 'cone',
+    })),
   ];
 
-  if (allNames.length === 0) {
+  if (assemblyEntries.length === 0) {
     lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
-  } else if (allNames.length === 1) {
-    const name = allNames[0];
-    // Check if it's a cone (Solid type) that needs wrapping
-    const obj = visibleObjects.find((o) => o.name === name);
-    if (obj && obj.params.type === 'cone') {
-      lines.push(`result = cq.Workplane("XY").add(${name})`);
+  } else if (assemblyEntries.length === 1) {
+    const entry = assemblyEntries[0];
+    if (entry.isCone) {
+      lines.push(`result = cq.Workplane("XY").add(${entry.varName})`);
     } else {
-      lines.push(`result = ${name}`);
+      lines.push(`result = ${entry.varName}`);
     }
   } else {
     lines.push('# Assemble all objects');
     lines.push('assy = cq.Assembly()');
-    for (const name of allNames) {
-      const obj = visibleObjects.find((o) => o.name === name);
-      if (obj && obj.params.type === 'cone') {
-        lines.push(`assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
+    for (const entry of assemblyEntries) {
+      if (entry.isCone) {
+        lines.push(`assy.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
       } else {
-        lines.push(`assy.add(${name}, name="${name}")`);
+        lines.push(`assy.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
       }
     }
     lines.push('result = assy.toCompound()');
@@ -423,17 +492,19 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const objMap = new Map(objects.map((o) => [o.id, o]));
   const allSketches = sketches.filter((s) => s.entities.length > 0);
   const sketchMap = new Map(allSketches.map((s) => [s.id, s]));
+  const compStore = getComponentStore();
+  const symbolMap = buildSymbolMap(objects, allSketches, compStore.components);
 
   // Categorize features in order
   const addFeatures: Array<{ type: 'object'; obj: SceneObject } | { type: 'sketch'; sketch: Sketch }> = [];
   const cutSketches: Sketch[] = [];
-  const booleanOps: Array<{ toolName: string; opType: string; targetName: string }> = [];
-  const splitOps: Array<{ name: string; split: SplitOp; obj: SceneObject }> = [];
-  const patternOps: Array<{ name: string; pattern: PatternOp }> = [];
-  const booleanToolIds = new Set<string>();
+  const booleanOps: Array<{ toolId: string; opType: string; targetId: string }> = [];
+  const splitOps: Array<{ featureId: string; split: SplitOp }> = [];
+  const patternOps: Array<{ featureId: string; pattern: PatternOp }> = [];
+  const generatedFeatureIds = new Set<string>();
+  const assemblyEntries: Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }> = [];
 
   // Build feature→component map for visibility checks
-  const compStore = getComponentStore();
   const featureCompMap = compStore.getFeatureComponentMap();
 
   for (const id of activeFeatureIds) {
@@ -446,9 +517,6 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
 
     const obj = objMap.get(id);
     if (obj && obj.visible) {
-      if (obj.booleanOp) {
-        booleanToolIds.add(obj.id);
-      }
       addFeatures.push({ type: 'object', obj });
       continue;
     }
@@ -469,49 +537,59 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const lines: string[] = ['import cadquery as cq', ''];
 
   // ── Pass 1: Generate all geometry ──
-  const assemblyNames: string[] = [];
-  const allVisibleObjects: SceneObject[] = [];
-
   for (const feature of addFeatures) {
     if (feature.type === 'sketch') {
-      lines.push(...generateSketchBase(feature.sketch, allSketches));
+      lines.push(...generateSketchBase(feature.sketch, symbolMap, allSketches));
+      generatedFeatureIds.add(feature.sketch.id);
       if (feature.sketch.operation) {
-        assemblyNames.push(feature.sketch.name);
+        assemblyEntries.push({
+          featureId: feature.sketch.id,
+          varName: symbolForFeature(symbolMap, feature.sketch.id, 'sketch'),
+          displayName: feature.sketch.name,
+          isCone: false,
+        });
       }
     } else {
       const obj = feature.obj;
-      allVisibleObjects.push(obj);
+      const objVar = symbolForFeature(symbolMap, obj.id, 'obj');
+      generatedFeatureIds.add(obj.id);
       lines.push(`# --- ${obj.name} ---`);
-      lines.push(generatePrimitive(obj.name, obj.params));
-      lines.push(...generateTransform(obj.name, obj.transform));
-      lines.push(...generateFilletChamfer(obj.name, obj.fillet, obj.chamfer));
-      lines.push(...generateShell(obj.name, obj.shell));
-      lines.push(...generateHoles(obj.name, obj.holes));
+      lines.push(generatePrimitive(objVar, obj.params));
+      lines.push(...generateTransform(objVar, obj.transform));
+      lines.push(...generateFilletChamfer(objVar, obj.fillet, obj.chamfer));
+      lines.push(...generateShell(objVar, obj.shell));
+      lines.push(...generateHoles(objVar, obj.holes));
       lines.push('');
 
       // Collect boolean ops for pass 2
       if (obj.booleanOp) {
-        const targetObj = objMap.get(obj.booleanOp.targetId);
-        const targetSketch = sketchMap.get(obj.booleanOp.targetId);
-        const targetName = targetObj?.name ?? targetSketch?.name;
-        if (targetName) {
-          booleanOps.push({ toolName: obj.name, opType: obj.booleanOp.type, targetName });
+        if (objMap.has(obj.booleanOp.targetId) || sketchMap.has(obj.booleanOp.targetId)) {
+          booleanOps.push({
+            toolId: obj.id,
+            opType: obj.booleanOp.type,
+            targetId: obj.booleanOp.targetId,
+          });
         }
       }
 
       // Collect split ops for pass 3
       if (obj.splitOp) {
-        splitOps.push({ name: obj.name, split: obj.splitOp, obj });
+        splitOps.push({ featureId: obj.id, split: obj.splitOp });
       }
 
       // Collect pattern ops for pass 3.5
       if (obj.patternOp) {
-        patternOps.push({ name: obj.name, pattern: obj.patternOp });
+        patternOps.push({ featureId: obj.id, pattern: obj.patternOp });
       }
 
       // Only add to assembly if NOT a boolean tool
       if (!obj.booleanOp) {
-        assemblyNames.push(obj.name);
+        assemblyEntries.push({
+          featureId: obj.id,
+          varName: objVar,
+          displayName: obj.name,
+          isCone: obj.params.type === 'cone',
+        });
       }
     }
   }
@@ -520,84 +598,102 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   if (booleanOps.length > 0) {
     lines.push('# --- Boolean operations ---');
     for (const op of booleanOps) {
+      if (!generatedFeatureIds.has(op.toolId) || !generatedFeatureIds.has(op.targetId)) continue;
+      const toolVar = symbolForFeature(symbolMap, op.toolId, 'obj');
+      const targetVar = symbolForFeature(
+        symbolMap,
+        op.targetId,
+        sketchMap.has(op.targetId) ? 'sketch' : 'obj',
+      );
       const method = op.opType === 'union' ? 'union' : op.opType === 'subtract' ? 'cut' : 'intersect';
-      lines.push(`${op.targetName} = ${op.targetName}.${method}(${op.toolName})`);
+      lines.push(`${targetVar} = ${targetVar}.${method}(${toolVar})`);
     }
     lines.push('');
   }
 
   // ── Pass 3: Emit split operations ──
-  for (const { name, split, obj } of splitOps) {
-    lines.push(...generateSplitOp(name, split));
+  for (const { featureId, split } of splitOps) {
+    if (!generatedFeatureIds.has(featureId)) continue;
+    const featureVar = symbolForFeature(symbolMap, featureId, 'obj');
+    lines.push(...generateSplitOp(featureVar, split));
     // Replace assembly name if split produces two halves
     if (split.keepSide === 'both') {
-      const idx = assemblyNames.indexOf(name);
+      const idx = assemblyEntries.findIndex((entry) => entry.featureId === featureId);
       if (idx !== -1) {
-        assemblyNames.splice(idx, 1, `${name}_pos`, `${name}_neg`);
+        const original = assemblyEntries[idx];
+        assemblyEntries.splice(
+          idx,
+          1,
+          { ...original, varName: `${featureVar}_pos` },
+          { ...original, varName: `${featureVar}_neg` },
+        );
       }
     }
   }
 
   // ── Pass 3.5: Pattern operations ──
-  for (const { name, pattern } of patternOps) {
-    lines.push(...generatePatternOp(name, pattern));
+  for (const { featureId, pattern } of patternOps) {
+    if (!generatedFeatureIds.has(featureId)) continue;
+    lines.push(...generatePatternOp(symbolForFeature(symbolMap, featureId, 'obj'), pattern));
   }
 
   // ── Pass 4: Cut-mode sketches ──
   for (const sketch of cutSketches) {
-    lines.push(...generateSketchBase(sketch, allSketches));
+    lines.push(...generateSketchBase(sketch, symbolMap, allSketches));
+    generatedFeatureIds.add(sketch.id);
 
-    const cutTargetId = sketch.operation?.mode === 'cut' ? (sketch.operation as any).cutTargetId : undefined;
+    const cutTargetId = sketch.operation?.mode === 'cut'
+      ? (sketch.operation as { cutTargetId?: string }).cutTargetId
+      : undefined;
     if (cutTargetId) {
-      const targetSketch = sketchMap.get(cutTargetId);
-      const targetObj = objMap.get(cutTargetId);
-      const targetName = targetSketch?.name ?? targetObj?.name;
-      if (targetName) {
-        lines.push(`${targetName} = ${targetName}.cut(${sketch.name}_cutter)`);
+      if (!generatedFeatureIds.has(cutTargetId)) continue;
+      const targetVar = symbolForFeature(
+        symbolMap,
+        cutTargetId,
+        sketchMap.has(cutTargetId) ? 'sketch' : 'obj',
+      );
+      if (targetVar) {
+        lines.push(`${targetVar} = ${targetVar}.cut(${sketchCutterSymbol(symbolMap, sketch.id)})`);
         lines.push('');
       }
     }
   }
 
   // ── Assembly (with component grouping) ──
-  const componentStore = getComponentStore();
-  const allComponents = componentStore.components;
+  const allComponents = compStore.components;
   const activeIdSet = new Set(activeFeatureIds);
 
-  // Build map: componentId → feature names in that component
-  const compFeatureNames = new Map<string, string[]>();
-  const featuresInComponents = new Set<string>();
+  // Build map: componentId → assembly entries in that component
+  const compFeatureEntries = new Map<string, Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }>>();
+  const entriesInComponents = new Set<{ featureId?: string; varName: string; displayName: string; isCone: boolean }>();
   for (const comp of allComponents) {
     if (!comp.visible) continue; // Skip hidden components entirely
-    const names: string[] = [];
+    const entries: Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }> = [];
     for (const fid of comp.featureIds) {
       if (!activeIdSet.has(fid)) continue;
-      const fObj = objMap.get(fid);
-      const fSketch = sketchMap.get(fid);
-      const name = fObj?.name ?? fSketch?.name;
-      if (name && assemblyNames.includes(name)) {
-        names.push(name);
-        featuresInComponents.add(name);
+      const matching = assemblyEntries.filter((entry) => entry.featureId === fid);
+      for (const entry of matching) {
+        entries.push(entry);
+        entriesInComponents.add(entry);
       }
     }
-    if (names.length > 0) {
-      compFeatureNames.set(comp.id, names);
+    if (entries.length > 0) {
+      compFeatureEntries.set(comp.id, entries);
     }
   }
 
-  // Root features = assembly names not in any component
-  const rootNames = assemblyNames.filter((n) => !featuresInComponents.has(n));
+  // Root features = assembly entries not in any component
+  const rootEntries = assemblyEntries.filter((entry) => !entriesInComponents.has(entry));
 
-  if (assemblyNames.length === 0) {
+  if (assemblyEntries.length === 0) {
     lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
-  } else if (compFeatureNames.size === 0 && assemblyNames.length === 1) {
+  } else if (compFeatureEntries.size === 0 && assemblyEntries.length === 1) {
     // Simple case: single result, no components
-    const name = assemblyNames[0];
-    const obj = allVisibleObjects.find((o) => o.name === name);
-    if (obj && obj.params.type === 'cone') {
-      lines.push(`result = cq.Workplane("XY").add(${name})`);
+    const entry = assemblyEntries[0];
+    if (entry.isCone) {
+      lines.push(`result = cq.Workplane("XY").add(${entry.varName})`);
     } else {
-      lines.push(`result = ${name}`);
+      lines.push(`result = ${entry.varName}`);
     }
   } else {
     lines.push('# Assemble all objects');
@@ -609,38 +705,36 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
     // Add component sub-assemblies
     for (const comp of allComponents) {
       if (!comp.visible) continue;
-      const names = compFeatureNames.get(comp.id);
-      if (!names || names.length === 0) continue;
+      const entries = compFeatureEntries.get(comp.id);
+      if (!entries || entries.length === 0) continue;
 
-      const compVarName = comp.name.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+      const compVarName = `${symbolForFeature(symbolMap, comp.id, 'comp')}_assy`;
       compVarNameMap.set(comp.id, comp.name);
       lines.push('');
       lines.push(`# Component: ${comp.name}`);
-      lines.push(`${compVarName}_assy = cq.Assembly()`);
-      for (const name of names) {
-        const obj = allVisibleObjects.find((o) => o.name === name);
-        if (obj && obj.params.type === 'cone') {
-          lines.push(`${compVarName}_assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
+      lines.push(`${compVarName} = cq.Assembly()`);
+      for (const entry of entries) {
+        if (entry.isCone) {
+          lines.push(`${compVarName}.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
         } else {
-          lines.push(`${compVarName}_assy.add(${name}, name="${name}")`);
+          lines.push(`${compVarName}.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
         }
       }
       // Component transform
       const [tx, ty, tz] = comp.transform.position;
       if (comp.grounded || (tx === 0 && ty === 0 && tz === 0)) {
-        lines.push(`assy.add(${compVarName}_assy, name="${comp.name}")`);
+        lines.push(`assy.add(${compVarName}, name="${pyString(comp.name)}")`);
       } else {
-        lines.push(`assy.add(${compVarName}_assy, name="${comp.name}", loc=cq.Location(cq.Vector(${fmt(tx)}, ${fmt(ty)}, ${fmt(tz)})))`);
+        lines.push(`assy.add(${compVarName}, name="${pyString(comp.name)}", loc=cq.Location(cq.Vector(${fmt(tx)}, ${fmt(ty)}, ${fmt(tz)})))`);
       }
     }
 
     // Add root features (not in any component)
-    for (const name of rootNames) {
-      const obj = allVisibleObjects.find((o) => o.name === name);
-      if (obj && obj.params.type === 'cone') {
-        lines.push(`assy.add(cq.Workplane("XY").add(${name}), name="${name}")`);
+    for (const entry of rootEntries) {
+      if (entry.isCone) {
+        lines.push(`assy.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
       } else {
-        lines.push(`assy.add(${name}, name="${name}")`);
+        lines.push(`assy.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
       }
     }
 
@@ -655,14 +749,14 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         const c1 = compVarNameMap.get(mate.ref1.componentId);
         const c2 = compVarNameMap.get(mate.ref2.componentId);
         if (!c1 || !c2) continue;
-        const r1 = `"${c1}@faces@${mate.ref1.faceSelector}"`;
-        const r2 = `"${c2}@faces@${mate.ref2.faceSelector}"`;
+        const r1 = `"${pyString(c1)}@faces@${pyString(mate.ref1.faceSelector)}"`;
+        const r2 = `"${pyString(c2)}@faces@${pyString(mate.ref2.faceSelector)}"`;
         switch (mate.type) {
           case 'coincident':
             lines.push(`assy.constrain(${r1}, ${r2}, "Plane")`);
             break;
           case 'concentric':
-            lines.push(`assy.constrain("${c1}", "${c2}", "Axis", param=0)`);
+            lines.push(`assy.constrain("${pyString(c1)}", "${pyString(c2)}", "Axis", param=0)`);
             break;
           case 'distance':
             lines.push(`assy.constrain(${r1}, ${r2}, "Plane", param=${mate.distance})`);

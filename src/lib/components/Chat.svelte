@@ -3,6 +3,7 @@
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { generateParallel, generateDesignPlan, generateFromPlan, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps, retryPart } from '$lib/services/tauri';
+  import { executeGeneratedCode, resolveGeneratedCode } from '$lib/services/chat-generation-execution';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import ChatMessageComponent from './ChatMessage.svelte';
   import ConfidenceBadge from './ConfidenceBadge.svelte';
@@ -250,6 +251,46 @@
         isRetrying = false;
       }
     }
+  }
+
+  async function executeAndHandleGeneratedCode(
+    code: string,
+    generationId: number,
+    successMessage?: string,
+  ): Promise<boolean> {
+    const result = await executeGeneratedCode(code);
+    if (chatStore.generationId !== generationId) return false;
+
+    if (result.success) {
+      if (result.stlBase64) {
+        viewportStore.setPendingStl(result.stlBase64);
+        lastGeneratedStl = result.stlBase64;
+      }
+      if (successMessage) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: successMessage,
+          timestamp: Date.now(),
+        });
+      }
+      return true;
+    }
+
+    lastGenerationSuccess = false;
+    lastGenerationError = result.error;
+    chatStore.addMessage({
+      id: generateId(),
+      role: 'system',
+      content: `Execution error: ${result.error}`,
+      timestamp: Date.now(),
+      isError: true,
+      failedCode: code,
+      errorMessage: result.error,
+    });
+    chatStore.setStreaming(false);
+    await handleAutoRetry(code, result.error, 1);
+    return false;
   }
 
   /**
@@ -898,78 +939,23 @@
       } else if (backendValidated) {
         // Backend validated — code already in editor
       } else if (isMultiPart) {
-        const assembledCode = result;
+        const assembledCode = resolveGeneratedCode(result, true);
+        if (!assembledCode) return;
         project.setCode(assembledCode);
         lastGeneratedCode = assembledCode;
         chatStore.updateLastMessage(
           chatStore.messages[chatStore.messages.length - 1]?.content +
             '\n\nAssembly complete! Executing code...'
         );
-        try {
-          const execResult = await executeCode(assembledCode);
-          if (chatStore.generationId !== myGen) return;
-          if (execResult.success && execResult.stl_base64) {
-            viewportStore.setPendingStl(execResult.stl_base64);
-            lastGeneratedStl = execResult.stl_base64;
-          } else if (!execResult.success) {
-            const errorInfo = execResult.stderr || 'Code execution failed';
-            lastGenerationSuccess = false;
-            lastGenerationError = errorInfo;
-            chatStore.addMessage({
-              id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
-              timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errorInfo,
-            });
-            chatStore.setStreaming(false);
-            await handleAutoRetry(assembledCode, errorInfo, 1);
-            return;
-          }
-        } catch (execErr) {
-          const errMsg = `${execErr}`;
-          lastGenerationSuccess = false;
-          lastGenerationError = errMsg;
-          chatStore.addMessage({
-            id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
-            timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errMsg,
-          });
-          chatStore.setStreaming(false);
-          await handleAutoRetry(assembledCode, errMsg, 1);
-          return;
-        }
+        const executed = await executeAndHandleGeneratedCode(assembledCode, myGen);
+        if (!executed) return;
       } else {
-        const code = extractPythonCode(result);
+        const code = resolveGeneratedCode(result, false);
         if (code) {
           project.setCode(code);
           lastGeneratedCode = code;
-          try {
-            const execResult = await executeCode(code);
-            if (chatStore.generationId !== myGen) return;
-            if (execResult.success && execResult.stl_base64) {
-              viewportStore.setPendingStl(execResult.stl_base64);
-              lastGeneratedStl = execResult.stl_base64;
-            } else if (!execResult.success) {
-              const errorInfo = execResult.stderr || 'Code execution failed';
-              lastGenerationSuccess = false;
-              lastGenerationError = errorInfo;
-              chatStore.addMessage({
-                id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
-                timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errorInfo,
-              });
-              chatStore.setStreaming(false);
-              await handleAutoRetry(code, errorInfo, 1);
-              return;
-            }
-          } catch (execErr) {
-            const errMsg = `${execErr}`;
-            lastGenerationSuccess = false;
-            lastGenerationError = errMsg;
-            chatStore.addMessage({
-              id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
-              timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errMsg,
-            });
-            chatStore.setStreaming(false);
-            await handleAutoRetry(code, errMsg, 1);
-            return;
-          }
+          const executed = await executeAndHandleGeneratedCode(code, myGen);
+          if (!executed) return;
         }
       }
     } catch (err) {
@@ -1494,108 +1480,27 @@
         } else if (backendValidated) {
           // Backend validated but failed — code is already set in editor via FinalCode event.
         } else if (isMultiPart) {
-          const assembledCode = result;
+          const assembledCode = resolveGeneratedCode(result, true);
+          if (!assembledCode) return;
           project.setCode(assembledCode);
           lastGeneratedCode = assembledCode;
           chatStore.updateLastMessage(
             chatStore.messages[chatStore.messages.length - 1]?.content +
               '\n\nAssembly complete! Executing code...'
           );
-
-          try {
-            const execResult = await executeCode(assembledCode);
-            if (chatStore.generationId !== myGen) return;
-            if (execResult.success && execResult.stl_base64) {
-              viewportStore.setPendingStl(execResult.stl_base64);
-              lastGeneratedStl = execResult.stl_base64;
-              chatStore.addMessage({
-                id: generateId(),
-                role: 'system',
-                content: 'Assembly executed successfully.',
-                timestamp: Date.now(),
-              });
-            } else if (!execResult.success) {
-              const errorInfo = execResult.stderr || 'Code execution failed';
-              lastGenerationSuccess = false;
-              lastGenerationError = errorInfo;
-              chatStore.addMessage({
-                id: generateId(),
-                role: 'system',
-                content: `Execution error: ${errorInfo}`,
-                timestamp: Date.now(),
-                isError: true,
-                failedCode: assembledCode,
-                errorMessage: errorInfo,
-              });
-
-              chatStore.setStreaming(false);
-              await handleAutoRetry(assembledCode, errorInfo, 1);
-              return;
-            }
-          } catch (execErr) {
-            const errMsg = `${execErr}`;
-            chatStore.addMessage({
-              id: generateId(),
-              role: 'system',
-              content: `Failed to execute code: ${errMsg}`,
-              timestamp: Date.now(),
-              isError: true,
-              failedCode: assembledCode,
-              errorMessage: errMsg,
-            });
-
-            chatStore.setStreaming(false);
-            await handleAutoRetry(assembledCode, errMsg, 1);
-            return;
-          }
+          const executed = await executeAndHandleGeneratedCode(
+            assembledCode,
+            myGen,
+            'Assembly executed successfully.',
+          );
+          if (!executed) return;
         } else {
-          const code = extractPythonCode(result);
+          const code = resolveGeneratedCode(result, false);
           if (code) {
             project.setCode(code);
             lastGeneratedCode = code;
-
-            try {
-              const execResult = await executeCode(code);
-              if (chatStore.generationId !== myGen) return;
-              if (execResult.success && execResult.stl_base64) {
-                viewportStore.setPendingStl(execResult.stl_base64);
-                lastGeneratedStl = execResult.stl_base64;
-              } else if (!execResult.success) {
-                const errorInfo = execResult.stderr || 'Code execution failed';
-                lastGenerationSuccess = false;
-                lastGenerationError = errorInfo;
-                chatStore.addMessage({
-                  id: generateId(),
-                  role: 'system',
-                  content: `Execution error: ${errorInfo}`,
-                  timestamp: Date.now(),
-                  isError: true,
-                  failedCode: code,
-                  errorMessage: errorInfo,
-                });
-
-                chatStore.setStreaming(false);
-                await handleAutoRetry(code, errorInfo, 1);
-                return;
-              }
-            } catch (execErr) {
-              const errMsg = `${execErr}`;
-              lastGenerationSuccess = false;
-              lastGenerationError = errMsg;
-              chatStore.addMessage({
-                id: generateId(),
-                role: 'system',
-                content: `Failed to execute code: ${errMsg}`,
-                timestamp: Date.now(),
-                isError: true,
-                failedCode: code,
-                errorMessage: errMsg,
-              });
-
-              chatStore.setStreaming(false);
-              await handleAutoRetry(code, errMsg, 1);
-              return;
-            }
+            const executed = await executeAndHandleGeneratedCode(code, myGen);
+            if (!executed) return;
           }
         }
       } else {

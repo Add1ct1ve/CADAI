@@ -57,7 +57,11 @@ pub async fn export_stl(
     let runner_script = super::find_python_script("runner.py")?;
 
     // Execute CadQuery to generate STL
-    let result = crate::python::runner::execute_cadquery(&venv_dir, &runner_script, &code)?;
+    let result = crate::python::runner::execute_cadquery_isolated(
+        &venv_dir,
+        &runner_script,
+        &code,
+    )?;
 
     // Write STL to the specified path
     std::fs::write(&output_path, &result.stl_data)?;

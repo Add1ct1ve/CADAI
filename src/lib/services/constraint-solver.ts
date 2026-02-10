@@ -6,7 +6,6 @@ import type {
 } from '$lib/types/cad';
 import type { GcsWrapper } from '@salusoft89/planegcs';
 import type { SketchPrimitive } from '@salusoft89/planegcs';
-import { SolveStatus } from '@salusoft89/planegcs';
 
 export interface SolveResult {
   updatedEntities: SketchEntity[];
@@ -15,18 +14,21 @@ export interface SolveResult {
 }
 
 let gcsWrapper: GcsWrapper | null = null;
+let solveStatusFailedValue: number | string | null = null;
 
 export async function initSolver(): Promise<void> {
   if (gcsWrapper) return;
   // Dynamic import to support WASM lazy-loading
-  const { make_gcs_wrapper } = await import('@salusoft89/planegcs');
-  gcsWrapper = await make_gcs_wrapper();
+  const planegcs = await import('@salusoft89/planegcs');
+  gcsWrapper = await planegcs.make_gcs_wrapper();
+  solveStatusFailedValue = planegcs.SolveStatus.Failed as number | string;
 }
 
 export function destroySolver(): void {
   if (gcsWrapper) {
     gcsWrapper.destroy_gcs_module();
     gcsWrapper = null;
+    solveStatusFailedValue = null;
   }
 }
 
@@ -314,7 +316,7 @@ export function solve(
   // Solve
   const solveStatus = gcsWrapper.solve();
 
-  if (solveStatus === SolveStatus.Failed) {
+  if (solveStatusFailedValue !== null && solveStatus === solveStatusFailedValue) {
     // Check for over-constrained
     const hasConflicts = gcsWrapper.has_gcs_conflicting_constraints();
     return {

@@ -82,10 +82,15 @@
     };
   }
 
+  function normalizeDisplayName(value: string, fallback: string): string {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length > 0 ? normalized : fallback;
+  }
+
   function updateName(e: Event) {
     const obj = scene.firstSelected;
     if (!obj) return;
-    const value = (e.target as HTMLInputElement).value;
+    const value = normalizeDisplayName((e.target as HTMLInputElement).value, obj.name);
     scene.updateObject(obj.id, { name: value });
   }
 
@@ -796,7 +801,7 @@
   function updateComponentName(e: Event) {
     const comp = componentStore.selectedComponent;
     if (!comp) return;
-    const value = (e.target as HTMLInputElement).value;
+    const value = normalizeDisplayName((e.target as HTMLInputElement).value, comp.name);
     componentStore.updateComponent(comp.id, { name: value });
   }
 
@@ -853,7 +858,8 @@
   function updateMateName(e: Event) {
     const mate = mateStore.selectedMate;
     if (!mate) return;
-    mateStore.updateMate(mate.id, { name: (e.target as HTMLInputElement).value });
+    const value = normalizeDisplayName((e.target as HTMLInputElement).value, mate.name);
+    mateStore.updateMate(mate.id, { name: value });
   }
 
   function updateMateDistance(value: number) {
@@ -945,50 +951,50 @@
 
       {#if obj.params.type === 'box'}
         <div class="prop-row">
-          <label>Width</label>
+          <span class="prop-label">Width</span>
           <input type="number" value={obj.params.width} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('width', v))} />
         </div>
         <div class="prop-row">
-          <label>Depth</label>
+          <span class="prop-label">Depth</span>
           <input type="number" value={obj.params.depth} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('depth', v))} />
         </div>
         <div class="prop-row">
-          <label>Height</label>
+          <span class="prop-label">Height</span>
           <input type="number" value={obj.params.height} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('height', v))} />
         </div>
       {:else if obj.params.type === 'cylinder'}
         <div class="prop-row">
-          <label>Radius</label>
+          <span class="prop-label">Radius</span>
           <input type="number" value={obj.params.radius} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('radius', v))} />
         </div>
         <div class="prop-row">
-          <label>Height</label>
+          <span class="prop-label">Height</span>
           <input type="number" value={obj.params.height} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('height', v))} />
         </div>
       {:else if obj.params.type === 'sphere'}
         <div class="prop-row">
-          <label>Radius</label>
+          <span class="prop-label">Radius</span>
           <input type="number" value={obj.params.radius} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('radius', v))} />
         </div>
       {:else if obj.params.type === 'cone'}
         <div class="prop-row">
-          <label>Bottom R</label>
+          <span class="prop-label">Bottom R</span>
           <input type="number" value={obj.params.bottomRadius} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('bottomRadius', v))} />
         </div>
         <div class="prop-row">
-          <label>Top R</label>
+          <span class="prop-label">Top R</span>
           <input type="number" value={obj.params.topRadius} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('topRadius', v))} />
         </div>
         <div class="prop-row">
-          <label>Height</label>
+          <span class="prop-label">Height</span>
           <input type="number" value={obj.params.height} step="0.5"
             oninput={(e) => numInput(e, (v) => updateParam('height', v))} />
         </div>
@@ -999,7 +1005,7 @@
     <div class="prop-section">
       <div class="prop-section-title">Scale</div>
       <div class="prop-row">
-        <label>Factor</label>
+        <span class="prop-label">Factor</span>
         <input type="number" bind:value={scaleFactor} step="0.1" min="0.01" />
         <button class="apply-btn" onclick={applyScaleFactor}>Apply</button>
       </div>
@@ -1009,17 +1015,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Position</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={obj.transform.position[0]} step="1"
           oninput={(e) => numInput(e, (v) => updatePosition(0, v))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={obj.transform.position[1]} step="1"
           oninput={(e) => numInput(e, (v) => updatePosition(1, v))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={obj.transform.position[2]} step="1"
           oninput={(e) => numInput(e, (v) => updatePosition(2, v))} />
       </div>
@@ -1029,15 +1035,15 @@
     <div class="prop-section">
       <div class="prop-section-title">Move By</div>
       <div class="prop-row">
-        <label>dX</label>
+        <span class="prop-label">dX</span>
         <input type="number" bind:value={deltaX} step="1" />
       </div>
       <div class="prop-row">
-        <label>dY</label>
+        <span class="prop-label">dY</span>
         <input type="number" bind:value={deltaY} step="1" />
       </div>
       <div class="prop-row">
-        <label>dZ</label>
+        <span class="prop-label">dZ</span>
         <input type="number" bind:value={deltaZ} step="1" />
       </div>
       <button class="apply-btn full-width" onclick={applyMoveDelta}>Apply Move</button>
@@ -1047,17 +1053,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Rotation</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={obj.transform.rotation[0]} step="5"
           oninput={(e) => numInput(e, (v) => updateRotation(0, v))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={obj.transform.rotation[1]} step="5"
           oninput={(e) => numInput(e, (v) => updateRotation(1, v))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={obj.transform.rotation[2]} step="5"
           oninput={(e) => numInput(e, (v) => updateRotation(2, v))} />
       </div>
@@ -1068,12 +1074,12 @@
       <div class="prop-section-title">Fillet</div>
       {#if obj.fillet}
         <div class="prop-row">
-          <label>Radius</label>
+          <span class="prop-label">Radius</span>
           <input type="number" value={obj.fillet.radius} step="0.1" min="0.01"
             oninput={(e) => numInput(e, (v) => updateObjectFillet('radius', v))} />
         </div>
         <div class="prop-row">
-          <label>Edges</label>
+          <span class="prop-label">Edges</span>
           <select class="prop-select" value={obj.fillet.edges}
             onchange={(e) => updateObjectFillet('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
             {#each edgeSelectorOptions as opt}
@@ -1092,12 +1098,12 @@
       <div class="prop-section-title">Chamfer</div>
       {#if obj.chamfer}
         <div class="prop-row">
-          <label>Distance</label>
+          <span class="prop-label">Distance</span>
           <input type="number" value={obj.chamfer.distance} step="0.1" min="0.01"
             oninput={(e) => numInput(e, (v) => updateObjectChamfer('distance', v))} />
         </div>
         <div class="prop-row">
-          <label>Edges</label>
+          <span class="prop-label">Edges</span>
           <select class="prop-select" value={obj.chamfer.edges}
             onchange={(e) => updateObjectChamfer('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
             {#each edgeSelectorOptions as opt}
@@ -1116,12 +1122,12 @@
       <div class="prop-section-title">Shell</div>
       {#if obj.shell}
         <div class="prop-row">
-          <label>Thickness</label>
+          <span class="prop-label">Thickness</span>
           <input type="number" value={obj.shell.thickness} step="0.5"
             oninput={(e) => numInput(e, (v) => updateObjectShell('thickness', v))} />
         </div>
         <div class="prop-row">
-          <label>Face</label>
+          <span class="prop-label">Face</span>
           <select class="prop-select" value={obj.shell.face}
             onchange={(e) => updateObjectShell('face', (e.target as HTMLSelectElement).value as FaceSelector)}>
             {#each faceSelectorOptions as opt}
@@ -1141,7 +1147,7 @@
       {#each (obj.holes ?? []) as hole, index}
         <div class="hole-item">
           <div class="prop-row">
-            <label>Type</label>
+            <span class="prop-label">Type</span>
             <select class="prop-select" value={hole.holeType}
               onchange={(e) => updateObjectHole(index, 'holeType', (e.target as HTMLSelectElement).value)}>
               {#each holeTypeOptions as opt}
@@ -1150,43 +1156,43 @@
             </select>
           </div>
           <div class="prop-row">
-            <label>Dia</label>
+            <span class="prop-label">Dia</span>
             <input type="number" value={hole.diameter} step="0.5" min="0.1"
               oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'diameter', v))} />
           </div>
           {#if hole.holeType === 'blind'}
             <div class="prop-row">
-              <label>Depth</label>
+              <span class="prop-label">Depth</span>
               <input type="number" value={hole.depth ?? 5} step="0.5" min="0.1"
                 oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'depth', v))} />
             </div>
           {/if}
           {#if hole.holeType === 'counterbore'}
             <div class="prop-row">
-              <label>CB Dia</label>
+              <span class="prop-label">CB Dia</span>
               <input type="number" value={hole.cboreDiameter ?? 8} step="0.5" min="0.1"
                 oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cboreDiameter', v))} />
             </div>
             <div class="prop-row">
-              <label>CB Dep</label>
+              <span class="prop-label">CB Dep</span>
               <input type="number" value={hole.cboreDepth ?? 3} step="0.5" min="0.1"
                 oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cboreDepth', v))} />
             </div>
           {/if}
           {#if hole.holeType === 'countersink'}
             <div class="prop-row">
-              <label>CS Dia</label>
+              <span class="prop-label">CS Dia</span>
               <input type="number" value={hole.cskDiameter ?? 10} step="0.5" min="0.1"
                 oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cskDiameter', v))} />
             </div>
             <div class="prop-row">
-              <label>CS Angle</label>
+              <span class="prop-label">CS Angle</span>
               <input type="number" value={hole.cskAngle ?? 82} step="1" min="1" max="180"
                 oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'cskAngle', v))} />
             </div>
           {/if}
           <div class="prop-row">
-            <label>Face</label>
+            <span class="prop-label">Face</span>
             <select class="prop-select" value={hole.face}
               onchange={(e) => updateObjectHole(index, 'face', (e.target as HTMLSelectElement).value)}>
               {#each faceSelectorOptions as opt}
@@ -1195,12 +1201,12 @@
             </select>
           </div>
           <div class="prop-row">
-            <label>Pos X</label>
+            <span class="prop-label">Pos X</span>
             <input type="number" value={hole.position[0]} step="1"
               oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'position', [v, hole.position[1]]))} />
           </div>
           <div class="prop-row">
-            <label>Pos Y</label>
+            <span class="prop-label">Pos Y</span>
             <input type="number" value={hole.position[1]} step="1"
               oninput={(e) => numInput(e, (v) => updateObjectHole(index, 'position', [hole.position[0], v]))} />
           </div>
@@ -1215,7 +1221,7 @@
       <div class="prop-section-title">Boolean</div>
       {#if obj.booleanOp}
         <div class="prop-row">
-          <label>Type</label>
+          <span class="prop-label">Type</span>
           <select class="prop-select" value={obj.booleanOp.type}
             onchange={(e) => updateBooleanOpType((e.target as HTMLSelectElement).value as BooleanOpType)}>
             {#each booleanTypeOptions as opt}
@@ -1224,7 +1230,7 @@
           </select>
         </div>
         <div class="prop-row">
-          <label>Target</label>
+          <span class="prop-label">Target</span>
           <select class="prop-select" value={obj.booleanOp.targetId}
             onchange={(e) => updateBooleanTarget((e.target as HTMLSelectElement).value)}>
             {#each getBooleanTargets() as target}
@@ -1248,7 +1254,7 @@
       <div class="prop-section-title">Split</div>
       {#if obj.splitOp}
         <div class="prop-row">
-          <label>Plane</label>
+          <span class="prop-label">Plane</span>
           <select class="prop-select" value={obj.splitOp.plane}
             onchange={(e) => updateSplitOpImmediate('plane', (e.target as HTMLSelectElement).value)}>
             {#each splitPlaneOptions as opt}
@@ -1257,12 +1263,12 @@
           </select>
         </div>
         <div class="prop-row">
-          <label>Offset</label>
+          <span class="prop-label">Offset</span>
           <input type="number" value={obj.splitOp.offset} step="1"
             oninput={(e) => numInput(e, (v) => updateSplitOp('offset', v))} />
         </div>
         <div class="prop-row">
-          <label>Keep</label>
+          <span class="prop-label">Keep</span>
           <select class="prop-select" value={obj.splitOp.keepSide}
             onchange={(e) => updateSplitOpImmediate('keepSide', (e.target as HTMLSelectElement).value)}>
             {#each keepSideOptions as opt}
@@ -1281,7 +1287,7 @@
       <div class="prop-section-title">Pattern</div>
       {#if obj.patternOp}
         <div class="prop-row">
-          <label>Type</label>
+          <span class="prop-label">Type</span>
           <select class="prop-select" value={obj.patternOp.type}
             onchange={(e) => switchPatternType((e.target as HTMLSelectElement).value as PatternType)}>
             {#each patternTypeOptions as opt}
@@ -1292,7 +1298,7 @@
 
         {#if obj.patternOp.type === 'mirror'}
           <div class="prop-row">
-            <label>Plane</label>
+            <span class="prop-label">Plane</span>
             <select class="prop-select" value={obj.patternOp.plane}
               onchange={(e) => updatePatternOpImmediate('plane', (e.target as HTMLSelectElement).value)}>
               {#each patternPlaneOptions as opt}
@@ -1301,12 +1307,12 @@
             </select>
           </div>
           <div class="prop-row">
-            <label>Offset</label>
+            <span class="prop-label">Offset</span>
             <input type="number" value={obj.patternOp.offset} step="1"
               oninput={(e) => numInput(e, (v) => updatePatternOp('offset', v))} />
           </div>
           <div class="prop-row">
-            <label>Keep Orig</label>
+            <span class="prop-label">Keep Orig</span>
             <button class="toggle-btn" class:active={obj.patternOp.keepOriginal}
               onclick={() => { if (obj.patternOp?.type === 'mirror') updatePatternOpImmediate('keepOriginal', !obj.patternOp.keepOriginal); }}>
               {obj.patternOp.keepOriginal ? 'Yes' : 'No'}
@@ -1314,7 +1320,7 @@
           </div>
         {:else if obj.patternOp.type === 'linear'}
           <div class="prop-row">
-            <label>Dir</label>
+            <span class="prop-label">Dir</span>
             <select class="prop-select" value={obj.patternOp.direction}
               onchange={(e) => updatePatternOpImmediate('direction', (e.target as HTMLSelectElement).value)}>
               {#each patternDirOptions as opt}
@@ -1323,18 +1329,18 @@
             </select>
           </div>
           <div class="prop-row">
-            <label>Spacing</label>
+            <span class="prop-label">Spacing</span>
             <input type="number" value={obj.patternOp.spacing} step="1" min="0.1"
               oninput={(e) => numInput(e, (v) => updatePatternOp('spacing', v))} />
           </div>
           <div class="prop-row">
-            <label>Count</label>
+            <span class="prop-label">Count</span>
             <input type="number" value={obj.patternOp.count} step="1" min="2" max="50"
               oninput={(e) => numInput(e, (v) => updatePatternOp('count', Math.max(2, Math.round(v))))} />
           </div>
         {:else if obj.patternOp.type === 'circular'}
           <div class="prop-row">
-            <label>Axis</label>
+            <span class="prop-label">Axis</span>
             <select class="prop-select" value={obj.patternOp.axis}
               onchange={(e) => updatePatternOpImmediate('axis', (e.target as HTMLSelectElement).value)}>
               {#each patternAxisOptions as opt}
@@ -1343,12 +1349,12 @@
             </select>
           </div>
           <div class="prop-row">
-            <label>Count</label>
+            <span class="prop-label">Count</span>
             <input type="number" value={obj.patternOp.count} step="1" min="2" max="50"
               oninput={(e) => numInput(e, (v) => updatePatternOp('count', Math.max(2, Math.round(v))))} />
           </div>
           <div class="prop-row">
-            <label>Angle</label>
+            <span class="prop-label">Angle</span>
             <input type="number" value={obj.patternOp.fullAngle} step="15" min="1" max="360"
               oninput={(e) => numInput(e, (v) => updatePatternOp('fullAngle', v))} />
           </div>
@@ -1368,7 +1374,7 @@
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
       <div class="prop-row">
-        <label>Material</label>
+        <span class="prop-label">Material</span>
         <select class="prop-select" value={obj.materialId ?? ''}
           onchange={(e) => applyMaterial((e.target as HTMLSelectElement).value)}>
           <option value="">Custom</option>
@@ -1378,32 +1384,32 @@
         </select>
       </div>
       <div class="prop-row">
-        <label>Color</label>
+        <span class="prop-label">Color</span>
         <input type="color" value={obj.color} oninput={updateColor} class="color-picker" />
       </div>
       <div class="prop-row">
-        <label>Metal</label>
+        <span class="prop-label">Metal</span>
         <input type="range" class="slider" min="0" max="1" step="0.05"
           value={obj.metalness ?? DEFAULT_METALNESS}
           oninput={(e) => updateMetalness(parseFloat((e.target as HTMLInputElement).value))} />
         <span class="slider-val">{(obj.metalness ?? DEFAULT_METALNESS).toFixed(2)}</span>
       </div>
       <div class="prop-row">
-        <label>Rough</label>
+        <span class="prop-label">Rough</span>
         <input type="range" class="slider" min="0" max="1" step="0.05"
           value={obj.roughness ?? DEFAULT_ROUGHNESS}
           oninput={(e) => updateRoughness(parseFloat((e.target as HTMLInputElement).value))} />
         <span class="slider-val">{(obj.roughness ?? DEFAULT_ROUGHNESS).toFixed(2)}</span>
       </div>
       <div class="prop-row">
-        <label>Opacity</label>
+        <span class="prop-label">Opacity</span>
         <input type="range" class="slider" min="0" max="1" step="0.05"
           value={obj.opacity ?? DEFAULT_OPACITY}
           oninput={(e) => updateOpacity(parseFloat((e.target as HTMLInputElement).value))} />
         <span class="slider-val">{Math.round((obj.opacity ?? DEFAULT_OPACITY) * 100)}%</span>
       </div>
       <div class="prop-row">
-        <label>Visible</label>
+        <span class="prop-label">Visible</span>
         <button class="toggle-btn" class:active={obj.visible} onclick={toggleVisible}>
           {obj.visible ? 'Yes' : 'No'}
         </button>
@@ -1430,11 +1436,11 @@
     <div class="prop-section">
       <div class="prop-section-title">Info</div>
       <div class="prop-row">
-        <label>Plane</label>
+        <span class="prop-label">Plane</span>
         <span class="prop-value">{sketch.plane}</span>
       </div>
       <div class="prop-row">
-        <label>Entities</label>
+        <span class="prop-label">Entities</span>
         <span class="prop-value">{sketch.entities.length}</span>
       </div>
     </div>
@@ -1450,17 +1456,17 @@
         </div>
       {:else if sketch.operation.type === 'extrude'}
         <div class="prop-row">
-          <label>Distance</label>
+          <span class="prop-label">Distance</span>
           <input type="number" value={sketch.operation.distance} step="1" min="0.1"
             oninput={(e) => numInput(e, (v) => updateSketchOperation({ distance: v }))} />
         </div>
         <div class="prop-row">
-          <label>Taper</label>
+          <span class="prop-label">Taper</span>
           <input type="number" value={sketch.operation.taper ?? 0} step="1" min="0" max="89"
             oninput={(e) => numInput(e, (v) => updateSketchOperation({ taper: v || undefined }))} />
         </div>
         <div class="prop-row">
-          <label>Mode</label>
+          <span class="prop-label">Mode</span>
           <select class="prop-select" value={sketch.operation.mode}
             onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
             <option value="add">Add</option>
@@ -1469,7 +1475,7 @@
         </div>
         {#if sketch.operation.mode === 'cut'}
           <div class="prop-row">
-            <label>Target</label>
+            <span class="prop-label">Target</span>
             <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
               onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
               <option value="">None</option>
@@ -1482,12 +1488,12 @@
         <button class="remove-btn" onclick={removeSketchOperation}>Remove Extrude</button>
       {:else if sketch.operation.type === 'revolve'}
         <div class="prop-row">
-          <label>Angle</label>
+          <span class="prop-label">Angle</span>
           <input type="number" value={sketch.operation.angle} step="15" min="1" max="360"
             oninput={(e) => numInput(e, (v) => updateSketchOperation({ angle: v }))} />
         </div>
         <div class="prop-row">
-          <label>Axis</label>
+          <span class="prop-label">Axis</span>
           <select class="prop-select" value={sketch.operation.axisDirection}
             onchange={(e) => updateSketchOperationImmediate({ axisDirection: (e.target as HTMLSelectElement).value as 'X' | 'Y' })}>
             <option value="X">X</option>
@@ -1495,12 +1501,12 @@
           </select>
         </div>
         <div class="prop-row">
-          <label>Offset</label>
+          <span class="prop-label">Offset</span>
           <input type="number" value={sketch.operation.axisOffset} step="1"
             oninput={(e) => numInput(e, (v) => updateSketchOperation({ axisOffset: v }))} />
         </div>
         <div class="prop-row">
-          <label>Mode</label>
+          <span class="prop-label">Mode</span>
           <select class="prop-select" value={sketch.operation.mode}
             onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
             <option value="add">Add</option>
@@ -1509,7 +1515,7 @@
         </div>
         {#if sketch.operation.mode === 'cut'}
           <div class="prop-row">
-            <label>Target</label>
+            <span class="prop-label">Target</span>
             <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
               onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
               <option value="">None</option>
@@ -1522,7 +1528,7 @@
         <button class="remove-btn" onclick={removeSketchOperation}>Remove Revolve</button>
       {:else if sketch.operation.type === 'sweep'}
         <div class="prop-row">
-          <label>Path</label>
+          <span class="prop-label">Path</span>
           <select class="prop-select" value={sketch.operation.pathSketchId}
             onchange={(e) => updateSketchOperationImmediate({ pathSketchId: (e.target as HTMLSelectElement).value })}>
             <option value="">Select path...</option>
@@ -1532,7 +1538,7 @@
           </select>
         </div>
         <div class="prop-row">
-          <label>Mode</label>
+          <span class="prop-label">Mode</span>
           <select class="prop-select" value={sketch.operation.mode}
             onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
             <option value="add">Add</option>
@@ -1541,7 +1547,7 @@
         </div>
         {#if sketch.operation.mode === 'cut'}
           <div class="prop-row">
-            <label>Target</label>
+            <span class="prop-label">Target</span>
             <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
               onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
               <option value="">None</option>
@@ -1562,12 +1568,12 @@
         <div class="prop-section-title">Fillet</div>
         {#if sketch.fillet}
           <div class="prop-row">
-            <label>Radius</label>
+            <span class="prop-label">Radius</span>
             <input type="number" value={sketch.fillet.radius} step="0.1" min="0.01"
               oninput={(e) => numInput(e, (v) => updateSketchFillet('radius', v))} />
           </div>
           <div class="prop-row">
-            <label>Edges</label>
+            <span class="prop-label">Edges</span>
             <select class="prop-select" value={sketch.fillet.edges}
               onchange={(e) => updateSketchFillet('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
               {#each edgeSelectorOptions as opt}
@@ -1586,12 +1592,12 @@
         <div class="prop-section-title">Chamfer</div>
         {#if sketch.chamfer}
           <div class="prop-row">
-            <label>Distance</label>
+            <span class="prop-label">Distance</span>
             <input type="number" value={sketch.chamfer.distance} step="0.1" min="0.01"
               oninput={(e) => numInput(e, (v) => updateSketchChamfer('distance', v))} />
           </div>
           <div class="prop-row">
-            <label>Edges</label>
+            <span class="prop-label">Edges</span>
             <select class="prop-select" value={sketch.chamfer.edges}
               onchange={(e) => updateSketchChamfer('edges', (e.target as HTMLSelectElement).value as EdgeSelector)}>
               {#each edgeSelectorOptions as opt}
@@ -1610,12 +1616,12 @@
         <div class="prop-section-title">Shell</div>
         {#if sketch.shell}
           <div class="prop-row">
-            <label>Thickness</label>
+            <span class="prop-label">Thickness</span>
             <input type="number" value={sketch.shell.thickness} step="0.5"
               oninput={(e) => numInput(e, (v) => updateSketchShell('thickness', v))} />
           </div>
           <div class="prop-row">
-            <label>Face</label>
+            <span class="prop-label">Face</span>
             <select class="prop-select" value={sketch.shell.face}
               onchange={(e) => updateSketchShell('face', (e.target as HTMLSelectElement).value as FaceSelector)}>
               {#each faceSelectorOptions as opt}
@@ -1635,7 +1641,7 @@
         {#each (sketch.holes ?? []) as hole, index}
           <div class="hole-item">
             <div class="prop-row">
-              <label>Type</label>
+              <span class="prop-label">Type</span>
               <select class="prop-select" value={hole.holeType}
                 onchange={(e) => updateSketchHole(index, 'holeType', (e.target as HTMLSelectElement).value)}>
                 {#each holeTypeOptions as opt}
@@ -1644,43 +1650,43 @@
               </select>
             </div>
             <div class="prop-row">
-              <label>Dia</label>
+              <span class="prop-label">Dia</span>
               <input type="number" value={hole.diameter} step="0.5" min="0.1"
                 oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'diameter', v))} />
             </div>
             {#if hole.holeType === 'blind'}
               <div class="prop-row">
-                <label>Depth</label>
+                <span class="prop-label">Depth</span>
                 <input type="number" value={hole.depth ?? 5} step="0.5" min="0.1"
                   oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'depth', v))} />
               </div>
             {/if}
             {#if hole.holeType === 'counterbore'}
               <div class="prop-row">
-                <label>CB Dia</label>
+                <span class="prop-label">CB Dia</span>
                 <input type="number" value={hole.cboreDiameter ?? 8} step="0.5" min="0.1"
                   oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cboreDiameter', v))} />
               </div>
               <div class="prop-row">
-                <label>CB Dep</label>
+                <span class="prop-label">CB Dep</span>
                 <input type="number" value={hole.cboreDepth ?? 3} step="0.5" min="0.1"
                   oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cboreDepth', v))} />
               </div>
             {/if}
             {#if hole.holeType === 'countersink'}
               <div class="prop-row">
-                <label>CS Dia</label>
+                <span class="prop-label">CS Dia</span>
                 <input type="number" value={hole.cskDiameter ?? 10} step="0.5" min="0.1"
                   oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cskDiameter', v))} />
               </div>
               <div class="prop-row">
-                <label>CS Angle</label>
+                <span class="prop-label">CS Angle</span>
                 <input type="number" value={hole.cskAngle ?? 82} step="1" min="1" max="180"
                   oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'cskAngle', v))} />
               </div>
             {/if}
             <div class="prop-row">
-              <label>Face</label>
+              <span class="prop-label">Face</span>
               <select class="prop-select" value={hole.face}
                 onchange={(e) => updateSketchHole(index, 'face', (e.target as HTMLSelectElement).value)}>
                 {#each faceSelectorOptions as opt}
@@ -1689,12 +1695,12 @@
               </select>
             </div>
             <div class="prop-row">
-              <label>Pos X</label>
+              <span class="prop-label">Pos X</span>
               <input type="number" value={hole.position[0]} step="1"
                 oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'position', [v, hole.position[1]]))} />
             </div>
             <div class="prop-row">
-              <label>Pos Y</label>
+              <span class="prop-label">Pos Y</span>
               <input type="number" value={hole.position[1]} step="1"
                 oninput={(e) => numInput(e, (v) => updateSketchHole(index, 'position', [hole.position[0], v]))} />
             </div>
@@ -1742,7 +1748,7 @@
       <div class="prop-section-title">Definition</div>
       {#if datum.definition.type === 'offset'}
         <div class="prop-row">
-          <label>Base</label>
+          <span class="prop-label">Base</span>
           <select class="prop-select" value={datum.definition.basePlane}
             onchange={(e) => updateDatumPlaneDefinition({ basePlane: (e.target as HTMLSelectElement).value as 'XY' | 'XZ' | 'YZ' })}>
             <option value="XY">XY</option>
@@ -1751,7 +1757,7 @@
           </select>
         </div>
         <div class="prop-row">
-          <label>Offset</label>
+          <span class="prop-label">Offset</span>
           <input type="number" value={datum.definition.offset} step="1"
             oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ offset: v }))} />
         </div>
@@ -1760,17 +1766,17 @@
                  { label: 'P2', val: datum.definition.p2, key: 'p2' },
                  { label: 'P3', val: datum.definition.p3, key: 'p3' }] as pt}
           <div class="prop-row">
-            <label>{pt.label} X</label>
+            <span class="prop-label">{pt.label} X</span>
             <input type="number" value={pt.val[0]} step="1"
               oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [v, pt.val[1], pt.val[2]] }))} />
           </div>
           <div class="prop-row">
-            <label>{pt.label} Y</label>
+            <span class="prop-label">{pt.label} Y</span>
             <input type="number" value={pt.val[1]} step="1"
               oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [pt.val[0], v, pt.val[2]] }))} />
           </div>
           <div class="prop-row">
-            <label>{pt.label} Z</label>
+            <span class="prop-label">{pt.label} Z</span>
             <input type="number" value={pt.val[2]} step="1"
               oninput={(e) => numInput(e, (v) => updateDatumPlaneDefinition({ [pt.key]: [pt.val[0], pt.val[1], v] }))} />
           </div>
@@ -1781,11 +1787,11 @@
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
       <div class="prop-row">
-        <label>Color</label>
+        <span class="prop-label">Color</span>
         <input type="color" value={datum.color} oninput={updateDatumPlaneColor} class="color-picker" />
       </div>
       <div class="prop-row">
-        <label>Visible</label>
+        <span class="prop-label">Visible</span>
         <button class="toggle-btn" class:active={datum.visible} onclick={toggleDatumPlaneVisible}>
           {datum.visible ? 'Yes' : 'No'}
         </button>
@@ -1813,17 +1819,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Origin</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={datum.origin[0]} step="1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [v, datum.origin[1], datum.origin[2]]))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={datum.origin[1]} step="1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [datum.origin[0], v, datum.origin[2]]))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={datum.origin[2]} step="1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('origin', [datum.origin[0], datum.origin[1], v]))} />
       </div>
@@ -1832,17 +1838,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Direction</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={datum.direction[0]} step="0.1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [v, datum.direction[1], datum.direction[2]]))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={datum.direction[1]} step="0.1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [datum.direction[0], v, datum.direction[2]]))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={datum.direction[2]} step="0.1"
           oninput={(e) => numInput(e, (v) => updateDatumAxis('direction', [datum.direction[0], datum.direction[1], v]))} />
       </div>
@@ -1851,11 +1857,11 @@
     <div class="prop-section">
       <div class="prop-section-title">Appearance</div>
       <div class="prop-row">
-        <label>Color</label>
+        <span class="prop-label">Color</span>
         <input type="color" value={datum.color} oninput={updateDatumAxisColor} class="color-picker" />
       </div>
       <div class="prop-row">
-        <label>Visible</label>
+        <span class="prop-label">Visible</span>
         <button class="toggle-btn" class:active={datum.visible} onclick={toggleDatumAxisVisible}>
           {datum.visible ? 'Yes' : 'No'}
         </button>
@@ -1886,12 +1892,12 @@
     <div class="prop-section">
       <div class="prop-section-title">Info</div>
       <div class="prop-row">
-        <label>Features</label>
+        <span class="prop-label">Features</span>
         <span class="prop-value">{comp.featureIds.length}</span>
       </div>
       {#if comp.sourceFile}
         <div class="prop-row">
-          <label>Source</label>
+          <span class="prop-label">Source</span>
           <span class="prop-value source-path" title={comp.sourceFile}>{comp.sourceFile.split(/[\\/]/).pop()}</span>
         </div>
       {/if}
@@ -1901,17 +1907,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Position {comp.grounded ? '(locked)' : ''}</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={comp.transform.position[0]} step="1" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentPosition(0, v))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={comp.transform.position[1]} step="1" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentPosition(1, v))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={comp.transform.position[2]} step="1" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentPosition(2, v))} />
       </div>
@@ -1921,17 +1927,17 @@
     <div class="prop-section">
       <div class="prop-section-title">Rotation {comp.grounded ? '(locked)' : ''}</div>
       <div class="prop-row">
-        <label>X</label>
+        <span class="prop-label">X</span>
         <input type="number" value={comp.transform.rotation[0]} step="5" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentRotation(0, v))} />
       </div>
       <div class="prop-row">
-        <label>Y</label>
+        <span class="prop-label">Y</span>
         <input type="number" value={comp.transform.rotation[1]} step="5" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentRotation(1, v))} />
       </div>
       <div class="prop-row">
-        <label>Z</label>
+        <span class="prop-label">Z</span>
         <input type="number" value={comp.transform.rotation[2]} step="5" disabled={comp.grounded}
           oninput={(e) => numInput(e, (v) => updateComponentRotation(2, v))} />
       </div>
@@ -1941,19 +1947,19 @@
     <div class="prop-section">
       <div class="prop-section-title">Options</div>
       <div class="prop-row">
-        <label>Grounded</label>
+        <span class="prop-label">Grounded</span>
         <button class="toggle-btn" class:active={comp.grounded} onclick={toggleComponentGrounded}>
           {comp.grounded ? 'Yes' : 'No'}
         </button>
       </div>
       <div class="prop-row">
-        <label>Visible</label>
+        <span class="prop-label">Visible</span>
         <button class="toggle-btn" class:active={comp.visible} onclick={toggleComponentVisible}>
           {comp.visible ? 'Yes' : 'No'}
         </button>
       </div>
       <div class="prop-row">
-        <label>Color</label>
+        <span class="prop-label">Color</span>
         <input type="color" value={comp.color} oninput={updateComponentColor} class="color-picker" />
       </div>
     </div>
@@ -1983,11 +1989,11 @@
     <div class="prop-section">
       <div class="prop-section-title">Reference A</div>
       <div class="prop-row">
-        <label>Component</label>
+        <span class="prop-label">Component</span>
         <span class="prop-value">{componentStore.getComponentById(mate.ref1.componentId)?.name ?? '?'}</span>
       </div>
       <div class="prop-row">
-        <label>Face</label>
+        <span class="prop-label">Face</span>
         <span class="prop-value">{mate.ref1.faceSelector}</span>
       </div>
     </div>
@@ -1996,11 +2002,11 @@
     <div class="prop-section">
       <div class="prop-section-title">Reference B</div>
       <div class="prop-row">
-        <label>Component</label>
+        <span class="prop-label">Component</span>
         <span class="prop-value">{componentStore.getComponentById(mate.ref2.componentId)?.name ?? '?'}</span>
       </div>
       <div class="prop-row">
-        <label>Face</label>
+        <span class="prop-label">Face</span>
         <span class="prop-value">{mate.ref2.faceSelector}</span>
       </div>
     </div>
@@ -2010,7 +2016,7 @@
       <div class="prop-section">
         <div class="prop-section-title">Parameters</div>
         <div class="prop-row">
-          <label>Distance</label>
+          <span class="prop-label">Distance</span>
           <input type="number" value={mate.distance} step="1"
             oninput={(e) => numInput(e, (v) => updateMateDistance(v))} />
         </div>
@@ -2021,7 +2027,7 @@
       <div class="prop-section">
         <div class="prop-section-title">Parameters</div>
         <div class="prop-row">
-          <label>Angle</label>
+          <span class="prop-label">Angle</span>
           <input type="number" value={mate.angle} step="5"
             oninput={(e) => numInput(e, (v) => updateMateAngle(v))} />
         </div>
@@ -2032,7 +2038,7 @@
       <div class="prop-section">
         <div class="prop-section-title">Options</div>
         <div class="prop-row">
-          <label>Flipped</label>
+          <span class="prop-label">Flipped</span>
           <button class="toggle-btn" class:active={mate.flipped} onclick={toggleMateFlipped}>
             {mate.flipped ? 'Yes' : 'No'}
           </button>
@@ -2154,7 +2160,7 @@
     gap: 8px;
   }
 
-  .prop-row label {
+  .prop-row .prop-label {
     font-size: 11px;
     color: var(--text-secondary);
     width: 48px;

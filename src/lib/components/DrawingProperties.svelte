@@ -100,7 +100,7 @@
     <div class="section">
       <div class="section-header">Drawing</div>
       <div class="prop-row">
-        <label>Name</label>
+        <span class="prop-label">Name</span>
         <input
           type="text"
           class="prop-input"
@@ -109,7 +109,7 @@
         />
       </div>
       <div class="prop-row">
-        <label>Paper</label>
+        <span class="prop-label">Paper</span>
         <select
           class="prop-select"
           value={drawing.paperSize}
@@ -124,13 +124,13 @@
         </select>
       </div>
       <div class="prop-row">
-        <label>Orient</label>
+        <span class="prop-label">Orient</span>
         <button class="prop-btn" onclick={toggleOrientation}>
           {drawing.orientation === 'landscape' ? 'Landscape' : 'Portrait'}
         </button>
       </div>
       <div class="prop-row">
-        <label>Views</label>
+        <span class="prop-label">Views</span>
         <span class="prop-value">{drawing.views.length}</span>
       </div>
       <div class="prop-actions">
@@ -145,11 +145,11 @@
       <div class="section">
         <div class="section-header">Selected View</div>
         <div class="prop-row">
-          <label>Direction</label>
+          <span class="prop-label">Direction</span>
           <span class="prop-badge">{selectedView.direction}</span>
         </div>
         <div class="prop-row">
-          <label>Label</label>
+          <span class="prop-label">Label</span>
           <input
             type="text"
             class="prop-input"
@@ -158,7 +158,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>Scale</label>
+          <span class="prop-label">Scale</span>
           <input
             type="number"
             class="prop-input narrow"
@@ -169,7 +169,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>X</label>
+          <span class="prop-label">X</span>
           <input
             type="number"
             class="prop-input narrow"
@@ -177,7 +177,7 @@
             step="1"
             oninput={(e) => store.updateView(drawing.id, selectedView.id, { x: parseFloat((e.target as HTMLInputElement).value) || 0 })}
           />
-          <label>Y</label>
+          <span class="prop-label">Y</span>
           <input
             type="number"
             class="prop-input narrow"
@@ -187,7 +187,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>Hidden</label>
+          <span class="prop-label">Hidden</span>
           <input
             type="checkbox"
             checked={selectedView.showHidden}
@@ -210,15 +210,15 @@
       <div class="section">
         <div class="section-header">Selected Dimension</div>
         <div class="prop-row">
-          <label>Type</label>
+          <span class="prop-label">Type</span>
           <span class="prop-badge">{selectedDim.type}</span>
         </div>
         <div class="prop-row">
-          <label>Value</label>
+          <span class="prop-label">Value</span>
           <span class="prop-value">{selectedDim.value.toFixed(2)}</span>
         </div>
         <div class="prop-row">
-          <label>Text</label>
+          <span class="prop-label">Text</span>
           <input
             type="text"
             class="prop-input"
@@ -231,7 +231,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>Offset</label>
+          <span class="prop-label">Offset</span>
           <input
             type="number"
             class="prop-input narrow"
@@ -253,7 +253,7 @@
       <div class="section">
         <div class="section-header">Selected Note</div>
         <div class="prop-row">
-          <label>Text</label>
+          <span class="prop-label">Text</span>
           <input
             type="text"
             class="prop-input"
@@ -262,7 +262,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>Size</label>
+          <span class="prop-label">Size</span>
           <input
             type="number"
             class="prop-input narrow"
@@ -273,7 +273,7 @@
           />
         </div>
         <div class="prop-row">
-          <label>Bold</label>
+          <span class="prop-label">Bold</span>
           <input
             type="checkbox"
             checked={selectedNote.bold}
@@ -302,7 +302,7 @@
         ['company', 'Company'],
       ] as [field, label]}
         <div class="prop-row">
-          <label>{label}</label>
+          <span class="prop-label">{label}</span>
           <input
             type="text"
             class="prop-input"
@@ -369,7 +369,7 @@
     gap: 6px;
   }
 
-  .prop-row label {
+  .prop-row .prop-label {
     font-size: 11px;
     color: var(--text-secondary);
     width: 48px;
