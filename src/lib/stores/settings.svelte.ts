@@ -17,6 +17,7 @@ const defaultConfig: AppConfig = {
   snap_translate: 1,
   snap_rotation: 15,
   snap_sketch: 0.5,
+  enable_consensus: false,
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });

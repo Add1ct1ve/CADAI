@@ -32,6 +32,7 @@
   let ollamaUrl = $state('http://localhost:11434');
   let agentPreset = $state('default');
   let enableCodeReview = $state(true);
+  let enableConsensus = $state(false);
 
   // New settings
   let theme = $state<ThemeId>('dark');
@@ -66,6 +67,7 @@
       ollamaUrl = settings.config.ollama_base_url || 'http://localhost:11434';
       agentPreset = settings.config.agent_rules_preset || 'default';
       enableCodeReview = settings.config.enable_code_review ?? true;
+      enableConsensus = settings.config.enable_consensus ?? false;
       theme = (settings.config.theme as ThemeId) || 'dark';
       displayUnits = settings.config.display_units || 'mm';
       gridSize = settings.config.grid_size ?? 100;
@@ -136,6 +138,7 @@
       ollama_base_url: ollamaUrl || null,
       agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
       enable_code_review: enableCodeReview,
+      enable_consensus: enableConsensus,
       theme,
       display_units: displayUnits,
       grid_size: gridSize,
@@ -416,6 +419,17 @@
             Enable AI code review
           </label>
           <span class="form-hint">After generating code, the AI verifies it matches your request. Adds ~3s.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label-inline">
+            <input
+              type="checkbox"
+              bind:checked={enableConsensus}
+            />
+            Enable consensus mode
+          </label>
+          <span class="form-hint">Runs 2 generation attempts at different temperatures and picks the best result. Uses ~2x tokens.</span>
         </div>
       </div>
 

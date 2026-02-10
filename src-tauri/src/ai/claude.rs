@@ -17,6 +17,7 @@ pub struct ClaudeProvider {
     client: Client,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
 }
 
 impl ClaudeProvider {
@@ -25,7 +26,13 @@ impl ClaudeProvider {
             client: Client::new(),
             api_key,
             model,
+            temperature: None,
         }
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     /// Separate system messages from the conversation and build the request.
@@ -73,6 +80,8 @@ struct ClaudeRequest {
     system: Option<String>,
     messages: Vec<ClaudeMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +145,7 @@ impl AiProvider for ClaudeProvider {
             system,
             messages: claude_messages,
             stream: false,
+            temperature: self.temperature,
         };
 
         let response = self
@@ -193,6 +203,7 @@ impl AiProvider for ClaudeProvider {
             system,
             messages: claude_messages,
             stream: true,
+            temperature: self.temperature,
         };
 
         let response = self

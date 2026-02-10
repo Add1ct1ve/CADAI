@@ -15,6 +15,7 @@ pub struct GeminiProvider {
     client: Client,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
 }
 
 #[allow(dead_code)]
@@ -24,7 +25,13 @@ impl GeminiProvider {
             client: Client::new(),
             api_key,
             model,
+            temperature: None,
         }
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     fn generate_endpoint(&self) -> String {
@@ -74,9 +81,14 @@ impl GeminiProvider {
             })
         };
 
+        let generation_config = self.temperature.map(|t| GeminiGenerationConfig {
+            temperature: Some(t),
+        });
+
         GeminiRequest {
             contents,
             system_instruction,
+            generation_config,
         }
     }
 }
@@ -85,10 +97,19 @@ impl GeminiProvider {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct GeminiGenerationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<GeminiSystemInstruction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GeminiGenerationConfig>,
 }
 
 #[derive(Serialize)]

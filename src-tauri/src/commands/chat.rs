@@ -122,6 +122,92 @@ pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>,
     }
 }
 
+/// Create an AI provider with an explicit temperature setting.
+/// Used by consensus mode to run parallel generations at different temperatures.
+pub(crate) fn create_provider_with_temp(
+    config: &AppConfig,
+    temperature: Option<f32>,
+) -> Result<Box<dyn AiProvider>, AppError> {
+    match config.ai_provider.as_str() {
+        "openai" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("OpenAI API key not set".into()))?;
+            Ok(Box::new(
+                OpenAiProvider::new(api_key, config.model.clone(), config.openai_base_url.clone())
+                    .with_temperature(temperature),
+            ))
+        }
+        "deepseek" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("DeepSeek API key not set".into()))?;
+            Ok(Box::new(
+                OpenAiProvider::new(
+                    api_key,
+                    config.model.clone(),
+                    Some("https://api.deepseek.com/v1".to_string()),
+                )
+                .with_temperature(temperature),
+            ))
+        }
+        "qwen" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Qwen API key not set".into()))?;
+            Ok(Box::new(
+                OpenAiProvider::new(
+                    api_key,
+                    config.model.clone(),
+                    Some("https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string()),
+                )
+                .with_temperature(temperature),
+            ))
+        }
+        "kimi" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Kimi API key not set".into()))?;
+            Ok(Box::new(
+                OpenAiProvider::new(
+                    api_key,
+                    config.model.clone(),
+                    Some("https://api.moonshot.ai/v1".to_string()),
+                )
+                .with_temperature(temperature),
+            ))
+        }
+        "gemini" => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("Gemini API key not set".into()))?;
+            Ok(Box::new(
+                GeminiProvider::new(api_key, config.model.clone())
+                    .with_temperature(temperature),
+            ))
+        }
+        "ollama" => Ok(Box::new(
+            OllamaProvider::new(config.ollama_base_url.clone(), config.model.clone())
+                .with_temperature(temperature),
+        )),
+        _ => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| AppError::AiProviderError("API key not set".into()))?;
+            Ok(Box::new(
+                ClaudeProvider::new(api_key, config.model.clone())
+                    .with_temperature(temperature),
+            ))
+        }
+    }
+}
+
 /// Stream an AI response from the provider, forwarding deltas over the Tauri channel.
 /// Returns the fully accumulated response string and optional token usage.
 pub(crate) async fn stream_ai_response(

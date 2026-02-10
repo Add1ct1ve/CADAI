@@ -1,3 +1,4 @@
+pub mod consensus;
 pub mod context;
 pub mod design;
 pub mod executor;
