@@ -19,6 +19,7 @@ pub struct AgentRules {
     pub manufacturing: Option<serde_yaml::Value>,
     pub capabilities: Option<HashMap<String, Vec<String>>>,
     pub advanced_techniques: Option<HashMap<String, Vec<String>>>,
+    pub design_thinking: Option<HashMap<String, Vec<String>>>,
     pub response_format: Option<HashMap<String, Vec<String>>>,
     pub cookbook: Option<Vec<CookbookEntry>>,
 }
@@ -106,6 +107,7 @@ impl AgentRules {
             manufacturing: None,
             capabilities: None,
             advanced_techniques: None,
+            design_thinking: None,
             response_format: None,
             cookbook: None,
         }
@@ -230,24 +232,24 @@ mod tests {
     // ── Cookbook ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_default_cookbook_has_20_recipes() {
+    fn test_default_cookbook_has_48_recipes() {
         let rules = AgentRules::from_preset(None).unwrap();
         let cookbook = rules.cookbook.as_ref().unwrap();
-        assert_eq!(cookbook.len(), 20, "cookbook should have 20 recipes");
+        assert_eq!(cookbook.len(), 48, "cookbook should have 48 recipes");
     }
 
     #[test]
-    fn test_printing_cookbook_has_20_recipes() {
+    fn test_printing_cookbook_has_48_recipes() {
         let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
         let cookbook = rules.cookbook.as_ref().unwrap();
-        assert_eq!(cookbook.len(), 20, "printing cookbook should have 20 recipes");
+        assert_eq!(cookbook.len(), 48, "printing cookbook should have 48 recipes");
     }
 
     #[test]
-    fn test_cnc_cookbook_has_20_recipes() {
+    fn test_cnc_cookbook_has_48_recipes() {
         let rules = AgentRules::from_preset(Some("cnc")).unwrap();
         let cookbook = rules.cookbook.as_ref().unwrap();
-        assert_eq!(cookbook.len(), 20, "cnc cookbook should have 20 recipes");
+        assert_eq!(cookbook.len(), 48, "cnc cookbook should have 48 recipes");
     }
 
     #[test]
@@ -255,6 +257,7 @@ mod tests {
         let rules = AgentRules::from_preset(None).unwrap();
         let cookbook = rules.cookbook.as_ref().unwrap();
         let titles: Vec<&str> = cookbook.iter().map(|e| e.title.as_str()).collect();
+        // Original recipes
         assert!(titles.iter().any(|t| t.contains("Revolve")));
         assert!(titles.iter().any(|t| t.contains("Sweep")));
         assert!(titles.iter().any(|t| t.contains("Loft")));
@@ -264,6 +267,22 @@ mod tests {
         assert!(titles.iter().any(|t| t.contains("helmet")));
         assert!(titles.iter().any(|t| t.contains("Countersink")));
         assert!(titles.iter().any(|t| t.contains("Multi-body")));
+        // Phase 1.1 expanded recipes
+        assert!(titles.iter().any(|t| t.contains("Pipe elbow")));
+        assert!(titles.iter().any(|t| t.contains("T-junction")));
+        assert!(titles.iter().any(|t| t.contains("Hex bolt")));
+        assert!(titles.iter().any(|t| t.contains("spring")));
+        assert!(titles.iter().any(|t| t.contains("Bearing seat")));
+        assert!(titles.iter().any(|t| t.contains("Snap-fit")));
+        assert!(titles.iter().any(|t| t.contains("Dovetail")));
+        assert!(titles.iter().any(|t| t.contains("L-bracket")));
+        assert!(titles.iter().any(|t| t.contains("Spur gear")));
+        assert!(titles.iter().any(|t| t.contains("Pulley")));
+        assert!(titles.iter().any(|t| t.contains("hinge")));
+        assert!(titles.iter().any(|t| t.contains("Knurled")));
+        assert!(titles.iter().any(|t| t.contains("USB-C")));
+        assert!(titles.iter().any(|t| t.contains("Raspberry Pi")));
+        assert!(titles.iter().any(|t| t.contains("Keychain")));
     }
 
     #[test]
@@ -324,6 +343,7 @@ mod tests {
         let rules = AgentRules::default_empty();
         assert!(rules.capabilities.is_none());
         assert!(rules.advanced_techniques.is_none());
+        assert!(rules.design_thinking.is_none());
     }
 
     // ── Print-specific extras ──────────────────────────────────────────
@@ -336,6 +356,24 @@ mod tests {
         assert!(
             excels.iter().any(|e| e.contains("Print-ready")),
             "printing preset should mention print-ready models"
+        );
+    }
+
+    #[test]
+    fn test_default_has_design_thinking() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dt = rules.design_thinking.as_ref().unwrap();
+        assert!(
+            dt.contains_key("mandatory_before_code"),
+            "missing mandatory_before_code"
+        );
+        assert!(
+            dt.contains_key("for_organic_shapes"),
+            "missing for_organic_shapes"
+        );
+        assert!(
+            dt.contains_key("for_complex_objects"),
+            "missing for_complex_objects"
         );
     }
 

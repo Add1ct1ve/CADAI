@@ -310,6 +310,32 @@ advanced_techniques:
     - "Shell wall thickness must be >= 1.2mm for printability"
 
 # =============================================================================
+# DESIGN THINKING (mandatory pre-generation reasoning)
+# =============================================================================
+design_thinking:
+  mandatory_before_code:
+    - "Before writing ANY code, describe the object's geometry in plain English"
+    - "List each geometric feature and what CadQuery operation implements it"
+    - "Specify approximate dimensions and positions for each feature"
+    - "Plan the build sequence (what order to apply operations)"
+    - "Identify the base shape that everything else builds upon"
+
+  for_organic_shapes:
+    - "Describe the cross-section profile at multiple heights (bottom, middle, top)"
+    - "Use revolve() with spline/polyline profiles for axially symmetric parts"
+    - "Use loft() between profiles at different heights for varying shapes"
+    - "Apply generous fillets (3-8mm) to smooth sharp boolean transitions"
+    - "Accept approximation — describe what the closest buildable shape is"
+    - "For helmet/mask shapes: use loft between oval profiles, NOT just a sphere with cuts"
+
+  for_complex_objects:
+    - "Decompose into major sub-assemblies first (e.g. body, lid, handle)"
+    - "For each sub-assembly, identify the base shape and modifications"
+    - "Plan boolean operations: which parts get unioned, which get cut"
+    - "Verify each cut tool overlaps the target before writing code"
+    - "Think about what makes the object RECOGNIZABLE and prioritize those features"
+
+# =============================================================================
 # RESPONSE FORMAT
 # =============================================================================
 response_format:
@@ -723,3 +749,763 @@ cookbook:
       combined = base.union(pillar_l).union(pillar_r).union(bridge)
       # Apply fillets LAST after all booleans
       result = combined.edges("|Z").fillet(2.0)
+
+  - title: "Helmet shape via multi-height loft + boolean cuts"
+    description: "Build a helmet-like shape by lofting between oval profiles at different heights, then cutting visor and mouth openings. Much better than sphere + cuts."
+    code: |
+      import cadquery as cq
+
+      # Helmet dimensions
+      H_WIDTH = 180.0    # side to side
+      H_DEPTH = 220.0    # front to back
+      H_HEIGHT = 200.0   # bottom to top
+      WALL = 4.0
+
+      # Build helmet shell by lofting oval profiles at different heights
+      helmet = (
+          cq.Workplane("XY")
+          .ellipse(H_WIDTH / 2, H_DEPTH / 2)
+          .workplane(offset=H_HEIGHT * 0.4)
+          .ellipse(H_WIDTH / 2 * 1.05, H_DEPTH / 2 * 1.05)
+          .workplane(offset=H_HEIGHT * 0.35)
+          .ellipse(H_WIDTH / 2 * 0.85, H_DEPTH / 2 * 0.9)
+          .workplane(offset=H_HEIGHT * 0.25)
+          .ellipse(H_WIDTH / 2 * 0.4, H_DEPTH / 2 * 0.5)
+          .loft()
+      )
+      helmet = helmet.faces("<Z").shell(-WALL)
+
+      VISOR_W = 140.0
+      VISOR_H = 40.0
+      VISOR_Z = H_HEIGHT * 0.55
+      visor_cutter = (
+          cq.Workplane("XZ")
+          .center(0, VISOR_Z)
+          .rect(VISOR_W, VISOR_H)
+          .extrude(H_DEPTH)
+      )
+      helmet = helmet.cut(visor_cutter)
+
+      MOUTH_W = 60.0
+      MOUTH_H = 15.0
+      MOUTH_Z = H_HEIGHT * 0.3
+      mouth_cutter = (
+          cq.Workplane("XZ")
+          .center(0, MOUTH_Z)
+          .rect(MOUTH_W, MOUTH_H)
+          .extrude(H_DEPTH)
+      )
+      helmet = helmet.cut(mouth_cutter)
+      result = helmet.edges().fillet(2.0)
+
+  - title: "Ergonomic handle via revolve with spline profile"
+    description: "Create a grip/handle shape using revolve with a spline profile curve."
+    code: |
+      import cadquery as cq
+
+      PROFILE_PTS = [
+          (0, 0), (12, 0), (14, 10), (16, 30), (15, 50),
+          (12, 70), (8, 90), (10, 100), (10, 105), (0, 105),
+      ]
+
+      handle_profile = (
+          cq.Workplane("XZ")
+          .moveTo(*PROFILE_PTS[0])
+      )
+      handle_profile = handle_profile.spline(PROFILE_PTS[1:], includeCurrent=True)
+      handle_profile = handle_profile.close()
+      result = handle_profile.revolve(360, (0, 0, 0), (0, 0, 1))
+
+  - title: "Phone case using loft + shell + boolean cuts for ports"
+    description: "Build a phone case shape by lofting rounded rectangles, shelling, then cutting openings."
+    code: |
+      import cadquery as cq
+
+      PH_W = 75.0
+      PH_D = 155.0
+      PH_T = 10.0
+      WALL = 1.5
+      CORNER_R = 8.0
+
+      case_body = (
+          cq.Workplane("XY")
+          .rect(PH_W, PH_D)
+          .workplane(offset=PH_T)
+          .rect(PH_W + 1.0, PH_D + 1.0)
+          .loft()
+          .edges("|Z")
+          .fillet(CORNER_R)
+      )
+      case_body = case_body.faces(">Z").shell(-WALL)
+
+      CAM_X = -PH_W / 2 + 20.0
+      CAM_Y = PH_D / 2 - 25.0
+      cam_cutter = (
+          cq.Workplane("XY")
+          .center(CAM_X, CAM_Y)
+          .rect(30.0, 35.0)
+          .extrude(-WALL * 2)
+      )
+      case_body = case_body.cut(cam_cutter)
+
+      port_cutter = (
+          cq.Workplane("XZ")
+          .workplane(offset=-PH_D / 2)
+          .rect(15.0, 5.0)
+          .extrude(-WALL * 2)
+      )
+      result = case_body.cut(port_cutter)
+
+  # --- Phase 1.1: Expanded Recipes (25 new) ---
+
+  # A. Plumbing & Fluid
+
+  - title: "Pipe elbow (90-degree swept bend)"
+    description: "Sweep a circular profile along a 90-degree arc to create a pipe elbow"
+    code: |
+      import cadquery as cq
+      PIPE_OD = 20.0
+      PIPE_WALL = 2.0
+      BEND_R = 40.0  # center-line bend radius
+      # 90-degree arc path in XZ plane
+      path = (
+          cq.Workplane("XZ")
+          .radiusArc((BEND_R, BEND_R), -BEND_R)
+          .wire()
+      )
+      # Sweep annular profile (outer - inner circle)
+      result = (
+          cq.Workplane("XY")
+          .circle(PIPE_OD / 2)
+          .circle(PIPE_OD / 2 - PIPE_WALL)
+          .sweep(path)
+      )
+
+  - title: "Pipe T-junction"
+    description: "Create a hollow T-junction from outer and inner cylinder booleans (shell on complex unions is unreliable)"
+    code: |
+      import cadquery as cq
+      OD = 20.0
+      WALL = 2.0
+      ID = OD - 2 * WALL
+      LENGTH = 60.0
+      BRANCH_L = 40.0
+      # Outer solid T-shape
+      main_outer = cq.Workplane("XY").circle(OD / 2).extrude(LENGTH).translate((0, 0, -LENGTH / 2))
+      branch_outer = cq.Workplane("XZ").circle(OD / 2).extrude(BRANCH_L)
+      outer = main_outer.union(branch_outer)
+      # Inner void T-shape (slightly longer to ensure clean cut)
+      main_inner = cq.Workplane("XY").circle(ID / 2).extrude(LENGTH + 2).translate((0, 0, -LENGTH / 2 - 1))
+      branch_inner = cq.Workplane("XZ").circle(ID / 2).extrude(BRANCH_L + 1)
+      inner = main_inner.union(branch_inner)
+      result = outer.cut(inner)
+
+  # B. Fasteners & Hardware
+
+  - title: "Hex bolt (simplified, no threads)"
+    description: "Hex head polygon extruded + cylindrical shaft with chamfered tip. No real threads — helix sweep is unreliable in CadQuery."
+    code: |
+      import cadquery as cq
+      # M8 approximate dimensions
+      HEAD_AF = 13.0   # across-flats (wrench size)
+      HEAD_H = 5.3
+      SHAFT_D = 8.0
+      SHAFT_L = 30.0
+      # Hex head: inscribed polygon (6 sides)
+      head = (
+          cq.Workplane("XY")
+          .polygon(6, HEAD_AF)
+          .extrude(HEAD_H)
+      )
+      # Shaft below head
+      shaft = (
+          cq.Workplane("XY")
+          .circle(SHAFT_D / 2)
+          .extrude(-SHAFT_L)
+      )
+      result = (
+          head.union(shaft)
+          .edges("<Z")
+          .chamfer(0.8)
+      )
+
+  - title: "Compression spring (helix sweep)"
+    description: "Sweep a small circle along a helix path to create a compression spring"
+    code: |
+      import cadquery as cq
+      WIRE_DIA = 2.0
+      COIL_OD = 20.0
+      PITCH = 6.0
+      N_COILS = 5
+      HEIGHT = PITCH * N_COILS
+      COIL_R = (COIL_OD - WIRE_DIA) / 2
+      # Create helix path
+      helix = cq.Wire.makeHelix(PITCH, HEIGHT, COIL_R)
+      # Sweep wire cross-section along helix
+      result = (
+          cq.Workplane("XZ")
+          .center(COIL_R, 0)
+          .circle(WIRE_DIA / 2)
+          .sweep(helix, isFrenet=True)
+      )
+
+  - title: "Standoff / spacer with hex base"
+    description: "Hex base polygon + hollow cylindrical body + through-hole for a screw"
+    code: |
+      import cadquery as cq
+      HEX_AF = 8.0     # across-flats
+      HEX_H = 3.0
+      BODY_OD = 6.0
+      BODY_H = 10.0
+      BORE_D = 3.2     # M3 clearance
+      # Hex base
+      base = cq.Workplane("XY").polygon(6, HEX_AF).extrude(HEX_H)
+      # Round body on top
+      body = cq.Workplane("XY").workplane(offset=HEX_H).circle(BODY_OD / 2).extrude(BODY_H)
+      # Union, then drill through-hole
+      result = (
+          base.union(body)
+          .faces(">Z").workplane()
+          .hole(BORE_D)
+      )
+
+  - title: "Bearing seat (revolved stepped bore)"
+    description: "Revolve a stepped bore profile with shoulder and snap-ring groove for a bearing housing"
+    code: |
+      import cadquery as cq
+      # Profile (half cross-section) for revolve around Z axis
+      # OD=40, bearing bore=22, shoulder, snap-ring groove
+      pts = [
+          (0, 0), (20, 0), (20, 5),           # bottom flange
+          (16, 5), (16, 8),                     # step to bore
+          (11, 8), (11, 25),                    # bearing bore wall
+          (12, 25), (12, 27), (11, 27),         # snap-ring groove
+          (11, 30), (20, 30), (20, 35),         # top flange
+          (0, 35),                              # top center
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .polyline(pts)
+          .close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+
+  # C. Joints & Connections
+
+  - title: "Snap-fit hook (cantilever with barb)"
+    description: "A cantilever arm with an angled barb tip, extruded from a polyline profile"
+    code: |
+      import cadquery as cq
+      ARM_L = 15.0
+      ARM_T = 1.5
+      ARM_W = 5.0
+      BARB_H = 2.0
+      BARB_ANGLE_RUN = 1.5  # horizontal run of barb slope
+      BASE_H = 5.0
+      # Side profile of snap-fit hook (XZ plane)
+      pts = [
+          (0, 0), (ARM_T, 0), (ARM_T, BASE_H),         # base block
+          (ARM_T, BASE_H + ARM_L),                       # arm tip
+          (ARM_T + BARB_ANGLE_RUN, BASE_H + ARM_L + BARB_H),  # barb peak
+          (ARM_T, BASE_H + ARM_L + BARB_H),             # barb inner
+          (0, BASE_H + ARM_L + BARB_H),                 # back of barb
+          (0, BASE_H),                                   # back to base top
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .polyline(pts)
+          .close()
+          .extrude(ARM_W)
+      )
+
+  - title: "Snap-fit clip (U-shaped with detent bumps)"
+    description: "U-shaped clip body with small detent bumps on inner arms for push-fit retention"
+    code: |
+      import cadquery as cq
+      W = 12.0      # overall width
+      H = 15.0      # arm height
+      T = 1.5       # wall thickness
+      GAP = 6.0     # inner gap
+      DEPTH = 8.0   # extrusion depth
+      BUMP_R = 0.8
+      # U-shape profile
+      pts = [
+          (0, 0), (W, 0), (W, H),
+          (W - T, H), (W - T, T), (T, T),
+          (T, H), (0, H),
+      ]
+      clip = (
+          cq.Workplane("XZ")
+          .polyline(pts)
+          .close()
+          .extrude(DEPTH)
+      )
+      # Add detent bumps on inner faces of arms
+      bump_l = cq.Workplane("XY").workplane(offset=H * 0.7).center(T, DEPTH / 2).sphere(BUMP_R)
+      bump_r = cq.Workplane("XY").workplane(offset=H * 0.7).center(W - T, DEPTH / 2).sphere(BUMP_R)
+      result = clip.union(bump_l).union(bump_r)
+
+  - title: "Dovetail joint (male and female pieces)"
+    description: "Trapezoidal male dovetail piece and matching female block with trapezoidal cutout"
+    code: |
+      import cadquery as cq
+      # Dovetail cross-section (trapezoid)
+      BASE_W = 10.0
+      TOP_W = 14.0
+      DT_H = 8.0
+      LENGTH = 40.0
+      BLOCK = 30.0
+      # Male dovetail piece
+      tail_pts = [
+          (-BASE_W / 2, 0), (BASE_W / 2, 0),
+          (TOP_W / 2, DT_H), (-TOP_W / 2, DT_H),
+      ]
+      male = (
+          cq.Workplane("XZ")
+          .polyline(tail_pts).close()
+          .extrude(LENGTH)
+      )
+      # Female piece: block with dovetail slot cut through
+      block = cq.Workplane("XY").box(BLOCK, LENGTH, BLOCK)
+      slot_cutter = (
+          cq.Workplane("XZ")
+          .polyline(tail_pts).close()
+          .extrude(LENGTH * 1.1)
+          .translate((0, -LENGTH * 0.05, 0))
+      )
+      female = block.cut(slot_cutter)
+      # Return male piece (change to female if needed)
+      result = male
+
+  - title: "Finger joint (box joint)"
+    description: "Two interlocking boards with rectangular finger tabs cut in a loop"
+    code: |
+      import cadquery as cq
+      BOARD_W = 60.0
+      BOARD_H = 40.0
+      BOARD_T = 5.0
+      N_FINGERS = 5
+      FINGER_W = BOARD_W / (N_FINGERS * 2 + 1)
+      # Board A: fingers at even positions
+      board_a = cq.Workplane("XY").box(BOARD_W, BOARD_T, BOARD_H)
+      for i in range(N_FINGERS):
+          x_pos = -BOARD_W / 2 + FINGER_W * (2 * i + 1) + FINGER_W / 2
+          cutter = (
+              cq.Workplane("XY")
+              .center(x_pos, 0)
+              .rect(FINGER_W, BOARD_T * 2)
+              .extrude(BOARD_T)
+              .translate((0, 0, -BOARD_T / 2))
+          )
+          board_a = board_a.cut(cutter)
+      result = board_a
+
+  # D. Brackets & Structural
+
+  - title: "L-bracket with gusset and mounting holes"
+    description: "L-profile from polyline extrude, triangular gusset for stiffness, and mounting holes"
+    code: |
+      import cadquery as cq
+      W = 40.0      # width (extrusion)
+      LEG = 50.0    # leg lengths
+      T = 4.0       # thickness
+      HOLE_D = 5.5  # M5 clearance
+      # L-profile
+      l_pts = [
+          (0, 0), (LEG, 0), (LEG, T),
+          (T, T), (T, LEG), (0, LEG),
+      ]
+      bracket = cq.Workplane("XZ").polyline(l_pts).close().extrude(W)
+      # Triangular gusset
+      gusset_pts = [(T, T), (T + 15, T), (T, T + 15)]
+      gusset = (
+          cq.Workplane("XZ").polyline(gusset_pts).close()
+          .extrude(W * 0.3).translate((0, W * 0.35, 0))
+      )
+      bracket = bracket.union(gusset)
+      # Mounting holes on horizontal leg
+      bracket = (
+          bracket.faces("<Z").workplane()
+          .pushPoints([(20, W / 2 - 10), (40, W / 2 - 10)])
+          .hole(HOLE_D)
+      )
+      result = bracket
+
+  - title: "Shelf bracket (triangular plate with fillet)"
+    description: "Triangular bracket plate from polyline profile with fillet and two mounting holes"
+    code: |
+      import cadquery as cq
+      ARM_H = 80.0   # vertical arm
+      ARM_W = 60.0   # horizontal arm
+      T = 5.0         # thickness
+      HOLE_D = 6.0
+      FILLET_R = 15.0
+      # Triangular profile
+      pts = [(0, 0), (ARM_W, 0), (0, ARM_H)]
+      bracket = (
+          cq.Workplane("XZ")
+          .polyline(pts).close()
+          .extrude(T)
+      )
+      # Fillet the hypotenuse edge (longest edge at mid-height)
+      bracket = bracket.edges("|Y").fillet(FILLET_R)
+      # Mounting holes on the vertical leg
+      result = (
+          bracket.faces("<X").workplane()
+          .pushPoints([(T / 2, 15), (T / 2, ARM_H - 15)])
+          .hole(HOLE_D)
+      )
+
+  # E. Enclosures & Cases
+
+  - title: "Electronics enclosure with standoffs"
+    description: "Rectangular box with shell, corner standoff cylinders, and screw holes"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 60.0, 30.0
+      WALL = 2.0
+      STANDOFF_D = 6.0
+      STANDOFF_H = 5.0
+      SCREW_D = 2.5   # M2.5
+      # Shell the box
+      enclosure = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .shell(-WALL)
+      )
+      # Corner standoff positions (inset from corners)
+      INSET = 6.0
+      corners = [
+          (W / 2 - INSET, D / 2 - INSET),
+          (-W / 2 + INSET, D / 2 - INSET),
+          (W / 2 - INSET, -D / 2 + INSET),
+          (-W / 2 + INSET, -D / 2 + INSET),
+      ]
+      # Add standoff cylinders on inside floor
+      standoffs = cq.Workplane("XY").workplane(offset=WALL)
+      for cx, cy in corners:
+          post = cq.Workplane("XY").workplane(offset=WALL).center(cx, cy).circle(STANDOFF_D / 2).extrude(STANDOFF_H)
+          enclosure = enclosure.union(post)
+      # Drill screw holes through standoffs
+      result = (
+          enclosure.faces(">Z").workplane(offset=-H + WALL + STANDOFF_H)
+          .pushPoints(corners)
+          .hole(SCREW_D)
+      )
+
+  - title: "Raspberry Pi case (real dimensions)"
+    description: "92x63x25mm case with shell, USB-C / HDMI / SD card cutouts, and standoffs at Pi mounting holes"
+    code: |
+      import cadquery as cq
+      # Pi 5 approximate board + case dims
+      W, D, H = 92.0, 63.0, 25.0
+      WALL = 2.0
+      # Standoff positions (Pi mounting holes, relative to center)
+      MOUNTS = [(24.5, 24.5), (-24.5, 24.5), (24.5, -24.5), (-24.5, -24.5)]
+      case = (
+          cq.Workplane("XY").box(W, D, H)
+          .edges("|Z").fillet(3.0)
+          .faces(">Z").shell(-WALL)
+      )
+      # Add standoffs
+      for mx, my in MOUNTS:
+          post = cq.Workplane("XY").workplane(offset=WALL).center(mx, my).circle(3.0).extrude(4.0)
+          case = case.union(post)
+      # USB-C cutout on front face
+      case = case.faces(">X").workplane().center(0, -3).rect(9.0, 3.5).cutBlind(-WALL * 2)
+      # Micro-HDMI cutout
+      case = case.faces(">X").workplane().center(-15, -3).rect(7.5, 3.5).cutBlind(-WALL * 2)
+      # SD card slot on left side
+      case = case.faces("<Y").workplane().center(10, -3).rect(14.0, 2.5).cutBlind(-WALL * 2)
+      result = case
+
+  - title: "Battery holder (AA size)"
+    description: "Rectangular cavity sized for AA battery with end clips and terminal contact slots"
+    code: |
+      import cadquery as cq
+      # AA battery: 14.5mm dia x 50.5mm length
+      BAT_D = 14.5
+      BAT_L = 50.5
+      WALL = 2.0
+      CLIP_T = 1.0
+      CLIP_H = 8.0
+      SLOT_W = 4.0
+      # Outer box around battery
+      OW = BAT_D + WALL * 2
+      OD = BAT_L + WALL * 2 + 4.0  # extra for spring contact
+      OH = BAT_D / 2 + WALL + 2.0
+      holder = cq.Workplane("XY").box(OW, OD, OH)
+      # Cavity for battery (cylindrical)
+      cavity = (
+          cq.Workplane("YZ")
+          .center(0, WALL + BAT_D / 2)
+          .circle(BAT_D / 2 + 0.3)  # clearance
+          .extrude(BAT_L + 2.0)
+          .translate((0, -BAT_L / 2 - 1.0, 0))
+      )
+      holder = holder.cut(cavity)
+      # Terminal slots on both ends
+      slot1 = cq.Workplane("XY").box(SLOT_W, WALL * 2, CLIP_H).translate((0, OD / 2, CLIP_H / 2))
+      slot2 = cq.Workplane("XY").box(SLOT_W, WALL * 2, CLIP_H).translate((0, -OD / 2, CLIP_H / 2))
+      result = holder.cut(slot1).cut(slot2)
+
+  # F. Rotational Parts
+
+  - title: "Spur gear (simplified involute)"
+    description: "Simplified spur gear with 12 teeth using polyline tooth profile and polarArray, plus center bore"
+    code: |
+      import cadquery as cq
+      import math
+      N_TEETH = 12
+      MODULE = 2.5
+      FACE_W = 8.0
+      BORE_D = 10.0
+      PD = MODULE * N_TEETH       # pitch diameter
+      OD = PD + 2 * MODULE        # outer diameter
+      RD = PD - 2.5 * MODULE      # root diameter
+      TOOTH_ARC = 360.0 / N_TEETH
+      HALF_T = TOOTH_ARC / 4      # half tooth angular width in degrees
+      # Build a single tooth profile (simplified trapezoidal)
+      r_root = RD / 2
+      r_pitch = PD / 2
+      r_tip = OD / 2
+      a = math.radians(HALF_T)
+      tooth_pts = [
+          (r_root * math.cos(-a * 1.2), r_root * math.sin(-a * 1.2)),
+          (r_tip * math.cos(-a * 0.4), r_tip * math.sin(-a * 0.4)),
+          (r_tip * math.cos(a * 0.4), r_tip * math.sin(a * 0.4)),
+          (r_root * math.cos(a * 1.2), r_root * math.sin(a * 1.2)),
+      ]
+      # Root circle disc
+      gear = cq.Workplane("XY").circle(r_root).extrude(FACE_W)
+      # Add one tooth and pattern it
+      tooth = cq.Workplane("XY").polyline(tooth_pts).close().extrude(FACE_W)
+      for i in range(N_TEETH):
+          angle = i * TOOTH_ARC
+          rotated = tooth.rotate((0, 0, 0), (0, 0, 1), angle)
+          gear = gear.union(rotated)
+      # Center bore
+      result = gear.faces(">Z").workplane().hole(BORE_D)
+
+  - title: "Pulley wheel (revolve with V-groove)"
+    description: "Revolve a profile with a V-groove to create a pulley wheel with center bore"
+    code: |
+      import cadquery as cq
+      OD = 50.0
+      W = 15.0
+      GROOVE_D = 8.0
+      GROOVE_ANGLE_W = 6.0
+      BORE_D = 10.0
+      HUB_D = 20.0
+      # Half cross-section profile for revolve
+      pts = [
+          (BORE_D / 2, 0), (OD / 2, 0), (OD / 2, W * 0.3),
+          (OD / 2 - GROOVE_D, W / 2),  # groove bottom
+          (OD / 2, W * 0.7), (OD / 2, W),
+          (BORE_D / 2, W),
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .polyline(pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+          .faces(">Z").workplane()
+          .hole(BORE_D)
+      )
+
+  - title: "Cam profile (eccentric revolve)"
+    description: "Revolve an eccentric profile to create a cam with shaft bore"
+    code: |
+      import cadquery as cq
+      CAM_R = 25.0    # max radius
+      CAM_MIN = 15.0  # min radius
+      THICKNESS = 10.0
+      BORE_D = 8.0
+      # Build cam using offset circle (eccentric disc)
+      ECCENTRICITY = (CAM_R - CAM_MIN) / 2
+      MEAN_R = (CAM_R + CAM_MIN) / 2
+      cam = (
+          cq.Workplane("XY")
+          .center(ECCENTRICITY, 0)
+          .circle(MEAN_R)
+          .extrude(THICKNESS)
+      )
+      # Bore at true center (0,0)
+      bore = cq.Workplane("XY").circle(BORE_D / 2).extrude(THICKNESS)
+      result = cam.cut(bore)
+
+  # G. Hinge & Flexure
+
+  - title: "Pin hinge (two plates with knuckles)"
+    description: "Two plates with alternating cylinder knuckles (3 total) sharing a common pin hole"
+    code: |
+      import cadquery as cq
+      PLATE_W = 30.0
+      PLATE_L = 40.0
+      PLATE_T = 3.0
+      KNUCKLE_R = 4.0
+      KNUCKLE_L = 10.0
+      PIN_D = 3.0
+      # Left plate with 2 knuckles at positions 0 and 2
+      plate_l = cq.Workplane("XY").box(PLATE_W, PLATE_L, PLATE_T)
+      for i in [0, 2]:
+          k = (
+              cq.Workplane("XZ")
+              .workplane(offset=PLATE_L / 2)
+              .center(0, PLATE_T)
+              .circle(KNUCKLE_R)
+              .extrude(KNUCKLE_L)
+              .translate((0, -i * KNUCKLE_L, 0))
+          )
+          plate_l = plate_l.union(k)
+      # Right plate with 1 knuckle at position 1
+      plate_r = cq.Workplane("XY").box(PLATE_W, PLATE_L, PLATE_T).translate((PLATE_W + 2, 0, 0))
+      k_mid = (
+          cq.Workplane("XZ")
+          .workplane(offset=PLATE_L / 2)
+          .center(0, PLATE_T)
+          .circle(KNUCKLE_R)
+          .extrude(KNUCKLE_L)
+          .translate((PLATE_W + 2, -KNUCKLE_L, 0))
+      )
+      plate_r = plate_r.union(k_mid)
+      # Return left plate (both plates shown separately)
+      result = plate_l
+
+  - title: "Living hinge (thin flexure bridge)"
+    description: "Two rigid blocks connected by a thin (0.4mm) flexure bridge for fold-over hinge"
+    code: |
+      import cadquery as cq
+      BLOCK_W = 40.0
+      BLOCK_D = 30.0
+      BLOCK_H = 5.0
+      HINGE_T = 0.4    # thin flex section
+      HINGE_L = 2.0    # length of flex zone
+      GAP = HINGE_L
+      # Left block
+      left = cq.Workplane("XY").box(BLOCK_W, BLOCK_D, BLOCK_H)
+      # Right block offset by gap
+      right = cq.Workplane("XY").box(BLOCK_W, BLOCK_D, BLOCK_H).translate((BLOCK_W + GAP, 0, 0))
+      # Thin bridge connecting them at top surface
+      bridge = (
+          cq.Workplane("XY")
+          .workplane(offset=BLOCK_H / 2 - HINGE_T)
+          .center(BLOCK_W / 2 + GAP / 2, 0)
+          .rect(GAP + 2, BLOCK_D)
+          .extrude(HINGE_T)
+      )
+      result = left.union(right).union(bridge)
+
+  # H. Surface Features & Cutouts
+
+  - title: "Knurled grip (simplified circumferential grooves)"
+    description: "Cylinder with circumferential V-grooves via polarArray of small cuts for grip texture"
+    code: |
+      import cadquery as cq
+      GRIP_D = 25.0
+      GRIP_H = 40.0
+      N_GROOVES = 24
+      GROOVE_DEPTH = 1.0
+      GROOVE_W = 1.5
+      # Solid cylinder
+      grip = cq.Workplane("XY").circle(GRIP_D / 2).extrude(GRIP_H)
+      # Cut vertical grooves arranged radially
+      groove = (
+          cq.Workplane("XY")
+          .center(GRIP_D / 2, 0)
+          .rect(GROOVE_DEPTH * 2, GROOVE_W)
+          .extrude(GRIP_H)
+      )
+      for i in range(N_GROOVES):
+          angle = i * (360.0 / N_GROOVES)
+          rotated = groove.rotate((0, 0, 0), (0, 0, 1), angle)
+          grip = grip.cut(rotated)
+      result = grip
+
+  - title: "USB-C port cutout"
+    description: "Panel plate with a USB-C shaped rounded-rectangle cutout (8.94 x 3.26mm, R=1.0)"
+    code: |
+      import cadquery as cq
+      PANEL_W = 40.0
+      PANEL_H = 30.0
+      PANEL_T = 2.0
+      USB_W = 8.94
+      USB_H = 3.26
+      USB_R = 1.0  # corner radius
+      result = (
+          cq.Workplane("XY")
+          .box(PANEL_W, PANEL_H, PANEL_T)
+          .faces(">Z").workplane()
+          .slot2D(USB_W, USB_H)
+          .cutThruAll()
+      )
+
+  - title: "D-sub connector cutout (DE-9)"
+    description: "Panel plate with trapezoidal D-sub cutout using real DE-9 dimensions (17.7 x 10.0mm)"
+    code: |
+      import cadquery as cq
+      PANEL_W = 50.0
+      PANEL_H = 30.0
+      PANEL_T = 2.0
+      # DE-9 D-sub approximate outline (trapezoidal)
+      TOP_W = 16.0
+      BOT_W = 12.5
+      D_H = 10.0
+      # Trapezoidal cutout profile
+      trap_pts = [
+          (-BOT_W / 2, -D_H / 2),
+          (BOT_W / 2, -D_H / 2),
+          (TOP_W / 2, D_H / 2),
+          (-TOP_W / 2, D_H / 2),
+      ]
+      panel = cq.Workplane("XY").box(PANEL_W, PANEL_H, PANEL_T)
+      cutout = (
+          cq.Workplane("XY")
+          .workplane(offset=PANEL_T)
+          .polyline(trap_pts).close()
+          .extrude(-PANEL_T * 2)
+      )
+      result = panel.cut(cutout)
+
+  # I. Small Items
+
+  - title: "Cable gland / grommet (revolved stepped profile)"
+    description: "Revolve a stepped profile to create a cable gland with flange, body, and bore"
+    code: |
+      import cadquery as cq
+      # Profile: flange + body + thread-like steps
+      BORE_R = 4.0
+      BODY_R = 8.0
+      FLANGE_R = 12.0
+      pts = [
+          (BORE_R, 0), (FLANGE_R, 0), (FLANGE_R, 3),   # flange
+          (BODY_R, 3), (BODY_R, 7),                      # neck
+          (BODY_R + 1, 7), (BODY_R + 1, 9),              # step/ridge
+          (BODY_R, 9), (BODY_R, 18),                     # body
+          (BORE_R, 18),                                   # top bore
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .polyline(pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+
+  - title: "Keychain tag (rounded plate + text + ring hole)"
+    description: "Rounded rectangle plate with embossed text and a ring attachment hole"
+    code: |
+      import cadquery as cq
+      TAG_W = 50.0
+      TAG_H = 25.0
+      TAG_T = 3.0
+      CORNER_R = 5.0
+      RING_HOLE_D = 5.0
+      tag = (
+          cq.Workplane("XY")
+          .rect(TAG_W, TAG_H)
+          .extrude(TAG_T)
+          .edges("|Z").fillet(CORNER_R)
+      )
+      # Ring hole on one end
+      tag = tag.faces(">Z").workplane().center(-TAG_W / 2 + 8, 0).hole(RING_HOLE_D)
+      # Text on top face
+      result = tag.faces(">Z").workplane().center(5, 0).text("TAG", 8.0, 0.5)
