@@ -217,6 +217,12 @@ export class ViewportEngine {
     this.renderer.autoClear = true;
   };
 
+  // ─── Public API: ViewHelper ─────────────────────────
+
+  handleViewHelperClick(event: PointerEvent): boolean {
+    return this.viewHelper.handleClick(event);
+  }
+
   // ─── Public API: Camera ──────────────────────────
 
   getCamera(): THREE.PerspectiveCamera {

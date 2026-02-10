@@ -784,6 +784,10 @@
 
   function handlePointerDown(e: PointerEvent) {
     if (!engine) return;
+
+    // Let the axis gizmo consume the click if it was hit
+    if (engine.handleViewHelperClick(e)) return;
+
     // Only handle left-click
     if (e.button !== 0) return;
 
