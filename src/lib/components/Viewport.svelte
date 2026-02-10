@@ -733,9 +733,10 @@
 
     // Update ghost position when placing a primitive
     if (tools.isAddTool) {
-      const gridPos = engine.getGridIntersection(e);
-      if (gridPos) {
-        engine.updateGhostPosition(gridPos);
+      const primitiveType = tools.activeTool.replace('add-', '') as PrimitiveType;
+      const placement = engine.getAddPlacement(e, primitiveType);
+      if (placement) {
+        engine.updateGhostPosition(placement.cadPosition);
       }
     }
 
@@ -1035,12 +1036,11 @@
     // Adding a primitive
     if (activeTool.startsWith('add-')) {
       const primitiveType = activeTool.replace('add-', '') as PrimitiveType;
-      const gridPos = engine.getGridIntersection(e);
-      if (gridPos) {
+      const placement = engine.getAddPlacement(e, primitiveType);
+      if (placement) {
         history.pushSnapshot(captureFullSnapshot());
-        const obj = scene.addObject(primitiveType, gridPos);
+        const obj = scene.addObject(primitiveType, placement.cadPosition);
         scene.select(obj.id);
-        tools.revertToSelect();
         triggerPipeline();
       }
       return;
@@ -1136,6 +1136,15 @@
     }
   }
 
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return;
+    if (sketchStore.isInSketchMode) return;
+    if (!tools.isAddTool) return;
+
+    tools.setTool('select');
+    constraintStatusMessage = '';
+  }
+
   // Sketch tool hint text
   const sketchToolHints: Record<string, string> = {
     'sketch-select': 'Click to select entities, Shift+click for multi-select',
@@ -1160,6 +1169,8 @@
     'sketch-op-chamfer': 'Select 2 connected lines, then enter chamfer distance',
   };
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div
   class="viewport-container"
@@ -1203,7 +1214,7 @@
     </div>
   {:else if tools.isAddTool && !sketchStore.isInSketchMode}
     <div class="tool-hint">
-      Click on the grid to place {tools.activeTool.replace('add-', '')}
+      Click to place {tools.activeTool.replace('add-', '')} on a surface (or grid fallback). Press Esc to return to Select.
     </div>
   {/if}
 

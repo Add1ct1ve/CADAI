@@ -287,6 +287,7 @@
             />
           </div>
         </div>
+        <span class="form-hint">3D add placement now snaps to object surfaces first, then falls back to the grid when no surface is hit.</span>
 
         <button
           class="shortcuts-btn"
