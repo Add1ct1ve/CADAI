@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
 use crate::ai::streaming::parse_sse_events;
 use crate::error::AppError;
 
@@ -85,6 +85,13 @@ struct ClaudeMessage {
 #[allow(dead_code)]
 struct ClaudeResponse {
     content: Vec<ClaudeContentBlock>,
+    usage: Option<ClaudeUsage>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeUsage {
+    input_tokens: u32,
+    output_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +106,8 @@ struct ClaudeSSEEvent {
     #[serde(rename = "type")]
     event_type: String,
     delta: Option<ClaudeDelta>,
+    message: Option<ClaudeMessageStart>,
+    usage: Option<ClaudeStreamEndUsage>,
 }
 
 #[derive(Deserialize)]
@@ -106,9 +115,19 @@ struct ClaudeDelta {
     text: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ClaudeMessageStart {
+    usage: Option<ClaudeUsage>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeStreamEndUsage {
+    output_tokens: Option<u32>,
+}
+
 #[async_trait]
 impl AiProvider for ClaudeProvider {
-    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
         let (system, claude_messages) = self.build_request(messages, false);
 
         let body = ClaudeRequest {
@@ -153,14 +172,19 @@ impl AiProvider for ClaudeProvider {
             .and_then(|b| b.text.clone())
             .unwrap_or_default();
 
-        Ok(text)
+        let usage = resp.usage.map(|u| TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        });
+
+        Ok((text, usage))
     }
 
     async fn stream(
         &self,
         messages: &[ChatMessage],
         tx: mpsc::Sender<StreamDelta>,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<TokenUsage>, AppError> {
         let (system, claude_messages) = self.build_request(messages, true);
 
         let body = ClaudeRequest {
@@ -196,6 +220,8 @@ impl AiProvider for ClaudeProvider {
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut tracked_usage = TokenUsage::default();
+        let mut has_usage = false;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk = chunk_result.map_err(|e| {
@@ -214,6 +240,15 @@ impl AiProvider for ClaudeProvider {
                 for event_data in events {
                     if let Ok(sse_event) = serde_json::from_str::<ClaudeSSEEvent>(&event_data) {
                         match sse_event.event_type.as_str() {
+                            "message_start" => {
+                                // Capture input_tokens from message_start event
+                                if let Some(msg) = sse_event.message {
+                                    if let Some(u) = msg.usage {
+                                        tracked_usage.input_tokens = u.input_tokens;
+                                        has_usage = true;
+                                    }
+                                }
+                            }
                             "content_block_delta" => {
                                 if let Some(delta) = sse_event.delta {
                                     if let Some(text) = delta.text {
@@ -226,6 +261,15 @@ impl AiProvider for ClaudeProvider {
                                     }
                                 }
                             }
+                            "message_delta" => {
+                                // Capture output_tokens from message_delta event
+                                if let Some(u) = sse_event.usage {
+                                    if let Some(output) = u.output_tokens {
+                                        tracked_usage.output_tokens = output;
+                                        has_usage = true;
+                                    }
+                                }
+                            }
                             "message_stop" => {
                                 let _ = tx
                                     .send(StreamDelta {
@@ -235,7 +279,7 @@ impl AiProvider for ClaudeProvider {
                                     .await;
                             }
                             _ => {
-                                // Ignore other event types (message_start, content_block_start, etc.)
+                                // Ignore other event types (content_block_start, etc.)
                             }
                         }
                     }
@@ -251,6 +295,6 @@ impl AiProvider for ClaudeProvider {
             })
             .await;
 
-        Ok(())
+        Ok(if has_usage { Some(tracked_usage) } else { None })
     }
 }

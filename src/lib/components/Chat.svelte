@@ -4,7 +4,7 @@
   import { getViewportStore } from '$lib/stores/viewport.svelte';
   import { generateParallel, extractPythonCode, executeCode, autoRetry, sendMessageStreaming } from '$lib/services/tauri';
   import ChatMessageComponent from './ChatMessage.svelte';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, TokenUsageData } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -19,6 +19,7 @@
   let partProgress = $state<PartProgress[]>([]);
   let isMultiPart = $state(false);
   let designPlanText = $state('');
+  let tokenUsageSummary = $state<TokenUsageData | null>(null);
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -210,6 +211,8 @@
       const fullResponse = await sendMessageStreaming(text, rustHistory, (delta, _done) => {
         streamingContent += delta;
         chatStore.updateLastMessage(streamingContent);
+      }, (usage) => {
+        tokenUsageSummary = usage;
       });
       if (chatStore.generationId !== myGen) return;
 
@@ -306,6 +309,7 @@
     isMultiPart = false;
     partProgress = [];
     designPlanText = '';
+    tokenUsageSummary = null;
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -461,6 +465,17 @@
                 ? `Code corrected by reviewer: ${event.explanation}`
                 : `Code approved by reviewer.`;
               chatStore.updateLastMessage(`${lastContent4}\n${reviewNote}`);
+            }
+            break;
+
+          case 'TokenUsage':
+            if (event.phase === 'total') {
+              tokenUsageSummary = {
+                input_tokens: event.input_tokens,
+                output_tokens: event.output_tokens,
+                total_tokens: event.total_tokens,
+                cost_usd: event.cost_usd,
+              };
             }
             break;
 
@@ -670,6 +685,16 @@
         <div class="design-plan-content">{designPlanText}</div>
       </details>
     {/if}
+    {#if tokenUsageSummary && !chatStore.isStreaming && !isRetrying}
+      <div class="token-usage-badge">
+        <span class="token-count">{tokenUsageSummary.total_tokens.toLocaleString()} tokens</span>
+        {#if tokenUsageSummary.cost_usd !== null && tokenUsageSummary.cost_usd > 0}
+          <span class="token-cost">/ ${tokenUsageSummary.cost_usd.toFixed(4)}</span>
+        {:else if tokenUsageSummary.cost_usd === 0}
+          <span class="token-cost">/ free (local)</span>
+        {/if}
+      </div>
+    {/if}
     {#if chatStore.isStreaming || isRetrying}
       <div class="streaming-indicator">
         <span class="dot"></span>
@@ -872,6 +897,24 @@
 
   .stop-btn:hover {
     background: #d13344;
+  }
+
+  .token-usage-badge {
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 2px 16px 6px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+
+  .token-count {
+    opacity: 0.8;
+  }
+
+  .token-cost {
+    opacity: 0.6;
   }
 
   .design-plan-block {

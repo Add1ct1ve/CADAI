@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
 use crate::error::AppError;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
@@ -50,6 +50,8 @@ struct OllamaMessage {
 #[allow(dead_code)]
 struct OllamaResponse {
     message: Option<OllamaResponseMessage>,
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +65,8 @@ struct OllamaResponseMessage {
 struct OllamaStreamLine {
     message: Option<OllamaStreamMessage>,
     done: Option<bool>,
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -81,7 +85,7 @@ impl From<&ChatMessage> for OllamaMessage {
 
 #[async_trait]
 impl AiProvider for OllamaProvider {
-    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 
@@ -122,14 +126,19 @@ impl AiProvider for OllamaProvider {
             .and_then(|m| m.content)
             .unwrap_or_default();
 
-        Ok(text)
+        let usage = match (resp.prompt_eval_count, resp.eval_count) {
+            (Some(input), Some(output)) => Some(TokenUsage { input_tokens: input, output_tokens: output }),
+            _ => None,
+        };
+
+        Ok((text, usage))
     }
 
     async fn stream(
         &self,
         messages: &[ChatMessage],
         tx: mpsc::Sender<StreamDelta>,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<TokenUsage>, AppError> {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 
@@ -163,6 +172,7 @@ impl AiProvider for OllamaProvider {
         // Ollama uses NDJSON: each line is a complete JSON object.
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk = chunk_result.map_err(|e| {
@@ -188,6 +198,13 @@ impl AiProvider for OllamaProvider {
                         .and_then(|m| m.content)
                         .unwrap_or_default();
 
+                    // Capture usage from the done line
+                    if is_done {
+                        if let (Some(input), Some(output)) = (stream_line.prompt_eval_count, stream_line.eval_count) {
+                            tracked_usage = Some(TokenUsage { input_tokens: input, output_tokens: output });
+                        }
+                    }
+
                     let _ = tx
                         .send(StreamDelta {
                             content,
@@ -196,7 +213,7 @@ impl AiProvider for OllamaProvider {
                         .await;
 
                     if is_done {
-                        return Ok(());
+                        return Ok(tracked_usage);
                     }
                 }
             }
@@ -210,6 +227,6 @@ impl AiProvider for OllamaProvider {
             })
             .await;
 
-        Ok(())
+        Ok(tracked_usage)
     }
 }

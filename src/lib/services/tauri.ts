@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -34,11 +34,16 @@ export async function sendMessageStreaming(
   message: string,
   history: RustChatMessage[],
   onDelta: (delta: string, done: boolean) => void,
+  onTokenUsage?: (usage: TokenUsageData) => void,
 ): Promise<string> {
   try {
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (event) => {
-      onDelta(event.delta, event.done);
+      if (event.event_type === 'token_usage' && event.token_usage && onTokenUsage) {
+        onTokenUsage(event.token_usage);
+      } else {
+        onDelta(event.delta, event.done);
+      }
     };
 
     const result = await invoke<string>('send_message', {
@@ -64,11 +69,16 @@ export async function autoRetry(
   history: RustChatMessage[],
   attempt: number,
   onDelta: (delta: string, done: boolean) => void,
+  onTokenUsage?: (usage: TokenUsageData) => void,
 ): Promise<AutoRetryResult> {
   try {
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (event) => {
-      onDelta(event.delta, event.done);
+      if (event.event_type === 'token_usage' && event.token_usage && onTokenUsage) {
+        onTokenUsage(event.token_usage);
+      } else {
+        onDelta(event.delta, event.done);
+      }
     };
 
     const result = await invoke<AutoRetryResult>('auto_retry', {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
 use crate::ai::streaming::parse_sse_events;
 use crate::error::AppError;
 
@@ -112,6 +112,15 @@ struct GeminiSystemInstruction {
 #[derive(Deserialize)]
 struct GeminiResponse {
     candidates: Option<Vec<GeminiCandidate>>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiUsageMetadata {
+    prompt_token_count: Option<u32>,
+    candidates_token_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +140,7 @@ struct GeminiResponsePart {
 
 #[async_trait]
 impl AiProvider for GeminiProvider {
-    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
         let body = self.build_request(messages);
 
         let response = self
@@ -170,14 +179,21 @@ impl AiProvider for GeminiProvider {
             .and_then(|p| p.text.clone())
             .unwrap_or_default();
 
-        Ok(text)
+        let usage = resp.usage_metadata.and_then(|u| {
+            Some(TokenUsage {
+                input_tokens: u.prompt_token_count.unwrap_or(0),
+                output_tokens: u.candidates_token_count.unwrap_or(0),
+            })
+        });
+
+        Ok((text, usage))
     }
 
     async fn stream(
         &self,
         messages: &[ChatMessage],
         tx: mpsc::Sender<StreamDelta>,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<TokenUsage>, AppError> {
         let body = self.build_request(messages);
 
         let response = self
@@ -203,6 +219,7 @@ impl AiProvider for GeminiProvider {
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk = chunk_result.map_err(|e| {
@@ -220,6 +237,14 @@ impl AiProvider for GeminiProvider {
                 let events = parse_sse_events(&event_block);
                 for event_data in events {
                     if let Ok(resp) = serde_json::from_str::<GeminiResponse>(&event_data) {
+                        // Track usage from last chunk (Gemini includes it in final SSE chunk)
+                        if let Some(u) = &resp.usage_metadata {
+                            tracked_usage = Some(TokenUsage {
+                                input_tokens: u.prompt_token_count.unwrap_or(0),
+                                output_tokens: u.candidates_token_count.unwrap_or(0),
+                            });
+                        }
+
                         let text = resp
                             .candidates
                             .as_ref()
@@ -250,6 +275,6 @@ impl AiProvider for GeminiProvider {
             })
             .await;
 
-        Ok(())
+        Ok(tracked_usage)
     }
 }
