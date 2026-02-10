@@ -277,6 +277,39 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Design Patterns (parameterized templates) --
+    if let Some(ref patterns) = rules.design_patterns {
+        prompt.push_str("## Design Patterns — Parameterized Templates\n");
+        prompt.push_str("These are higher-level templates for common object categories. ");
+        prompt.push_str(
+            "Use as starting points and customize parameters to match the user's request.\n\n",
+        );
+        for (i, entry) in patterns.iter().enumerate() {
+            prompt.push_str(&format!("### Pattern {}: {}\n", i + 1, entry.name));
+            prompt.push_str(&format!("{}\n", entry.description));
+            prompt.push_str(&format!("**Keywords:** {}\n", entry.keywords.join(", ")));
+            prompt.push_str("**Parameters:**\n");
+            for p in &entry.parameters {
+                prompt.push_str(&format!("- {}\n", p));
+            }
+            prompt.push_str("**Base code:**\n```python\n");
+            prompt.push_str(&entry.base_code);
+            if !entry.base_code.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("```\n");
+            prompt.push_str("**Variants:**\n");
+            for v in &entry.variants {
+                prompt.push_str(&format!("- {}\n", v));
+            }
+            prompt.push_str("**Gotchas:**\n");
+            for g in &entry.gotchas {
+                prompt.push_str(&format!("- {}\n", g));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- Anti-Patterns (common mistakes to avoid) --
     if let Some(ref anti_patterns) = rules.anti_patterns {
         prompt.push_str("## Common Anti-Patterns — Mistakes to Avoid\n");
@@ -719,6 +752,11 @@ mod tests {
                 preset
             );
             assert!(
+                prompt.contains("## Design Patterns"),
+                "preset {:?} missing design patterns",
+                preset
+            );
+            assert!(
                 prompt.contains("## CadQuery API Quick-Reference"),
                 "preset {:?} missing API reference",
                 preset
@@ -736,6 +774,47 @@ mod tests {
             assert!(
                 prompt.contains("## Failure Prevention"),
                 "preset {:?} missing failure prevention",
+                preset
+            );
+        }
+    }
+
+    // ── Design Patterns in prompt ────────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_design_patterns_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Design Patterns"),
+            "prompt should have design patterns section"
+        );
+        assert!(prompt.contains("Parameterized Templates"));
+    }
+
+    #[test]
+    fn test_prompt_design_patterns_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(prompt.contains("Enclosure"), "missing Enclosure pattern");
+        assert!(prompt.contains("Shaft"), "missing Shaft pattern");
+        assert!(prompt.contains("Rotational"), "missing Rotational pattern");
+        assert!(prompt.contains("Plate"), "missing Plate pattern");
+        assert!(prompt.contains("Tube"), "missing Tube pattern");
+        assert!(prompt.contains("Spring"), "missing Spring pattern");
+        assert!(prompt.contains("Gear"), "missing Gear pattern");
+        assert!(prompt.contains("**Keywords:**"));
+        assert!(prompt.contains("**Parameters:**"));
+        assert!(prompt.contains("**Base code:**"));
+        assert!(prompt.contains("**Variants:**"));
+        assert!(prompt.contains("**Gotchas:**"));
+    }
+
+    #[test]
+    fn test_all_presets_have_design_patterns_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Design Patterns"),
+                "preset {:?} missing design patterns section",
                 preset
             );
         }
@@ -910,6 +989,7 @@ mod tests {
         let style_pos = prompt.find("## Code Style").unwrap();
         let valid_pos = prompt.find("## Validation Checks").unwrap();
         let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
+        let dp_pos = prompt.find("## Design Patterns").unwrap();
         let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
         let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
         let dimtab_pos = prompt.find("## Real-World Dimension Tables").unwrap();
@@ -929,8 +1009,10 @@ mod tests {
         assert!(style_pos < valid_pos, "Code Style should come before Validation");
         // Cookbook after Validation
         assert!(valid_pos < cook_pos, "Validation should come before Cookbook");
-        // Anti-Patterns after Cookbook
-        assert!(cook_pos < ap_pos, "Cookbook should come before Anti-Patterns");
+        // Design Patterns after Cookbook
+        assert!(cook_pos < dp_pos, "Cookbook should come before Design Patterns");
+        // Anti-Patterns after Design Patterns
+        assert!(dp_pos < ap_pos, "Design Patterns should come before Anti-Patterns");
         // API Reference after Anti-Patterns
         assert!(ap_pos < apiref_pos, "Anti-Patterns should come before API Reference");
         // Dimension Tables after API Reference
@@ -965,6 +1047,7 @@ mod tests {
         assert!(!prompt.contains("## Advanced Techniques"));
         assert!(!prompt.contains("## Validation Checks"));
         assert!(!prompt.contains("## Manufacturing Awareness"));
+        assert!(!prompt.contains("## Design Patterns"));
         assert!(!prompt.contains("## Common Anti-Patterns"));
         assert!(!prompt.contains("## CadQuery API Quick-Reference"));
         assert!(!prompt.contains("## Real-World Dimension Tables"));

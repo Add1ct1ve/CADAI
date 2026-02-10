@@ -28,6 +28,7 @@ pub struct AgentRules {
     pub dimension_guidance: Option<HashMap<String, Vec<String>>>,
     pub failure_prevention: Option<HashMap<String, Vec<String>>>,
     pub few_shot_examples: Option<Vec<FewShotExample>>,
+    pub design_patterns: Option<Vec<DesignPatternEntry>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,6 +69,17 @@ pub struct FewShotExample {
     pub user_request: String,
     pub design_plan: String,
     pub code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DesignPatternEntry {
+    pub name: String,
+    pub description: String,
+    pub keywords: Vec<String>,
+    pub parameters: Vec<String>,
+    pub base_code: String,
+    pub variants: Vec<String>,
+    pub gotchas: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -155,6 +167,7 @@ impl AgentRules {
             dimension_guidance: None,
             failure_prevention: None,
             few_shot_examples: None,
+            design_patterns: None,
         }
     }
 }
@@ -611,6 +624,7 @@ mod tests {
         assert!(rules.dimension_guidance.is_none());
         assert!(rules.failure_prevention.is_none());
         assert!(rules.few_shot_examples.is_none());
+        assert!(rules.design_patterns.is_none());
     }
 
     // ── Few-Shot Examples ──────────────────────────────────────────────
@@ -691,6 +705,116 @@ mod tests {
                     ex.code.contains("result"),
                     "Few-shot '{}' in preset {:?} missing 'result' variable",
                     ex.user_request,
+                    preset
+                );
+            }
+        }
+    }
+
+    // ── Design Patterns ───────────────────────────────────────────────
+
+    #[test]
+    fn test_default_design_patterns_has_7_entries() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dp = rules.design_patterns.as_ref().unwrap();
+        assert_eq!(dp.len(), 7, "default should have 7 design patterns");
+    }
+
+    #[test]
+    fn test_printing_design_patterns_has_7_entries() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let dp = rules.design_patterns.as_ref().unwrap();
+        assert_eq!(dp.len(), 7, "printing should have 7 design patterns");
+    }
+
+    #[test]
+    fn test_cnc_design_patterns_has_7_entries() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let dp = rules.design_patterns.as_ref().unwrap();
+        assert_eq!(dp.len(), 7, "cnc should have 7 design patterns");
+    }
+
+    #[test]
+    fn test_design_pattern_names_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dp = rules.design_patterns.as_ref().unwrap();
+        let names: Vec<&str> = dp.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.contains("Enclosure")));
+        assert!(names.iter().any(|n| n.contains("Shaft")));
+        assert!(names.iter().any(|n| n.contains("Rotational")));
+        assert!(names.iter().any(|n| n.contains("Plate")));
+        assert!(names.iter().any(|n| n.contains("Tube")));
+        assert!(names.iter().any(|n| n.contains("Spring")));
+        assert!(names.iter().any(|n| n.contains("Gear")));
+    }
+
+    #[test]
+    fn test_all_design_patterns_have_required_fields() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let dp = rules.design_patterns.as_ref().unwrap();
+            for entry in dp {
+                assert!(
+                    !entry.name.is_empty(),
+                    "Design pattern in preset {:?} has empty name",
+                    preset
+                );
+                assert!(
+                    !entry.description.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty description",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    !entry.keywords.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty keywords",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    !entry.parameters.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty parameters",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    !entry.base_code.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty base_code",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    !entry.variants.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty variants",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    !entry.gotchas.is_empty(),
+                    "Design pattern '{}' in preset {:?} has empty gotchas",
+                    entry.name,
+                    preset
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_design_pattern_codes_have_import_and_result() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let dp = rules.design_patterns.as_ref().unwrap();
+            for entry in dp {
+                assert!(
+                    entry.base_code.contains("import cadquery"),
+                    "Design pattern '{}' in preset {:?} missing 'import cadquery'",
+                    entry.name,
+                    preset
+                );
+                assert!(
+                    entry.base_code.contains("result"),
+                    "Design pattern '{}' in preset {:?} missing 'result' variable",
+                    entry.name,
                     preset
                 );
             }
