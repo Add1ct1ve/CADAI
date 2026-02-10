@@ -249,11 +249,11 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Pass design plan to reviewer | ⬜ | Include plan text in review prompt |
-| Check feature completeness against plan | ⬜ | Every planned feature should appear in code |
-| Check dimensions match plan | ⬜ | Planned 50mm should be 50mm in code, not 40mm |
-| Check operation sequence matches plan | ⬜ | If plan says "revolve then shell", code shouldn't "extrude then shell" |
-| Enhanced reviewer prompt | ⬜ | Additional checklist items for plan compliance |
+| Pass design plan to reviewer | ✅ | Include plan text in review prompt |
+| Check feature completeness against plan | ✅ | Every planned feature should appear in code |
+| Check dimensions match plan | ✅ | Planned 50mm should be 50mm in code, not 40mm |
+| Check operation sequence matches plan | ✅ | If plan says "revolve then shell", code shouldn't "extrude then shell" |
+| Enhanced reviewer prompt | ✅ | Additional checklist items for plan compliance |
 
 **Implementation notes:**
 - Modify `review_code()` in `review.rs` to accept optional `design_plan: Option<&str>`
