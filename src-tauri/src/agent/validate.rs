@@ -376,15 +376,22 @@ pub fn extract_python_code(response: &str) -> Option<String> {
 }
 
 /// Determine the matching anti-pattern title based on error category and message.
-fn match_anti_pattern(error: &StructuredError) -> Option<String> {
+fn match_anti_pattern(error: &StructuredError, code: Option<&str>) -> Option<String> {
     match &error.category {
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
-            // Could be "Fillet radius too large" or "Fillet before boolean"
-            let msg = error.message.to_lowercase();
-            if msg.contains("before") || msg.contains("boolean") {
-                Some("Fillet before boolean".to_string())
+            // Check if code uses blanket .edges().fillet() pattern
+            let is_blanket = code
+                .map(|c| c.contains(".edges().fillet") || c.contains(".edges().chamfer"))
+                .unwrap_or(false);
+            if is_blanket {
+                Some("Blanket fillet on complex geometry".to_string())
             } else {
-                Some("Fillet radius too large".to_string())
+                let msg = error.message.to_lowercase();
+                if msg.contains("before") || msg.contains("boolean") {
+                    Some("Fillet before boolean".to_string())
+                } else {
+                    Some("Fillet radius too large".to_string())
+                }
             }
         }
         ErrorCategory::Topology(TopologySubKind::ShellFailure) => {
@@ -424,8 +431,11 @@ fn match_anti_pattern(error: &StructuredError) -> Option<String> {
 /// - Attempt 1: Category-specific targeted fix
 /// - Attempt 2: Targeted fix + simplification of the failing operation class
 /// - Attempt 3+: Full nuclear simplification (basic primitives only)
-pub fn get_retry_strategy(error: &StructuredError, attempt: u32) -> RetryStrategy {
-    let anti_pattern = match_anti_pattern(error);
+///
+/// The optional `code` parameter allows detecting blanket `.edges().fillet()` patterns
+/// to provide smarter retry advice (wrap in try/except instead of reducing radius).
+pub fn get_retry_strategy(error: &StructuredError, attempt: u32, code: Option<&str>) -> RetryStrategy {
+    let anti_pattern = match_anti_pattern(error, code);
 
     // Attempt 3+: nuclear option — same for all categories.
     if attempt >= 3 {
@@ -465,13 +475,30 @@ pub fn get_retry_strategy(error: &StructuredError, attempt: u32) -> RetryStrateg
             ),
             vec![],
         ),
-        ErrorCategory::Topology(TopologySubKind::FilletFailure) => (
-            "The fillet/chamfer radius is too large for the geometry. Reduce ALL fillet/chamfer \
-             radii by at least 50%, or remove fillets entirely and add them as the very last \
-             operation with conservative radii (1-2mm)."
-                .to_string(),
-            vec![],
-        ),
+        ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
+            let is_blanket = code
+                .map(|c| c.contains(".edges().fillet") || c.contains(".edges().chamfer"))
+                .unwrap_or(false);
+            if is_blanket {
+                (
+                    "The .edges().fillet() pattern CANNOT fillet ALL edges on complex geometry \
+                     (loft+shell+boolean). Do NOT reduce the radius — that won't fix this. \
+                     Instead wrap the fillet in try/except: \
+                     `try: result = body.edges().fillet(r)` / `except: result = body`. \
+                     Or use selective edge fillet like .edges('>Z').fillet(r)."
+                        .to_string(),
+                    vec![],
+                )
+            } else {
+                (
+                    "The fillet/chamfer radius is too large for the geometry. Reduce ALL fillet/chamfer \
+                     radii by at least 50%, or remove fillets entirely and add them as the very last \
+                     operation with conservative radii (1-2mm)."
+                        .to_string(),
+                    vec![],
+                )
+            }
+        }
         ErrorCategory::Topology(TopologySubKind::ShellFailure) => (
             "The shell operation failed. Replace .shell() with manual hollowing: create a \
              slightly smaller inner solid and use .cut() to subtract it. Or apply shell BEFORE \
@@ -576,6 +603,30 @@ pub fn get_retry_strategy(error: &StructuredError, attempt: u32) -> RetryStrateg
         fix_instruction,
         forbidden_operations,
         matching_anti_pattern: anti_pattern,
+    }
+}
+
+/// Check if code uses a risky blanket `.edges().fillet()` pattern on complex geometry.
+///
+/// Returns a warning message if the code contains `.edges().fillet()` or `.edges().chamfer()`
+/// combined with complex operations (loft, shell, or multiple booleans) that are likely to fail.
+#[allow(dead_code)]
+pub fn check_risky_fillet_pattern(code: &str) -> Option<String> {
+    let has_blanket = code.contains(".edges().fillet") || code.contains(".edges().chamfer");
+    if !has_blanket {
+        return None;
+    }
+    let has_complex = code.contains(".loft(")
+        || code.contains(".shell(")
+        || (code.contains(".union(") && code.contains(".cut("))
+        || code.matches(".cut(").count() >= 3;
+    if has_complex {
+        Some(
+            "Code uses .edges().fillet() on complex loft/shell/boolean geometry — high failure risk"
+                .to_string(),
+        )
+    } else {
+        None
     }
 }
 
@@ -1026,7 +1077,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     #[test]
     fn test_strategy_syntax_attempt1() {
         let err = make_error(ErrorCategory::Syntax, "invalid syntax", None);
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("syntax error"));
         assert!(strategy.fix_instruction.contains("line 5"));
         assert!(strategy.forbidden_operations.is_empty());
@@ -1040,7 +1091,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "BRep_API: not done",
             Some("fillet"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("fillet/chamfer radius"));
         assert!(strategy.fix_instruction.contains("Reduce"));
         assert_eq!(
@@ -1056,7 +1107,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "Shell offset not done",
             Some("shell"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("shell operation failed"));
         assert!(strategy.forbidden_operations.contains(&"shell".to_string()));
         assert_eq!(
@@ -1072,7 +1123,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "Boolean operation (cut) failed",
             Some("cut"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("boolean operation"));
         assert!(strategy.fix_instruction.contains("overlap"));
         assert_eq!(
@@ -1088,7 +1139,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "loft failed",
             Some("loft"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("loft failed"));
         assert!(strategy.fix_instruction.contains("edge counts"));
         assert_eq!(
@@ -1104,7 +1155,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "sweep failed",
             Some("sweep"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("sweep failed"));
         assert!(strategy.fix_instruction.contains("Wire"));
         assert_eq!(
@@ -1120,7 +1171,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "revolve failed",
             Some("revolve"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("revolve failed"));
         assert!(strategy.fix_instruction.contains("rotation axis"));
         assert_eq!(
@@ -1136,7 +1187,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "translate() requires a 3-tuple",
             Some("translate"),
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("API usage error"));
         assert!(strategy.fix_instruction.contains("translate()"));
         assert_eq!(
@@ -1152,7 +1203,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "name 'foo' is not defined",
             None,
         );
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("import/name error"));
         assert!(strategy.fix_instruction.contains("foo"));
         assert!(strategy.matching_anti_pattern.is_none());
@@ -1161,7 +1212,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     #[test]
     fn test_strategy_geometry_kernel_attempt1() {
         let err = make_error(ErrorCategory::GeometryKernel, "kernel error", None);
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("OpenCascade"));
         assert!(strategy.matching_anti_pattern.is_none());
     }
@@ -1169,7 +1220,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     #[test]
     fn test_strategy_unknown_attempt1() {
         let err = make_error(ErrorCategory::Unknown, "something broke", None);
-        let strategy = get_retry_strategy(&err, 1);
+        let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy.fix_instruction.contains("something broke"));
         assert!(strategy.matching_anti_pattern.is_none());
     }
@@ -1182,14 +1233,14 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "BRep_API: not done",
             Some("fillet"),
         );
-        let strategy = get_retry_strategy(&err, 2);
+        let strategy = get_retry_strategy(&err, 2, None);
         assert!(strategy.fix_instruction.contains("fillet/chamfer radius"));
         assert!(strategy.fix_instruction.contains("simpler geometric"));
         assert!(strategy.forbidden_operations.contains(&"fillet".to_string()));
 
         // Non-topology errors get generic simplification.
         let err2 = make_error(ErrorCategory::Syntax, "invalid syntax", None);
-        let strategy2 = get_retry_strategy(&err2, 2);
+        let strategy2 = get_retry_strategy(&err2, 2, None);
         assert!(strategy2.fix_instruction.contains("syntax error"));
         assert!(strategy2.fix_instruction.contains("simplify the overall approach"));
     }
@@ -1201,7 +1252,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "BRep_API: not done",
             Some("fillet"),
         );
-        let strategy = get_retry_strategy(&err, 3);
+        let strategy = get_retry_strategy(&err, 3, None);
         assert!(strategy.fix_instruction.contains("SIGNIFICANTLY simplify"));
         assert!(strategy.fix_instruction.contains("ONLY basic shapes"));
         assert!(strategy.forbidden_operations.contains(&"sweep".to_string()));
@@ -1209,5 +1260,89 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
         assert!(strategy.forbidden_operations.contains(&"spline".to_string()));
         assert!(strategy.forbidden_operations.contains(&"revolve".to_string()));
         assert!(strategy.forbidden_operations.contains(&"shell".to_string()));
+    }
+
+    // ========== Blanket fillet detection tests ==========
+
+    #[test]
+    fn test_strategy_blanket_fillet_suggests_try_except() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::FilletFailure),
+            "BRep_API: command not done",
+            Some("fillet"),
+        );
+        let code = "helmet = helmet.cut(visor)\nresult = helmet.edges().fillet(2.0)";
+        let strategy = get_retry_strategy(&err, 1, Some(code));
+        assert!(
+            strategy.fix_instruction.contains("try/except"),
+            "blanket fillet should suggest try/except, got: {}",
+            strategy.fix_instruction
+        );
+        assert!(
+            !strategy.fix_instruction.contains("Reduce ALL"),
+            "blanket fillet should NOT suggest reducing radius"
+        );
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Blanket fillet on complex geometry")
+        );
+    }
+
+    #[test]
+    fn test_strategy_normal_fillet_still_suggests_radius_reduction() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::FilletFailure),
+            "BRep_API: not done",
+            Some("fillet"),
+        );
+        let code = "result = cq.Workplane('XY').box(10,10,10).edges('|Z').fillet(8.0)";
+        let strategy = get_retry_strategy(&err, 1, Some(code));
+        assert!(
+            strategy.fix_instruction.contains("Reduce ALL"),
+            "non-blanket fillet should suggest reducing radius, got: {}",
+            strategy.fix_instruction
+        );
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Fillet radius too large")
+        );
+    }
+
+    #[test]
+    fn test_check_risky_fillet_pattern_loft_plus_fillet() {
+        let code = r#"
+import cadquery as cq
+body = cq.Workplane("XY").circle(50).workplane(offset=80).circle(30).loft()
+result = body.edges().fillet(2.0)
+"#;
+        let warning = check_risky_fillet_pattern(code);
+        assert!(warning.is_some(), "should detect loft + blanket fillet");
+        assert!(warning.unwrap().contains("high failure risk"));
+    }
+
+    #[test]
+    fn test_check_risky_fillet_pattern_simple_box_ok() {
+        let code = r#"
+import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10).edges("|Z").fillet(1.0)
+"#;
+        assert!(
+            check_risky_fillet_pattern(code).is_none(),
+            "simple selective fillet on a box should not trigger warning"
+        );
+    }
+
+    #[test]
+    fn test_check_risky_fillet_pattern_multi_boolean() {
+        let code = r#"
+import cadquery as cq
+body = cq.Workplane("XY").box(100, 100, 50)
+body = body.cut(cq.Workplane("XY").circle(10).extrude(60))
+body = body.cut(cq.Workplane("XY").center(20,0).circle(10).extrude(60))
+body = body.cut(cq.Workplane("XY").center(-20,0).circle(10).extrude(60))
+result = body.edges().fillet(2.0)
+"#;
+        let warning = check_risky_fillet_pattern(code);
+        assert!(warning.is_some(), "should detect multi-boolean + blanket fillet");
     }
 }

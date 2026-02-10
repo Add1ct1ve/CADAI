@@ -451,6 +451,14 @@ async fn run_design_plan_phase(
         emit_usage(on_event, "design", u, provider_id, model_id);
     }
 
+    // Guard: if the AI returned empty text, return a clear error instead of
+    // silently validating an empty plan (which produces misleading 7/10 risk).
+    if design_plan.text.trim().is_empty() {
+        return Err(AppError::AiProviderError(
+            "AI returned an empty design plan. Check your API key, model name, and provider settings.".to_string(),
+        ));
+    }
+
     let validation = design::validate_plan(&design_plan.text);
 
     let _ = on_event.send(MultiPartEvent::PlanValidation {
@@ -522,6 +530,7 @@ async fn run_design_plan_phase(
             rejected_reason: None,
             extracted_operations: design::extract_operations_from_text(&design_plan.text),
             extracted_dimensions: vec![],
+            plan_text: design_plan.text.clone(),
         };
 
         let conf = confidence::assess_confidence(&final_validation, cookbook_ref, patterns_ref);

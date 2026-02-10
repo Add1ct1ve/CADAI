@@ -172,7 +172,7 @@ pub async fn validate_and_retry(
             Err(error_msg) => {
                 // Parse and classify the error
                 let structured_error = validate::parse_traceback(&error_msg);
-                let strategy = validate::get_retry_strategy(&structured_error, attempt);
+                let strategy = validate::get_retry_strategy(&structured_error, attempt, Some(&current_code));
 
                 let category_str = format!("{:?}", structured_error.category);
                 let will_retry = attempt < MAX_VALIDATION_ATTEMPTS;

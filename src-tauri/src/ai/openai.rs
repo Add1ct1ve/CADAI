@@ -90,11 +90,16 @@ struct OpenAiChoice {
 #[allow(dead_code)]
 struct OpenAiMessageContent {
     content: Option<String>,
+    /// Thinking/reasoning models (Kimi K2.5, DeepSeek R1, etc.) put their
+    /// chain-of-thought here. When `content` is empty, fall back to this.
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiDeltaContent {
     content: Option<String>,
+    /// Thinking models stream reasoning here before the final content.
+    reasoning_content: Option<String>,
 }
 
 /// SSE chunk from the OpenAI streaming API.
@@ -160,12 +165,26 @@ impl AiProvider for OpenAiProvider {
             .await
             .map_err(|e| AppError::AiProviderError(format!("Failed to parse response: {}", e)))?;
 
-        let text = resp
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.clone())
-            .unwrap_or_default();
+        let message = resp.choices.first().and_then(|c| c.message.as_ref());
+        // Prefer `content`; fall back to `reasoning_content` for thinking models
+        // (Kimi K2.5, DeepSeek R1, etc.) that put output there instead.
+        let text = message
+            .and_then(|m| {
+                m.content
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or(m.reasoning_content.as_deref())
+            })
+            .unwrap_or_default()
+            .to_string();
+
+        if text.is_empty() {
+            eprintln!(
+                "[openai] Warning: API returned empty text. Choices: {}, model: {}",
+                resp.choices.len(),
+                self.model
+            );
+        }
 
         let usage = resp.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
@@ -242,6 +261,7 @@ impl AiProvider for OpenAiProvider {
                         }
                         for choice in &chunk.choices {
                             if let Some(delta) = &choice.delta {
+                                // Emit content deltas (standard models)
                                 if let Some(ref content) = delta.content {
                                     let _ = tx
                                         .send(StreamDelta {
@@ -249,6 +269,19 @@ impl AiProvider for OpenAiProvider {
                                             done: false,
                                         })
                                         .await;
+                                }
+                                // Emit reasoning_content deltas as regular content
+                                // for thinking models (Kimi K2.5, DeepSeek R1, etc.)
+                                // only when there's no regular content in this chunk.
+                                if delta.content.is_none() {
+                                    if let Some(ref reasoning) = delta.reasoning_content {
+                                        let _ = tx
+                                            .send(StreamDelta {
+                                                content: reasoning.clone(),
+                                                done: false,
+                                            })
+                                            .await;
+                                    }
                                 }
                             }
                             if choice.finish_reason.is_some() {

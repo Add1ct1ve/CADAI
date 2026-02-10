@@ -826,7 +826,11 @@ cookbook:
           .extrude(H_DEPTH)
       )
       helmet = helmet.cut(mouth_cutter)
-      result = helmet.edges().fillet(2.0)
+      # Smooth edges — try/except because fillet on complex loft+boolean geometry can fail
+      try:
+          result = helmet.edges().fillet(2.0)
+      except:
+          result = helmet
 
   - title: "Ergonomic handle via revolve with spline profile"
     description: "Create a grip/handle shape using revolve with a spline profile curve."
@@ -1643,6 +1647,21 @@ anti_patterns:
           .edges("|Z").fillet(2.0)
       )
 
+  - title: "Blanket fillet on complex geometry"
+    wrong_code: |
+      helmet = helmet.cut(visor_cutter)
+      helmet = helmet.cut(mouth_cutter)
+      result = helmet.edges().fillet(2.0)
+    error_message: "StdFail_NotDone: BRep_API: command not done"
+    explanation: "Calling .edges().fillet() on geometry built from loft, shell, and multiple boolean operations tries to fillet EVERY edge including tiny internal edges. The kernel cannot compute fillets on many of these edges. Wrap in try/except for graceful degradation, or use selective edge fillet."
+    correct_code: |
+      helmet = helmet.cut(visor_cutter)
+      helmet = helmet.cut(mouth_cutter)
+      try:
+          result = helmet.edges().fillet(2.0)
+      except:
+          result = helmet
+
   - title: "Sweep path without .wire()"
     wrong_code: |
       path = (
@@ -1941,7 +1960,7 @@ dimension_guidance:
 
 failure_prevention:
   self_diagnosis:
-    - "If fillet() fails, the radius is almost certainly too large — reduce to 1/5 of shortest adjacent edge"
+    - "If fillet() fails, first check if the code uses .edges().fillet() on complex geometry (loft/shell/booleans) — if so, the pattern itself is the problem. Wrap in try/except or use selective edge fillet. If geometry is simple, reduce radius to 1/5 of shortest adjacent edge"
     - "If shell() raises 'Standard_ConstructionError', geometry has thin walls, sharp internal corners, or non-manifold edges — simplify first"
     - "If loft() fails with 'profiles are incompatible', sections have different edge counts — use same number of points/edges in each profile"
     - "If revolve() produces unexpected geometry, the profile likely crosses the rotation axis — ensure all profile points are on one side"
@@ -1956,6 +1975,7 @@ failure_prevention:
     - "If your design requires more than 6 boolean operations, split into sub-bodies: build each region separately, then union at the end"
     - "If you are using nested .faces() selectors more than 2 levels deep, use .tag() to name important faces instead"
     - "If a wall thickness in your design is below 1.5mm, shell() and boolean operations become very fragile — increase thickness or skip shell"
+    - "If you are about to use .edges().fillet() on a body built with loft, shell, or more than 2 booleans, STOP — wrap it in try/except for graceful degradation"
 
   alternative_operations:
     - "If loft() fails between two profiles: extrude the base profile, then use fillet/chamfer to approximate the shape transition"
@@ -1981,6 +2001,7 @@ failure_prevention:
     - "Before outputting code, verify: If using loft(), do all profiles have the same number of edges/points?"
     - "Before outputting code, verify: If using revolve(), is the profile entirely on one side of the rotation axis?"
     - "Before outputting code, verify: Are fillets and chamfers applied as the LAST operations (after all booleans)?"
+    - "Before outputting code, verify: If using .edges().fillet() after loft/shell/multiple booleans, is it wrapped in try/except?"
 
 # =============================================================================
 # FEW-SHOT EXAMPLES: Design-to-Code Workflow
@@ -2021,7 +2042,11 @@ few_shot_examples:
           .wire()
       )
       handle = cq.Workplane("XY").center(MUG_OD / 2, 0).circle(HANDLE_R).sweep(handle_path)
-      result = body.union(handle).edges().fillet(1.0)
+      mug = body.union(handle)
+      try:
+          result = mug.edges().fillet(1.0)
+      except:
+          result = mug
 
   - user_request: "Design a motor mount bracket"
     design_plan: |
@@ -2175,7 +2200,11 @@ few_shot_examples:
           .rect(BASE_W * 0.6, LIP_D)
           .extrude(LIP_H)
       )
-      result = base.union(support).union(lip).edges().fillet(1.5)
+      stand = base.union(support).union(lip)
+      try:
+          result = stand.edges().fillet(1.5)
+      except:
+          result = stand
 
 # =============================================================================
 # DESIGN PATTERNS — Parameterized Templates
@@ -2478,9 +2507,11 @@ design_patterns:
 
 operation_interactions:
   fillet_after_boolean:
-    - "New edges created by boolean operations (cut/union) are often very short — use a smaller fillet radius (≤1mm) on boolean-created edges"
-    - "Fillet ALL edges at once as the very last step, not after each individual boolean operation"
+    - "New edges created by boolean operations (cut/union) are often very short — use a smaller fillet radius (<=1mm) on boolean-created edges"
+    - "Fillet as the very last step, not after each individual boolean operation"
+    - "CRITICAL: On complex geometry (loft+shell+boolean combinations), .edges().fillet() frequently fails because the kernel cannot fillet ALL edges at once. ALWAYS wrap blanket fillet calls in try/except to degrade gracefully"
     - "If fillet fails on boolean edges, try chamfer as an alternative — chamfer is more tolerant of short edges"
+    - "For complex geometry, prefer selective edge fillet (e.g. .edges('>Z').fillet(r)) over blanket .edges().fillet(r)"
 
   shell_after_fillet:
     - "Shell on a filleted body frequently fails — always perform shell() BEFORE fillet()"

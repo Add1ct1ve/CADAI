@@ -183,6 +183,14 @@ impl AiProvider for ClaudeProvider {
             .find_map(|b| b.text.clone())
             .unwrap_or_default();
 
+        if text.is_empty() {
+            eprintln!(
+                "[claude] Warning: API returned empty text. Content blocks: {}, model: {}",
+                resp.content.len(),
+                self.model
+            );
+        }
+
         let usage = resp.usage.map(|u| TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
