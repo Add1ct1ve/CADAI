@@ -21,6 +21,7 @@ pub struct PythonStatus {
     pub python_path: Option<String>,
     pub venv_ready: bool,
     pub cadquery_installed: bool,
+    pub cadquery_version: Option<String>,
 }
 
 #[tauri::command]
@@ -93,6 +94,15 @@ pub async fn check_python(
         false
     };
 
+    // Detect and cache CadQuery version
+    let cadquery_version = if cadquery_installed {
+        let ver = installer::detect_cadquery_version(&venv_dir);
+        *state.cadquery_version.lock().unwrap() = ver.clone();
+        ver
+    } else {
+        None
+    };
+
     if venv_ready {
         *state.venv_path.lock().unwrap() = Some(venv_dir);
     }
@@ -103,6 +113,7 @@ pub async fn check_python(
         python_path,
         venv_ready,
         cadquery_installed,
+        cadquery_version,
     })
 }
 
@@ -125,11 +136,16 @@ pub async fn setup_python(
         installer::install_cadquery(&venv_dir)?;
     }
 
+    // Detect and cache CadQuery version
+    let cq_version = installer::detect_cadquery_version(&venv_dir);
+    *state.cadquery_version.lock().unwrap() = cq_version.clone();
+
     *state.venv_path.lock().unwrap() = Some(venv_dir);
 
+    let cq_ver_str = cq_version.unwrap_or_else(|| "unknown".to_string());
     Ok(format!(
-        "Python {} environment ready with CadQuery",
-        info.version
+        "Python {} environment ready with CadQuery {}",
+        info.version, cq_ver_str
     ))
 }
 

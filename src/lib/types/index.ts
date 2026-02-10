@@ -72,6 +72,7 @@ export interface PythonStatus {
   python_path: string | null;
   venv_ready: boolean;
   cadquery_installed: boolean;
+  cadquery_version: string | null;
 }
 
 export interface StreamEvent {

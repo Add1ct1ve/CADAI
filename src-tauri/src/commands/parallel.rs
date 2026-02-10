@@ -1450,8 +1450,9 @@ pub async fn generate_parallel(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt = {
-        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
         let session_ctx = state.session_memory.lock().unwrap().build_context_section();
         match session_ctx {
             Some(ctx) => format!("{}\n\n{}", base, ctx),
@@ -1796,8 +1797,9 @@ pub async fn generate_from_plan(
 ) -> Result<String, AppError> {
     let _ = existing_code; // reserved for future use
     let config = state.config.lock().unwrap().clone();
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt = {
-        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
         let session_ctx = state.session_memory.lock().unwrap().build_context_section();
         match session_ctx {
             Some(ctx) => format!("{}\n\n{}", base, ctx),
@@ -1890,8 +1892,9 @@ pub async fn retry_skipped_steps(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt =
-        crate::agent::prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        crate::agent::prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
 
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
@@ -2045,8 +2048,9 @@ pub async fn retry_part(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt =
-        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();

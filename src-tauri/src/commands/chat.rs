@@ -256,8 +256,10 @@ pub async fn send_message(
     let config = state.config.lock().unwrap().clone();
 
     // Build the system prompt from the configured preset.
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt = prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
     );
 
     // Create the AI provider.
@@ -368,8 +370,10 @@ pub async fn auto_retry(
     let config = state.config.lock().unwrap().clone();
 
     // Build the system prompt from the configured preset.
+    let cq_version = state.cadquery_version.lock().unwrap().clone();
     let system_prompt = prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
     );
 
     // Create the AI provider.
