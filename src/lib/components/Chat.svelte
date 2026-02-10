@@ -5,6 +5,7 @@
   import { generateParallel, generateDesignPlan, generateFromPlan, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import ChatMessageComponent from './ChatMessage.svelte';
+  import ConfidenceBadge from './ConfidenceBadge.svelte';
   import DesignPlanEditor from './DesignPlanEditor.svelte';
   import { PLAN_TEMPLATES } from '$lib/data/plan-templates';
   import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult } from '$lib/types';
@@ -33,6 +34,12 @@
   let isModification = $state(false);
   let isConsensus = $state(false);
   let consensusProgress = $state<{ label: string; status: string; temperature?: number; hasCode?: boolean; executionSuccess?: boolean }[]>([]);
+  let confidenceData = $state<{
+    level: 'high' | 'medium' | 'low';
+    score: number;
+    message: string;
+    cookbookMatches: string[];
+  } | null>(null);
 
   // Plan editor state (two-phase flow)
   let showPlanEditor = $state(false);
@@ -69,6 +76,7 @@
     diffData = null;
     isConsensus = false;
     consensusProgress = [];
+    confidenceData = null;
     showPlanEditor = false;
     pendingPlan = null;
   }
@@ -530,6 +538,41 @@
     return `Building step by step (${completed}/${steps.length}):\n${lines.join('\n')}`;
   }
 
+  function updateConfidence(
+    signal: { reviewModified?: boolean; validationSuccess?: boolean; validationAttempt?: number }
+  ) {
+    if (!confidenceData) return;
+    let adj = 0;
+    let reason = confidenceData.message;
+
+    if (signal.reviewModified === false) {
+      adj += 10;
+      reason = 'Code approved by reviewer';
+    } else if (signal.reviewModified === true) {
+      adj -= 5;
+      reason = 'Code required reviewer corrections';
+    }
+
+    if (signal.validationSuccess === true && signal.validationAttempt === 1) {
+      adj += 15;
+      reason = 'Validated on first attempt';
+    } else if (signal.validationSuccess === true && (signal.validationAttempt ?? 0) > 1) {
+      adj += 5;
+      reason = `Validated after ${signal.validationAttempt} attempts`;
+    } else if (signal.validationSuccess === false) {
+      adj -= 20;
+      reason = 'Validation failed';
+    }
+
+    const s = Math.max(0, Math.min(100, confidenceData.score + adj));
+    confidenceData = {
+      ...confidenceData,
+      score: s,
+      level: s >= 70 ? 'high' : s >= 40 ? 'medium' : 'low',
+      message: reason,
+    };
+  }
+
   /**
    * Run code generation from an approved (possibly edited) design plan.
    */
@@ -554,6 +597,15 @@
             {
               chatStore.updateLastMessage(event.message);
             }
+            break;
+
+          case 'ConfidenceAssessment':
+            confidenceData = {
+              level: event.level,
+              score: event.score,
+              message: event.message,
+              cookbookMatches: event.cookbook_matches,
+            };
             break;
 
           case 'PlanResult':
@@ -628,6 +680,7 @@
                 ? `Code corrected by reviewer: ${event.explanation}`
                 : `Code approved by reviewer.`;
               chatStore.updateLastMessage(`${lastContent4}\n${reviewNote}`);
+              updateConfidence({ reviewModified: event.was_modified });
             }
             break;
 
@@ -642,6 +695,7 @@
             {
               const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
               chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+              updateConfidence({ validationSuccess: true, validationAttempt: event.attempt });
             }
             break;
 
@@ -652,6 +706,9 @@
                 ? `Execution failed (${event.error_category}), retrying...`
                 : `Execution failed: ${event.error_message}`;
               chatStore.updateLastMessage(`${lastContent7}\n${note}`);
+              if (!event.will_retry) {
+                updateConfidence({ validationSuccess: false });
+              }
             }
             break;
 
@@ -902,6 +959,7 @@
     diffData = null;
     isConsensus = false;
     consensusProgress = [];
+    confidenceData = null;
     lastUserRequest = text;
     let validatedStl: string | null = null;
     let backendValidated = false;
@@ -960,6 +1018,15 @@
                   `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
                 );
               }
+              break;
+
+            case 'ConfidenceAssessment':
+              confidenceData = {
+                level: event.level,
+                score: event.score,
+                message: event.message,
+                cookbookMatches: event.cookbook_matches,
+              };
               break;
 
             case 'PlanStatus':
@@ -1064,6 +1131,7 @@
                   ? `Code corrected by reviewer: ${event.explanation}`
                   : `Code approved by reviewer.`;
                 chatStore.updateLastMessage(`${lastContent4}\n${reviewNote}`);
+                updateConfidence({ reviewModified: event.was_modified });
               }
               break;
 
@@ -1078,6 +1146,7 @@
               {
                 const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
                 chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+                updateConfidence({ validationSuccess: true, validationAttempt: event.attempt });
               }
               break;
 
@@ -1088,6 +1157,9 @@
                   ? `Execution failed (${event.error_category}), retrying...`
                   : `Execution failed: ${event.error_message}`;
                 chatStore.updateLastMessage(`${lastContent7}\n${note}`);
+                if (!event.will_retry) {
+                  updateConfidence({ validationSuccess: false });
+                }
               }
               break;
 
@@ -1369,6 +1441,15 @@
               lastDesignPlanText = event.plan_text;
               break;
 
+            case 'ConfidenceAssessment':
+              confidenceData = {
+                level: event.level,
+                score: event.score,
+                message: event.message,
+                cookbookMatches: event.cookbook_matches,
+              };
+              break;
+
             case 'TokenUsage':
               if (event.phase === 'total') {
                 tokenUsageSummary = {
@@ -1511,6 +1592,9 @@
         onApprove={handlePlanApprove}
         onReject={handlePlanReject}
         templates={PLAN_TEMPLATES}
+        confidenceLevel={confidenceData?.level}
+        confidenceScore={confidenceData?.score}
+        confidenceMessage={confidenceData?.message}
       />
     {:else if designPlanText}
       <details class="design-plan-block">
@@ -1553,6 +1637,10 @@
         {/if}
       </div>
     {/if}
+    {#if confidenceData && !chatStore.isStreaming && !isRetrying}
+      <ConfidenceBadge level={confidenceData.level} score={confidenceData.score}
+        message={confidenceData.message} cookbookMatches={confidenceData.cookbookMatches} />
+    {/if}
     {#if chatStore.isStreaming || isRetrying}
       <div class="streaming-indicator">
         <span class="dot"></span>
@@ -1560,6 +1648,10 @@
         <span class="dot"></span>
         {#if isRetrying}
           <span class="retry-label">AI is fixing the code...</span>
+        {/if}
+        {#if confidenceData}
+          <ConfidenceBadge level={confidenceData.level} score={confidenceData.score}
+            message={confidenceData.message} compact />
         {/if}
       </div>
     {/if}

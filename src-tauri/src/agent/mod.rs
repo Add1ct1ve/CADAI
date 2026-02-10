@@ -1,3 +1,4 @@
+pub mod confidence;
 pub mod consensus;
 pub mod context;
 pub mod design;
