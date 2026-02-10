@@ -2,12 +2,28 @@
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PropertiesPanel from '$lib/components/PropertiesPanel.svelte';
   import DrawingProperties from '$lib/components/DrawingProperties.svelte';
+  import GenerationHistory from '$lib/components/GenerationHistory.svelte';
   import { getSceneStore } from '$lib/stores/scene.svelte';
+  import { getGenerationHistoryStore } from '$lib/stores/generationHistory.svelte';
+  import { getViewportStore } from '$lib/stores/viewport.svelte';
+  import type { GenerationEntry } from '$lib/types';
   import { onMount } from 'svelte';
 
   const scene = getSceneStore();
+  const generationHistoryStore = getGenerationHistoryStore();
+  const viewportStore = getViewportStore();
 
-  let activeTab = $state<'code' | 'properties'>('code');
+  let activeTab = $state<'code' | 'properties' | 'history'>('code');
+
+  function handleRestoreEntry(entry: GenerationEntry) {
+    window.dispatchEvent(new CustomEvent('generation-history:restore', { detail: entry }));
+  }
+
+  function handlePreviewEntry(entry: GenerationEntry) {
+    if (entry.stl_base64) {
+      viewportStore.setPendingStl(entry.stl_base64);
+    }
+  }
 
   onMount(() => {
     const handler = () => { activeTab = 'properties'; };
@@ -43,13 +59,28 @@
           <span class="tab-badge">{scene.selectedIds.length}</span>
         {/if}
       </button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'history'}
+        onclick={() => activeTab = 'history'}
+      >
+        History
+        {#if generationHistoryStore.entries.length > 0}
+          <span class="tab-badge">{generationHistoryStore.entries.length}</span>
+        {/if}
+      </button>
     </div>
 
     <div class="panel-body">
       {#if activeTab === 'code'}
         <CodeEditor readonly={scene.codeMode === 'parametric'} />
-      {:else}
+      {:else if activeTab === 'properties'}
         <PropertiesPanel />
+      {:else if activeTab === 'history'}
+        <GenerationHistory
+          onRestoreEntry={handleRestoreEntry}
+          onPreviewEntry={handlePreviewEntry}
+        />
       {/if}
     </div>
   {/if}

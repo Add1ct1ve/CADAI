@@ -9,7 +9,8 @@
   import DesignPlanEditor from './DesignPlanEditor.svelte';
   import MultiPartProgress from './MultiPartProgress.svelte';
   import { PLAN_TEMPLATES } from '$lib/data/plan-templates';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, PartSpec, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, PartSpec, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult, GenerationEntry } from '$lib/types';
+  import { getGenerationHistoryStore } from '$lib/stores/generationHistory.svelte';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -18,6 +19,15 @@
   const project = getProjectStore();
   const viewportStore = getViewportStore();
   const settingsStore = getSettingsStore();
+  const generationHistoryStore = getGenerationHistoryStore();
+
+  let generationStartTime = $state(0);
+  let generationType = $state<GenerationEntry['generationType']>('single');
+  let retryCountForEntry = $state(0);
+  let lastGeneratedCode = $state('');
+  let lastGeneratedStl = $state<string | undefined>(undefined);
+  let lastGenerationSuccess = $state(true);
+  let lastGenerationError = $state<string | undefined>(undefined);
 
   let inputText = $state('');
   let messagesContainer = $state<HTMLElement | null>(null);
@@ -52,6 +62,30 @@
 
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  function recordGeneration(opts: {
+    code: string; stl_base64?: string; success: boolean; error?: string;
+  }) {
+    if (!opts.code && !opts.error) return;
+    generationHistoryStore.addEntry({
+      id: generateId(),
+      timestamp: Date.now(),
+      userPrompt: lastUserRequest,
+      code: opts.code,
+      stl_base64: opts.stl_base64,
+      success: opts.success,
+      error: opts.error,
+      provider: settingsStore.config.ai_provider,
+      model: settingsStore.config.model,
+      durationMs: Date.now() - generationStartTime,
+      tokenUsage: tokenUsageSummary ?? undefined,
+      confidenceScore: confidenceData?.score,
+      confidenceLevel: confidenceData?.level,
+      generationType,
+      retryCount: retryCountForEntry,
+      pinned: false,
+    });
   }
 
   /**
@@ -89,6 +123,7 @@
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
     if (attempt > MAX_RETRIES) return;
 
+    retryCountForEntry = attempt;
     const myGen = chatStore.generationId;
     isRetrying = true;
 
@@ -616,6 +651,7 @@
           case 'PlanResult':
             if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
               isMultiPart = true;
+              generationType = 'multi-part';
               multiPartPlanParts = event.plan.parts;
               partProgress = event.plan.parts.map((p) => ({
                 name: p.name,
@@ -680,8 +716,10 @@
 
           case 'FinalCode':
             project.setCode(event.code);
+            lastGeneratedCode = event.code;
             if (event.stl_base64) {
               validatedStl = event.stl_base64;
+              lastGeneratedStl = event.stl_base64;
               if (isMultiPart) assemblyStl = event.stl_base64;
             }
             break;
@@ -734,6 +772,7 @@
 
           case 'IterativeStart':
             isIterative = true;
+            generationType = 'iterative';
             iterativeSteps = event.steps.map((s) => ({
               index: s.index,
               name: s.name,
@@ -861,6 +900,7 @@
       } else if (isMultiPart) {
         const assembledCode = result;
         project.setCode(assembledCode);
+        lastGeneratedCode = assembledCode;
         chatStore.updateLastMessage(
           chatStore.messages[chatStore.messages.length - 1]?.content +
             '\n\nAssembly complete! Executing code...'
@@ -870,8 +910,11 @@
           if (chatStore.generationId !== myGen) return;
           if (execResult.success && execResult.stl_base64) {
             viewportStore.setPendingStl(execResult.stl_base64);
+            lastGeneratedStl = execResult.stl_base64;
           } else if (!execResult.success) {
             const errorInfo = execResult.stderr || 'Code execution failed';
+            lastGenerationSuccess = false;
+            lastGenerationError = errorInfo;
             chatStore.addMessage({
               id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
               timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errorInfo,
@@ -882,6 +925,8 @@
           }
         } catch (execErr) {
           const errMsg = `${execErr}`;
+          lastGenerationSuccess = false;
+          lastGenerationError = errMsg;
           chatStore.addMessage({
             id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
             timestamp: Date.now(), isError: true, failedCode: assembledCode, errorMessage: errMsg,
@@ -894,13 +939,17 @@
         const code = extractPythonCode(result);
         if (code) {
           project.setCode(code);
+          lastGeneratedCode = code;
           try {
             const execResult = await executeCode(code);
             if (chatStore.generationId !== myGen) return;
             if (execResult.success && execResult.stl_base64) {
               viewportStore.setPendingStl(execResult.stl_base64);
+              lastGeneratedStl = execResult.stl_base64;
             } else if (!execResult.success) {
               const errorInfo = execResult.stderr || 'Code execution failed';
+              lastGenerationSuccess = false;
+              lastGenerationError = errorInfo;
               chatStore.addMessage({
                 id: generateId(), role: 'system', content: `Execution error: ${errorInfo}`,
                 timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errorInfo,
@@ -911,6 +960,8 @@
             }
           } catch (execErr) {
             const errMsg = `${execErr}`;
+            lastGenerationSuccess = false;
+            lastGenerationError = errMsg;
             chatStore.addMessage({
               id: generateId(), role: 'system', content: `Failed to execute code: ${errMsg}`,
               timestamp: Date.now(), isError: true, failedCode: code, errorMessage: errMsg,
@@ -922,6 +973,8 @@
         }
       }
     } catch (err) {
+      lastGenerationSuccess = false;
+      lastGenerationError = `${err}`;
       if (streamingContent.length === 0 && !isMultiPart) {
         chatStore.updateLastMessage(`Error: ${err}`);
       } else {
@@ -932,6 +985,15 @@
       }
     } finally {
       if (chatStore.generationId === myGen) {
+        // Record generation to history
+        if (lastGeneratedCode || lastGenerationError) {
+          recordGeneration({
+            code: lastGeneratedCode,
+            stl_base64: lastGeneratedStl,
+            success: lastGenerationSuccess,
+            error: lastGenerationError,
+          });
+        }
         chatStore.setStreaming(false);
         // Do NOT reset isMultiPart/partProgress — cards persist for user interaction
         isIterative = false;
@@ -1062,6 +1124,13 @@
     assemblyStl = null;
     multiPartPlanParts = [];
     lastUserRequest = text;
+    generationStartTime = Date.now();
+    generationType = 'single';
+    retryCountForEntry = 0;
+    lastGeneratedCode = '';
+    lastGeneratedStl = undefined;
+    lastGenerationSuccess = true;
+    lastGenerationError = undefined;
     let validatedStl: string | null = null;
     let backendValidated = false;
 
@@ -1155,6 +1224,7 @@
               }
               if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
                 isMultiPart = true;
+                generationType = 'multi-part';
                 multiPartPlanParts = event.plan.parts;
                 partProgress = event.plan.parts.map((p) => ({
                   name: p.name,
@@ -1222,8 +1292,10 @@
 
             case 'FinalCode':
               project.setCode(event.code);
+              lastGeneratedCode = event.code;
               if (event.stl_base64) {
                 validatedStl = event.stl_base64;
+                lastGeneratedStl = event.stl_base64;
                 if (isMultiPart) assemblyStl = event.stl_base64;
               }
               break;
@@ -1276,6 +1348,7 @@
 
             case 'IterativeStart':
               isIterative = true;
+              generationType = 'iterative';
               iterativeSteps = event.steps.map((s) => ({
                 index: s.index,
                 name: s.name,
@@ -1392,6 +1465,7 @@
 
             case 'ModificationDetected':
               isModification = true;
+              generationType = 'modification';
               break;
 
             case 'CodeDiff':
@@ -1422,6 +1496,7 @@
         } else if (isMultiPart) {
           const assembledCode = result;
           project.setCode(assembledCode);
+          lastGeneratedCode = assembledCode;
           chatStore.updateLastMessage(
             chatStore.messages[chatStore.messages.length - 1]?.content +
               '\n\nAssembly complete! Executing code...'
@@ -1432,6 +1507,7 @@
             if (chatStore.generationId !== myGen) return;
             if (execResult.success && execResult.stl_base64) {
               viewportStore.setPendingStl(execResult.stl_base64);
+              lastGeneratedStl = execResult.stl_base64;
               chatStore.addMessage({
                 id: generateId(),
                 role: 'system',
@@ -1440,6 +1516,8 @@
               });
             } else if (!execResult.success) {
               const errorInfo = execResult.stderr || 'Code execution failed';
+              lastGenerationSuccess = false;
+              lastGenerationError = errorInfo;
               chatStore.addMessage({
                 id: generateId(),
                 role: 'system',
@@ -1474,14 +1552,18 @@
           const code = extractPythonCode(result);
           if (code) {
             project.setCode(code);
+            lastGeneratedCode = code;
 
             try {
               const execResult = await executeCode(code);
               if (chatStore.generationId !== myGen) return;
               if (execResult.success && execResult.stl_base64) {
                 viewportStore.setPendingStl(execResult.stl_base64);
+                lastGeneratedStl = execResult.stl_base64;
               } else if (!execResult.success) {
                 const errorInfo = execResult.stderr || 'Code execution failed';
+                lastGenerationSuccess = false;
+                lastGenerationError = errorInfo;
                 chatStore.addMessage({
                   id: generateId(),
                   role: 'system',
@@ -1498,6 +1580,8 @@
               }
             } catch (execErr) {
               const errMsg = `${execErr}`;
+              lastGenerationSuccess = false;
+              lastGenerationError = errMsg;
               chatStore.addMessage({
                 id: generateId(),
                 role: 'system',
@@ -1594,6 +1678,8 @@
         }
       }
     } catch (err) {
+      lastGenerationSuccess = false;
+      lastGenerationError = `${err}`;
       if (streamingContent.length === 0 && !isMultiPart) {
         chatStore.updateLastMessage(`Error: ${err}`);
       } else {
@@ -1611,6 +1697,15 @@
         planTimerInterval = null;
       }
       if (chatStore.generationId === myGen) {
+        // Record generation to history (only if we actually generated something)
+        if (lastGeneratedCode || lastGenerationError) {
+          recordGeneration({
+            code: lastGeneratedCode,
+            stl_base64: lastGeneratedStl,
+            success: lastGenerationSuccess,
+            error: lastGenerationError,
+          });
+        }
         chatStore.setStreaming(false);
         // Do NOT reset isMultiPart/partProgress — cards persist for user interaction
         designPlanText = '';
@@ -1658,8 +1753,17 @@
     }
   }
 
+  function handleHistoryRestore(e: Event) {
+    const entry = (e as CustomEvent<GenerationEntry>).detail;
+    project.setCode(entry.code);
+    if (entry.stl_base64) {
+      viewportStore.setPendingStl(entry.stl_base64);
+    }
+  }
+
   onMount(() => {
     window.addEventListener('keydown', handleWindowKeydown);
+    window.addEventListener('generation-history:restore', handleHistoryRestore);
 
     // Add welcome message
     chatStore.addMessage({
@@ -1672,6 +1776,7 @@
 
   onDestroy(() => {
     window.removeEventListener('keydown', handleWindowKeydown);
+    window.removeEventListener('generation-history:restore', handleHistoryRestore);
   });
 </script>
 
