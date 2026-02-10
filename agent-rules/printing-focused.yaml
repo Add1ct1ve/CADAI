@@ -1669,3 +1669,102 @@ anti_patterns:
           .pushPoints([(10, 0), (-10, 0)])
           .hole(5.0)
       )
+
+# =============================================================================
+# CADQUERY API QUICK-REFERENCE
+# =============================================================================
+# Compact reference for error-prone operations.
+# Each entry covers signature, key params, and gotchas.
+
+api_reference:
+  - operation: "loft()"
+    signature: "Workplane.loft(ruled=False, combine=True)"
+    returns: "Workplane with a solid lofted between pending wires on different workplanes"
+    params:
+      - "ruled (bool): True for straight ruled surface between profiles, False for smooth"
+      - "combine (bool): True to union with existing solid, False for standalone"
+    gotchas:
+      - "All profiles must be on separate workplanes at different offsets — use .workplane(offset=N) between each"
+      - "Profiles with very different edge counts (e.g. rect→circle) may twist — use ruled=True or similar vertex counts"
+      - "Minimum 2 profiles required; profiles must not self-intersect"
+
+  - operation: "sweep()"
+    signature: "Workplane.sweep(path, isFrenet=False, transition='right', combine=True)"
+    returns: "Workplane with a solid swept along the path wire"
+    params:
+      - "path (Wire): MUST be a Wire object — call .wire() on your edge chain"
+      - "isFrenet (bool): True for Frenet frame (better for helical paths), False for default"
+      - "transition ('right'|'round'|'transformed'): how profile handles path curvature"
+    gotchas:
+      - "Path MUST be a Wire — forgetting .wire() is the #1 sweep error"
+      - "Profile should be perpendicular to the path start tangent"
+      - "Self-intersecting sweep (tight curves with large profile) produces invalid geometry"
+
+  - operation: "revolve()"
+    signature: "Workplane.revolve(angleDegrees=360, axisStart=(0,0,0), axisEnd=(0,1,0), combine=True)"
+    returns: "Workplane with a solid of revolution"
+    params:
+      - "angleDegrees (float): rotation angle, 360 for full revolution"
+      - "axisStart, axisEnd: two points defining the revolve axis direction"
+    gotchas:
+      - "CRITICAL: Profile must be ENTIRELY on one side of the revolve axis — any point crossing it causes Standard_ConstructionError"
+      - "For XZ plane revolve around Y: all X coordinates must be >= 0"
+      - "Profile must be a closed wire (use .close() after polyline/spline)"
+
+  - operation: "shell()"
+    signature: "Workplane.shell(thickness)"
+    returns: "Workplane with a hollowed-out solid"
+    params:
+      - "thickness (float): negative = shell inward (common), positive = shell outward"
+      - "The face the operation is called on (.faces('>Z').shell()) is the face REMOVED (opened)"
+    gotchas:
+      - "Shell FAILS on bodies with complex boolean seams — shell BEFORE booleans when possible"
+      - "Thin features or sharp internal corners cause kernel failures — simplify geometry first"
+      - "Only one face can be removed per shell call; for multiple openings, shell then cut"
+
+  - operation: "Selector strings"
+    signature: ".faces(selector) / .edges(selector) / .wires(selector)"
+    returns: "Filtered set of faces, edges, or wires"
+    params:
+      - ">Z / <Z: max / min along axis (top/bottom face)"
+      - "|Z: parallel to Z axis (vertical edges/faces)"
+      - "#Z: perpendicular to Z axis (horizontal edges/faces)"
+    gotchas:
+      - ">X is FRONT face (max X), <X is BACK — not left/right"
+      - ">Y is RIGHT, <Y is LEFT — easy to confuse with X"
+      - "Compound selectors not supported — chain .faces('>Z').faces('>X') does NOT intersect, it replaces"
+
+  - operation: "Workplane constructor & offsets"
+    signature: "cq.Workplane('XY') / .workplane(offset=N) / .transformed(offset, rotate) / .center(x, y)"
+    returns: "New workplane for sketching or feature placement"
+    params:
+      - "'XY'/'XZ'/'YZ': base plane selection — XY is floor, XZ is front wall, YZ is side wall"
+      - "offset (float): distance along plane normal from current position"
+      - ".center(x, y): shifts the workplane origin within the current plane"
+    gotchas:
+      - ".workplane(offset=N) is relative to current context face, not absolute Z"
+      - ".transformed(offset=(0,0,10), rotate=(45,0,0)) for combined translate+rotate"
+      - ".center() does NOT move existing geometry — it only shifts where the NEXT sketch is drawn"
+
+  - operation: "pushPoints / rarray / polarArray"
+    signature: ".pushPoints(pts) / .rarray(xSpacing, ySpacing, xCount, yCount) / .polarArray(radius, startAngle, angle, count)"
+    returns: "Workplane with pending points for the next operation (hole, circle, cboreHole, etc.)"
+    params:
+      - "pushPoints: list of (x,y) tuples for arbitrary positions"
+      - "rarray: rectangular grid by spacing and count per axis"
+      - "polarArray: points on a circle — radius, start angle, sweep angle, count"
+    gotchas:
+      - "Points are relative to the CURRENT workplane origin, not global coordinates"
+      - "The next operation (hole, circle, etc.) executes once at EACH pending point"
+      - "polarArray angle=360 distributes evenly around full circle; angle<360 for arc segment"
+
+  - operation: ".tag() / .faces(tag=)"
+    signature: ".tag('name') / .faces(tag='name') / .edges(tag='name')"
+    returns: "tag() stores a reference to the current state; tag= recalls it for selection"
+    params:
+      - ".tag('name'): snapshot the current solid state under a name"
+      - ".faces('>Z', tag='name'): select faces from the tagged state, not current state"
+    gotchas:
+      - "Tags survive boolean operations — tag BEFORE a union/cut to reference original faces"
+      - "Essential pattern: .tag('base') ... .union(other) ... .faces('>Z', tag='base') to find faces that got merged"
+      - "Tag names are strings — must match exactly (case-sensitive)"
