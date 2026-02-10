@@ -55,6 +55,38 @@ pub enum ValidationEvent {
     },
 }
 
+/// Run CadQuery code through `runner.py` with a timeout, using an isolated temp directory.
+///
+/// Safe for concurrent execution — each call gets its own temp subdirectory.
+pub async fn execute_with_timeout_isolated(
+    code: &str,
+    venv_dir: &Path,
+    runner_script: &Path,
+) -> Result<runner::ExecutionResult, String> {
+    let code_owned = code.to_string();
+    let venv_owned = venv_dir.to_path_buf();
+    let runner_owned = runner_script.to_path_buf();
+
+    let result = timeout(
+        Duration::from_secs(EXECUTION_TIMEOUT_SECS),
+        tokio::task::spawn_blocking(move || {
+            runner::execute_cadquery_isolated(&venv_owned, &runner_owned, &code_owned)
+        }),
+    )
+    .await;
+
+    match result {
+        Err(_) => Err(format!(
+            "Execution timed out after {} seconds",
+            EXECUTION_TIMEOUT_SECS
+        )),
+        Ok(Err(join_err)) => Err(format!("Execution task panicked: {}", join_err)),
+        Ok(Ok(Err(AppError::CadQueryError(msg)))) => Err(msg),
+        Ok(Ok(Err(e))) => Err(e.to_string()),
+        Ok(Ok(Ok(exec_result))) => Ok(exec_result),
+    }
+}
+
 /// Run CadQuery code through `runner.py` with a timeout.
 ///
 /// Returns `Ok(ExecutionResult)` on success, `Err(error_message)` on failure or timeout.

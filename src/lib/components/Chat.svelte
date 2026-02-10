@@ -2,13 +2,14 @@
   import { getChatStore } from '$lib/stores/chat.svelte';
   import { getProjectStore } from '$lib/stores/project.svelte';
   import { getViewportStore } from '$lib/stores/viewport.svelte';
-  import { generateParallel, generateDesignPlan, generateFromPlan, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps } from '$lib/services/tauri';
+  import { generateParallel, generateDesignPlan, generateFromPlan, extractPythonCode, executeCode, autoRetry, sendMessageStreaming, retrySkippedSteps, retryPart } from '$lib/services/tauri';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import ChatMessageComponent from './ChatMessage.svelte';
   import ConfidenceBadge from './ConfidenceBadge.svelte';
   import DesignPlanEditor from './DesignPlanEditor.svelte';
+  import MultiPartProgress from './MultiPartProgress.svelte';
   import { PLAN_TEMPLATES } from '$lib/data/plan-templates';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, PartSpec, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult } from '$lib/types';
   import { onMount, onDestroy } from 'svelte';
 
   const MAX_RETRIES = 3;
@@ -30,6 +31,8 @@
   let skippedStepsData = $state<SkippedStepInfo[]>([]);
   let lastDesignPlanText = $state('');
   let lastUserRequest = $state('');
+  let assemblyStl = $state<string | null>(null);
+  let multiPartPlanParts = $state<PartSpec[]>([]);
   let diffData = $state<{ diff_lines: DiffLine[]; additions: number; deletions: number } | null>(null);
   let isModification = $state(false);
   let isConsensus = $state(false);
@@ -79,6 +82,8 @@
     confidenceData = null;
     showPlanEditor = false;
     pendingPlan = null;
+    assemblyStl = null;
+    multiPartPlanParts = [];
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -611,15 +616,19 @@
           case 'PlanResult':
             if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
               isMultiPart = true;
+              multiPartPlanParts = event.plan.parts;
               partProgress = event.plan.parts.map((p) => ({
                 name: p.name,
                 status: 'pending' as const,
                 streamedText: '',
+                description: p.description,
+                constraints: p.constraints,
+                position: p.position,
               }));
               const desc = event.plan.description
-                ? `${event.plan.description}\n\n`
-                : '';
-              chatStore.updateLastMessage(`${desc}${formatPartProgress(partProgress)}`);
+                ? `${event.plan.description}`
+                : 'Generating parts...';
+              chatStore.updateLastMessage(desc);
             }
             break;
 
@@ -637,9 +646,12 @@
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].status = 'generating';
               partProgress[event.part_index].streamedText += event.delta;
-              const desc1 = chatStore.messages[chatStore.messages.length - 1]?.content.split('\nGenerating')[0] || '';
-              const prefix = desc1.includes('Generating') ? '' : desc1 + '\n';
-              chatStore.updateLastMessage(`${prefix}${formatPartProgress(partProgress)}`);
+            }
+            break;
+
+          case 'PartCodeExtracted':
+            if (partProgress[event.part_index]) {
+              partProgress[event.part_index].code = event.code;
             }
             break;
 
@@ -647,10 +659,15 @@
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].status = event.success ? 'complete' : 'failed';
               if (event.error) partProgress[event.part_index].error = event.error;
-              const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-              const descPart = lastContent.split('\nGenerating')[0];
-              const prefix2 = descPart.includes('Generating') ? '' : descPart + '\n';
-              chatStore.updateLastMessage(`${prefix2}${formatPartProgress(partProgress)}`);
+            }
+            break;
+
+          case 'PartStlReady':
+            if (partProgress[event.part_index]) {
+              partProgress[event.part_index].stl_base64 = event.stl_base64;
+              if (!assemblyStl) {
+                viewportStore.setPendingStl(event.stl_base64);
+              }
             }
             break;
 
@@ -663,7 +680,10 @@
 
           case 'FinalCode':
             project.setCode(event.code);
-            if (event.stl_base64) validatedStl = event.stl_base64;
+            if (event.stl_base64) {
+              validatedStl = event.stl_base64;
+              if (isMultiPart) assemblyStl = event.stl_base64;
+            }
             break;
 
           case 'ReviewStatus':
@@ -913,8 +933,7 @@
     } finally {
       if (chatStore.generationId === myGen) {
         chatStore.setStreaming(false);
-        isMultiPart = false;
-        partProgress = [];
+        // Do NOT reset isMultiPart/partProgress — cards persist for user interaction
         isIterative = false;
         iterativeSteps = [];
         isConsensus = false;
@@ -943,6 +962,86 @@
     });
   }
 
+  function handlePreviewPart(index: number) {
+    if (partProgress[index]?.stl_base64) {
+      viewportStore.setPendingStl(partProgress[index].stl_base64!);
+    }
+  }
+
+  function handleShowAssembly() {
+    if (assemblyStl) {
+      viewportStore.setPendingStl(assemblyStl);
+    }
+  }
+
+  async function handleRetryPart(index: number) {
+    if (chatStore.isStreaming || isRetrying) return;
+    const partSpec = multiPartPlanParts[index];
+    if (!partSpec) return;
+
+    const myGen = chatStore.generationId;
+    isRetrying = true;
+
+    // Reset part state to generating
+    partProgress[index] = {
+      ...partProgress[index],
+      status: 'generating',
+      streamedText: '',
+      error: undefined,
+      code: undefined,
+      stl_base64: undefined,
+    };
+
+    try {
+      await retryPart(
+        index,
+        partSpec,
+        lastDesignPlanText,
+        lastUserRequest,
+        (event: MultiPartEvent) => {
+          if (chatStore.generationId !== myGen) return;
+
+          switch (event.kind) {
+            case 'PartDelta':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = 'generating';
+                partProgress[event.part_index].streamedText += event.delta;
+              }
+              break;
+            case 'PartCodeExtracted':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].code = event.code;
+              }
+              break;
+            case 'PartComplete':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = event.success ? 'complete' : 'failed';
+                if (event.error) partProgress[event.part_index].error = event.error;
+              }
+              break;
+            case 'PartStlReady':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].stl_base64 = event.stl_base64;
+              }
+              break;
+            case 'Done':
+              break;
+          }
+        },
+      );
+    } catch (err) {
+      partProgress[index] = {
+        ...partProgress[index],
+        status: 'failed',
+        error: `Retry failed: ${err}`,
+      };
+    } finally {
+      if (chatStore.generationId === myGen) {
+        isRetrying = false;
+      }
+    }
+  }
+
   async function handleSend() {
     const text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
@@ -960,6 +1059,8 @@
     isConsensus = false;
     consensusProgress = [];
     confidenceData = null;
+    assemblyStl = null;
+    multiPartPlanParts = [];
     lastUserRequest = text;
     let validatedStl: string | null = null;
     let backendValidated = false;
@@ -1054,17 +1155,19 @@
               }
               if (event.plan.mode === 'multi' && event.plan.parts.length > 0) {
                 isMultiPart = true;
+                multiPartPlanParts = event.plan.parts;
                 partProgress = event.plan.parts.map((p) => ({
                   name: p.name,
                   status: 'pending' as const,
                   streamedText: '',
+                  description: p.description,
+                  constraints: p.constraints,
+                  position: p.position,
                 }));
                 const desc = event.plan.description
-                  ? `${event.plan.description}\n\n`
-                  : '';
-                chatStore.updateLastMessage(
-                  `${desc}${formatPartProgress(partProgress)}`
-                );
+                  ? `${event.plan.description}`
+                  : 'Generating parts...';
+                chatStore.updateLastMessage(desc);
               }
               break;
 
@@ -1082,11 +1185,12 @@
               if (partProgress[event.part_index]) {
                 partProgress[event.part_index].status = 'generating';
                 partProgress[event.part_index].streamedText += event.delta;
-                const desc1 = chatStore.messages[chatStore.messages.length - 1]?.content.split('\nGenerating')[0] || '';
-                const prefix = desc1.includes('Generating') ? '' : desc1 + '\n';
-                chatStore.updateLastMessage(
-                  `${prefix}${formatPartProgress(partProgress)}`
-                );
+              }
+              break;
+
+            case 'PartCodeExtracted':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].code = event.code;
               }
               break;
 
@@ -1096,12 +1200,16 @@
                 if (event.error) {
                   partProgress[event.part_index].error = event.error;
                 }
-                const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-                const descPart = lastContent.split('\nGenerating')[0];
-                const prefix2 = descPart.includes('Generating') ? '' : descPart + '\n';
-                chatStore.updateLastMessage(
-                  `${prefix2}${formatPartProgress(partProgress)}`
-                );
+              }
+              break;
+
+            case 'PartStlReady':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].stl_base64 = event.stl_base64;
+                // Show individual part in viewport if assembly not yet received
+                if (!assemblyStl) {
+                  viewportStore.setPendingStl(event.stl_base64);
+                }
               }
               break;
 
@@ -1114,7 +1222,10 @@
 
             case 'FinalCode':
               project.setCode(event.code);
-              if (event.stl_base64) validatedStl = event.stl_base64;
+              if (event.stl_base64) {
+                validatedStl = event.stl_base64;
+                if (isMultiPart) assemblyStl = event.stl_base64;
+              }
               break;
 
             case 'ReviewStatus':
@@ -1501,8 +1612,7 @@
       }
       if (chatStore.generationId === myGen) {
         chatStore.setStreaming(false);
-        isMultiPart = false;
-        partProgress = [];
+        // Do NOT reset isMultiPart/partProgress — cards persist for user interaction
         designPlanText = '';
         isIterative = false;
         iterativeSteps = [];
@@ -1582,6 +1692,17 @@
         disableActions={chatStore.isStreaming || isRetrying}
       />
     {/each}
+    {#if isMultiPart && partProgress.length > 0}
+      <MultiPartProgress
+        parts={partProgress}
+        {assemblyStl}
+        isGenerating={chatStore.isStreaming}
+        onPreviewPart={handlePreviewPart}
+        onRetryPart={handleRetryPart}
+        onShowAssembly={handleShowAssembly}
+        disableActions={chatStore.isStreaming || isRetrying}
+      />
+    {/if}
     {#if showPlanEditor && pendingPlan}
       <DesignPlanEditor
         planText={pendingPlan.plan_text}

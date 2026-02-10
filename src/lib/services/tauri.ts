@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo, DesignPlanResult } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo, DesignPlanResult, PartSpec } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -157,6 +157,37 @@ export async function retrySkippedSteps(
   } catch (err) {
     console.error('retry_skipped_steps failed:', err);
     throw new Error(`Retry skipped steps failed: ${err}`);
+  }
+}
+
+/**
+ * Retry generation of a single failed part in a multi-part assembly.
+ */
+export async function retryPart(
+  partIndex: number,
+  partSpec: PartSpec,
+  designPlanText: string,
+  userRequest: string,
+  onEvent: (event: MultiPartEvent) => void,
+): Promise<string> {
+  try {
+    const channel = new Channel<MultiPartEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+
+    const result = await invoke<string>('retry_part', {
+      partIndex,
+      partSpec,
+      designPlanText,
+      userRequest,
+      onEvent: channel,
+    });
+
+    return result;
+  } catch (err) {
+    console.error('retry_part failed:', err);
+    throw new Error(`Retry part failed: ${err}`);
   }
 }
 

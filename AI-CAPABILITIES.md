@@ -519,24 +519,25 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ---
 
-### 5.3 Enhanced Multi-Part Progress
+### 5.3 Enhanced Multi-Part Progress ✅
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Per-part progress cards | ⬜ | Individual card for each part showing status |
-| Part preview rendering | ⬜ | Tiny 3D preview of each part as it completes |
-| Retry button per part | ⬜ | If one part fails, retry just that part |
-| Part code viewer | ⬜ | Click a part card to see its individual code |
-| Assembly progress visualization | ⬜ | Show parts appearing in the 3D view one by one |
-| Part dependency display | ⬜ | Show which parts depend on which (constraints) |
+| Per-part progress cards | ✅ | Card-based UI with status icons, descriptions, constraints |
+| Part preview rendering | ✅ | Click "Preview" to show individual part STL in main viewport |
+| Retry button per part | ✅ | "Retry" button on failed parts, calls `retry_part` command |
+| Part code viewer | ✅ | Expandable inline code viewer per part card |
+| Assembly progress visualization | ✅ | Parts appear in viewport via `PartStlReady` as they complete |
+| Part dependency display | ✅ | Constraints shown as bulleted list under each card |
 
 **Implementation notes:**
-- New component: `MultiPartProgress.svelte`
-- Currently multi-part progress is just status text messages
-- This phase adds rich cards with status, code preview, retry buttons
-- Part preview: extract STL for each part individually, render in small Three.js canvas
-- Per-part retry: new command `retry_part(part_index, plan, design_context)`
-- Assembly visualization: add parts to the 3D scene incrementally as they complete
+- New component: `src/lib/components/MultiPartProgress.svelte`
+- New Rust functions: `execute_cadquery_isolated()` (runner.rs), `execute_with_timeout_isolated()` (executor.rs)
+- New event variants: `PartCodeExtracted`, `PartStlReady` on `MultiPartEvent`
+- New command: `retry_part` — re-generates a single failed part with streaming
+- Background per-part STL tasks spawned after code extraction, non-blocking
+- Cards persist after generation for user interaction (preview, code, retry)
+- Assembly STL cached for "Show Full Assembly" button
 
 ---
 
@@ -709,7 +710,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 4.4 Multi-Model Consensus | ✅ | Medium | Medium | Same-provider dual-temperature consensus |
 | 5.1 Plan Editor | ✅ | Medium | Medium | User control over geometry planning |
 | 5.2 Confidence Indicator | ✅ | Low | Low | Manages expectations |
-| 5.3 Multi-Part Progress | P2 | Medium | Medium | Better visibility for multi-part |
+| 5.3 Multi-Part Progress | ✅ | Medium | Medium | Better visibility for multi-part |
 | 5.4 Generation History | P2 | Medium | Medium | Compare and roll back attempts |
 | 6.1 Design Patterns | P2 | Medium | Medium | Higher-level templates |
 | 6.2 Operation Interactions | P1 | Low | High | Tribal knowledge codified |

@@ -47,6 +47,7 @@ pub fn run() {
             commands::parallel::generate_design_plan,
             commands::parallel::generate_from_plan,
             commands::parallel::retry_skipped_steps,
+            commands::parallel::retry_part,
             commands::drawing::generate_drawing_view,
             commands::drawing::export_drawing_pdf,
             commands::drawing::export_drawing_dxf,
