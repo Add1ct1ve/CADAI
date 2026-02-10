@@ -25,6 +25,7 @@ pub struct AgentRules {
     pub anti_patterns: Option<Vec<AntiPatternEntry>>,
     pub api_reference: Option<Vec<ApiReferenceEntry>>,
     pub dimension_tables: Option<Vec<DimensionTableEntry>>,
+    pub few_shot_examples: Option<Vec<FewShotExample>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +59,13 @@ pub struct DimensionTableEntry {
     pub category: String,
     pub description: String,
     pub data: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FewShotExample {
+    pub user_request: String,
+    pub design_plan: String,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +150,7 @@ impl AgentRules {
             anti_patterns: None,
             api_reference: None,
             dimension_tables: None,
+            few_shot_examples: None,
         }
     }
 }
@@ -595,6 +604,91 @@ mod tests {
         assert!(rules.anti_patterns.is_none());
         assert!(rules.api_reference.is_none());
         assert!(rules.dimension_tables.is_none());
+        assert!(rules.few_shot_examples.is_none());
+    }
+
+    // ── Few-Shot Examples ──────────────────────────────────────────────
+
+    #[test]
+    fn test_default_few_shot_examples_has_5_entries() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let fse = rules.few_shot_examples.as_ref().unwrap();
+        assert_eq!(fse.len(), 5, "default should have 5 few-shot examples");
+    }
+
+    #[test]
+    fn test_printing_few_shot_examples_has_5_entries() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let fse = rules.few_shot_examples.as_ref().unwrap();
+        assert_eq!(fse.len(), 5, "printing should have 5 few-shot examples");
+    }
+
+    #[test]
+    fn test_cnc_few_shot_examples_has_5_entries() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let fse = rules.few_shot_examples.as_ref().unwrap();
+        assert_eq!(fse.len(), 5, "cnc should have 5 few-shot examples");
+    }
+
+    #[test]
+    fn test_few_shot_example_requests_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let fse = rules.few_shot_examples.as_ref().unwrap();
+        let requests: Vec<&str> = fse.iter().map(|e| e.user_request.as_str()).collect();
+        assert!(requests.iter().any(|r| r.contains("coffee mug")));
+        assert!(requests.iter().any(|r| r.contains("motor mount")));
+        assert!(requests.iter().any(|r| r.contains("SD card")));
+        assert!(requests.iter().any(|r| r.contains("gear")));
+        assert!(requests.iter().any(|r| r.contains("phone stand")));
+    }
+
+    #[test]
+    fn test_all_few_shot_examples_have_required_fields() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let fse = rules.few_shot_examples.as_ref().unwrap();
+            for ex in fse {
+                assert!(
+                    !ex.user_request.is_empty(),
+                    "Few-shot example in preset {:?} has empty user_request",
+                    preset
+                );
+                assert!(
+                    !ex.design_plan.is_empty(),
+                    "Few-shot example '{}' in preset {:?} has empty design_plan",
+                    ex.user_request,
+                    preset
+                );
+                assert!(
+                    !ex.code.is_empty(),
+                    "Few-shot example '{}' in preset {:?} has empty code",
+                    ex.user_request,
+                    preset
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_few_shot_examples_have_import_and_result() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let fse = rules.few_shot_examples.as_ref().unwrap();
+            for ex in fse {
+                assert!(
+                    ex.code.contains("import cadquery"),
+                    "Few-shot '{}' in preset {:?} missing 'import cadquery'",
+                    ex.user_request,
+                    preset
+                );
+                assert!(
+                    ex.code.contains("result"),
+                    "Few-shot '{}' in preset {:?} missing 'result' variable",
+                    ex.user_request,
+                    preset
+                );
+            }
+        }
     }
 
     // ── Print-specific extras ──────────────────────────────────────────
