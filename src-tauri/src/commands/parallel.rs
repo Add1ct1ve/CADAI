@@ -9,6 +9,7 @@ use crate::ai::cost;
 use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::agent::design;
 use crate::agent::executor;
+use crate::agent::iterative;
 use crate::agent::prompts;
 use crate::agent::review;
 use crate::error::AppError;
@@ -113,6 +114,35 @@ pub enum MultiPartEvent {
         error_category: String,
         error_message: String,
         will_retry: bool,
+    },
+    IterativeStart {
+        total_steps: usize,
+        steps: Vec<iterative::BuildStep>,
+    },
+    IterativeStepStarted {
+        step_index: usize,
+        step_name: String,
+        description: String,
+    },
+    IterativeStepComplete {
+        step_index: usize,
+        success: bool,
+        stl_base64: Option<String>,
+    },
+    IterativeStepRetry {
+        step_index: usize,
+        attempt: u32,
+        error: String,
+    },
+    IterativeStepSkipped {
+        step_index: usize,
+        name: String,
+        error: String,
+    },
+    IterativeComplete {
+        final_code: String,
+        stl_base64: Option<String>,
+        skipped_steps: Vec<iterative::SkippedStep>,
     },
     Done {
         success: bool,
@@ -436,6 +466,128 @@ pub async fn generate_parallel(
     // Single mode: fall through to normal streaming
     // -----------------------------------------------------------------------
     if plan.mode == "single" || plan.parts.is_empty() {
+        // Check if iterative mode should be used
+        let build_steps = iterative::parse_build_steps(&design_plan.text);
+
+        if iterative::should_use_iterative(&build_steps) {
+            if let Some(ref ctx) = execution_ctx {
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: format!(
+                        "Building step by step ({} steps)...",
+                        build_steps.len()
+                    ),
+                });
+
+                let on_iter_event = |evt: iterative::IterativeEvent| {
+                    match evt {
+                        iterative::IterativeEvent::Start { total_steps, steps } => {
+                            let _ = on_event.send(MultiPartEvent::IterativeStart {
+                                total_steps,
+                                steps,
+                            });
+                        }
+                        iterative::IterativeEvent::StepStarted {
+                            step_index,
+                            step_name,
+                            description,
+                        } => {
+                            let _ = on_event.send(MultiPartEvent::IterativeStepStarted {
+                                step_index,
+                                step_name,
+                                description,
+                            });
+                        }
+                        iterative::IterativeEvent::StepComplete {
+                            step_index,
+                            success,
+                            stl_base64,
+                        } => {
+                            let _ = on_event.send(MultiPartEvent::IterativeStepComplete {
+                                step_index,
+                                success,
+                                stl_base64,
+                            });
+                        }
+                        iterative::IterativeEvent::StepRetry {
+                            step_index,
+                            attempt,
+                            error,
+                        } => {
+                            let _ = on_event.send(MultiPartEvent::IterativeStepRetry {
+                                step_index,
+                                attempt,
+                                error,
+                            });
+                        }
+                        iterative::IterativeEvent::StepSkipped {
+                            step_index,
+                            name,
+                            error,
+                        } => {
+                            let _ = on_event.send(MultiPartEvent::IterativeStepSkipped {
+                                step_index,
+                                name,
+                                error,
+                            });
+                        }
+                    }
+                };
+
+                let result = iterative::run_iterative_build(
+                    &build_steps,
+                    &design_plan.text,
+                    &user_request,
+                    &system_prompt,
+                    &config,
+                    ctx,
+                    &on_iter_event,
+                )
+                .await?;
+
+                // Accumulate usage
+                total_usage.add(&result.total_usage);
+                if result.total_usage.total() > 0 {
+                    emit_usage(
+                        &on_event,
+                        "iterative",
+                        &result.total_usage,
+                        &provider_id,
+                        &model_id,
+                    );
+                }
+
+                // Emit final code
+                let _ = on_event.send(MultiPartEvent::FinalCode {
+                    code: result.final_code.clone(),
+                    stl_base64: result.stl_base64.clone(),
+                });
+
+                // Emit iterative complete
+                let _ = on_event.send(MultiPartEvent::IterativeComplete {
+                    final_code: result.final_code.clone(),
+                    stl_base64: result.stl_base64.clone(),
+                    skipped_steps: result.skipped_steps.clone(),
+                });
+
+                if total_usage.total() > 0 {
+                    emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+                }
+
+                let _ = on_event.send(MultiPartEvent::Done {
+                    success: result.success,
+                    error: if result.success {
+                        None
+                    } else {
+                        Some("Iterative build failed".to_string())
+                    },
+                    validated: true,
+                });
+
+                return Ok(result.final_code);
+            }
+            // No Python execution context → fall through to single-shot
+        }
+
         let _ = on_event.send(MultiPartEvent::PlanStatus {
             message: "Generating code...".to_string(),
         });
@@ -867,4 +1019,159 @@ fn parse_plan(json_str: &str) -> GenerationPlan {
 /// Extract a Python code block from an AI response.
 fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
+}
+
+// ---------------------------------------------------------------------------
+// Retry skipped steps command
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn retry_skipped_steps(
+    current_code: String,
+    skipped_steps: Vec<iterative::SkippedStep>,
+    design_plan_text: String,
+    user_request: String,
+    on_event: Channel<MultiPartEvent>,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    let config = state.config.lock().unwrap().clone();
+    let system_prompt =
+        crate::agent::prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
+
+    let provider_id = config.ai_provider.clone();
+    let model_id = config.model.clone();
+    let mut total_usage = TokenUsage::default();
+
+    // Resolve execution context
+    let execution_ctx = {
+        let venv_path = state.venv_path.lock().unwrap().clone();
+        match venv_path {
+            Some(venv_dir) => match super::find_python_script("runner.py") {
+                Ok(runner_script) => Some(executor::ExecutionContext {
+                    venv_dir,
+                    runner_script,
+                    config: config.clone(),
+                }),
+                Err(_) => None,
+            },
+            None => None,
+        }
+    };
+
+    let ctx = execution_ctx.ok_or_else(|| {
+        AppError::CadQueryError("Python environment not available for retry".to_string())
+    })?;
+
+    // Convert SkippedSteps back to BuildSteps
+    let build_steps: Vec<iterative::BuildStep> = skipped_steps
+        .iter()
+        .map(|s| iterative::BuildStep {
+            index: s.step_index,
+            name: s.name.clone(),
+            description: s.description.clone(),
+            operations: crate::agent::design::extract_operations_from_text(&s.description),
+        })
+        .collect();
+
+    let on_iter_event = |evt: iterative::IterativeEvent| {
+        match evt {
+            iterative::IterativeEvent::Start { total_steps, steps } => {
+                let _ = on_event.send(MultiPartEvent::IterativeStart { total_steps, steps });
+            }
+            iterative::IterativeEvent::StepStarted {
+                step_index,
+                step_name,
+                description,
+            } => {
+                let _ = on_event.send(MultiPartEvent::IterativeStepStarted {
+                    step_index,
+                    step_name,
+                    description,
+                });
+            }
+            iterative::IterativeEvent::StepComplete {
+                step_index,
+                success,
+                stl_base64,
+            } => {
+                let _ = on_event.send(MultiPartEvent::IterativeStepComplete {
+                    step_index,
+                    success,
+                    stl_base64,
+                });
+            }
+            iterative::IterativeEvent::StepRetry {
+                step_index,
+                attempt,
+                error,
+            } => {
+                let _ = on_event.send(MultiPartEvent::IterativeStepRetry {
+                    step_index,
+                    attempt,
+                    error,
+                });
+            }
+            iterative::IterativeEvent::StepSkipped {
+                step_index,
+                name,
+                error,
+            } => {
+                let _ = on_event.send(MultiPartEvent::IterativeStepSkipped {
+                    step_index,
+                    name,
+                    error,
+                });
+            }
+        }
+    };
+
+    let result = iterative::run_iterative_build_from(
+        &build_steps,
+        &current_code,
+        &design_plan_text,
+        &user_request,
+        &system_prompt,
+        &config,
+        &ctx,
+        &on_iter_event,
+    )
+    .await?;
+
+    total_usage.add(&result.total_usage);
+    if result.total_usage.total() > 0 {
+        emit_usage(
+            &on_event,
+            "iterative_retry",
+            &result.total_usage,
+            &provider_id,
+            &model_id,
+        );
+    }
+
+    let _ = on_event.send(MultiPartEvent::FinalCode {
+        code: result.final_code.clone(),
+        stl_base64: result.stl_base64.clone(),
+    });
+
+    let _ = on_event.send(MultiPartEvent::IterativeComplete {
+        final_code: result.final_code.clone(),
+        stl_base64: result.stl_base64.clone(),
+        skipped_steps: result.skipped_steps.clone(),
+    });
+
+    if total_usage.total() > 0 {
+        emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+    }
+
+    let _ = on_event.send(MultiPartEvent::Done {
+        success: result.success,
+        error: if result.success {
+            None
+        } else {
+            Some("Retry of skipped steps failed".to_string())
+        },
+        validated: true,
+    });
+
+    Ok(result.final_code)
 }

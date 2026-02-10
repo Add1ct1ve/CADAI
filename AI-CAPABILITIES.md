@@ -408,22 +408,23 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Step-by-step build mode | ⬜ | Generate base shape → verify → add feature → verify → ... |
-| Step plan from design phase | ⬜ | Parse design plan steps into a build sequence |
-| Per-step execution check | ⬜ | After each step, execute to verify it works |
-| Step rollback on failure | ⬜ | If step N fails, return to step N-1 and try alternate approach |
-| Incremental code accumulation | ⬜ | Each step appends to previous working code |
-| Step-by-step progress UI | ⬜ | Show each step completing in the frontend |
+| Step-by-step build mode | ✅ | Generate base shape → verify → add feature → verify → ... |
+| Step plan from design phase | ✅ | Parse design plan steps into a build sequence |
+| Per-step execution check | ✅ | After each step, execute to verify it works |
+| Step rollback on failure | ✅ | If step N fails after 3 retries, skip it and continue from step N-1 |
+| Incremental code accumulation | ✅ | Each step appends to previous working code |
+| Step-by-step progress UI | ✅ | Show each step completing in the frontend with viewport updates |
 
 **Implementation notes:**
-- New module: `src-tauri/src/agent/iterative.rs`
-- Parse design plan into ordered steps, generate code for each step incrementally
-- After each step, execute the accumulated code to verify it still works
-- If a step breaks the model, try alternative approach for that step
-- This prevents the "everything fails because of one bad operation" problem
-- Complex objects (>5 features) benefit most from this approach
-- Frontend shows a step-by-step progress view: "Base shape ✅ → Holes ✅ → Fillets 🔄 → ..."
-- Can be opt-in (user toggle) or auto-triggered for complex requests
+- Module: `src-tauri/src/agent/iterative.rs`
+- Auto-triggered by complexity: 4+ build steps OR any risky operation (shell, loft, sweep, revolve)
+- Simple requests continue using the existing single-shot path
+- Parse design plan `### Build Plan` section into numbered `BuildStep` entries
+- For each step: AI generates code → execute → on failure retry up to 3 times → skip if still failing
+- Viewport updates after each successful step so user sees the model being built incrementally
+- After completion, "Retry Skipped Steps" button appears if any steps were skipped
+- Retry command (`retry_skipped_steps`) re-runs the iterative loop for only skipped steps, starting from current code
+- Uses `provider.complete()` (non-streaming) per step; frequent StepStarted/StepComplete events provide progress
 
 ---
 
@@ -703,7 +704,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 3.3 Dimension Guidance | P1 | Low | Medium | Less "I don't know the dimensions" responses |
 | 3.4 Failure Case Prompting | P1 | Low | High | Proactive failure avoidance |
 | 4.1 Execution Validation | ✅ | High | Very High | **Biggest single UX improvement** |
-| 4.2 Iterative Refinement | P1 | High | High | Complex objects succeed more often |
+| 4.2 Iterative Refinement | ✅ | High | High | Complex objects succeed more often |
 | 4.3 Code Modification | P1 | Medium | High | "Make it taller" is the #1 follow-up request |
 | 4.4 Multi-Model Consensus | P3 | Medium | Medium | Expensive but effective |
 | 5.1 Plan Editor | P2 | Medium | Medium | User control over geometry planning |

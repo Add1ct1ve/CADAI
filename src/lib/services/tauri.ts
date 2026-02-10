@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -122,6 +122,39 @@ export async function generateParallel(
   } catch (err) {
     console.error('generate_parallel failed:', err);
     throw new Error(`Generate parallel failed: ${err}`);
+  }
+}
+
+/**
+ * Retry skipped steps from an iterative build.
+ * Sends the current code and skipped step info to the backend, which
+ * re-runs the iterative build loop for only the skipped steps.
+ */
+export async function retrySkippedSteps(
+  currentCode: string,
+  skippedSteps: SkippedStepInfo[],
+  designPlanText: string,
+  userRequest: string,
+  onEvent: (event: MultiPartEvent) => void,
+): Promise<string> {
+  try {
+    const channel = new Channel<MultiPartEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+
+    const result = await invoke<string>('retry_skipped_steps', {
+      currentCode,
+      skippedSteps,
+      designPlanText,
+      userRequest,
+      onEvent: channel,
+    });
+
+    return result;
+  } catch (err) {
+    console.error('retry_skipped_steps failed:', err);
+    throw new Error(`Retry skipped steps failed: ${err}`);
   }
 }
 
