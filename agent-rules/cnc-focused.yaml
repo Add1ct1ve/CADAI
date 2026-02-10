@@ -1885,3 +1885,198 @@ dimension_tables:
       - "K-factor (neutral axis): 0.33 for air bend, 0.44 for bottoming, 0.50 for coining"
       - "Minimum flange length: 4t + R (material thickness × 4 + bend radius)"
       - "Hole-to-bend distance: >=2.5t + R to avoid distortion"
+
+# =============================================================================
+# FEW-SHOT EXAMPLES: Design-to-Code Workflow
+# =============================================================================
+# Complete workflow demonstrations: user request → design plan → working code.
+# These teach the AI the full reasoning chain by example.
+
+few_shot_examples:
+  - user_request: "Make me a coffee mug"
+    design_plan: |
+      Revolve a polyline half-profile to form the mug body (cylinder with thick base).
+      Shell the body to create the hollow interior.
+      Sweep a circle along a C-shaped arc to form the handle.
+      Union handle to body, then fillet the joint edges last.
+    code: |
+      import cadquery as cq
+      # Mug body via revolve of half cross-section
+      MUG_OD = 82.0
+      MUG_H = 95.0
+      BASE_T = 4.0
+      WALL = 3.0
+      HANDLE_R = 3.5
+      body_pts = [
+          (0, 0), (MUG_OD / 2, 0), (MUG_OD / 2, MUG_H), (0, MUG_H),
+      ]
+      body = (
+          cq.Workplane("XZ")
+          .polyline(body_pts).close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+      # Shell from top, leaving base thick
+      body = body.faces(">Z").shell(-WALL)
+      # Handle: sweep circle along arc path
+      handle_path = (
+          cq.Workplane("XZ")
+          .moveTo(MUG_OD / 2, MUG_H * 0.75)
+          .threePointArc((MUG_OD / 2 + 22, MUG_H * 0.5), (MUG_OD / 2, MUG_H * 0.25))
+          .wire()
+      )
+      handle = cq.Workplane("XY").center(MUG_OD / 2, 0).circle(HANDLE_R).sweep(handle_path)
+      result = body.union(handle).edges().fillet(1.0)
+
+  - user_request: "Design a motor mount bracket"
+    design_plan: |
+      Extrude an L-shaped polyline profile for the bracket body.
+      Add a polar array of bolt holes on the vertical face for the motor.
+      Add two mounting holes on the horizontal base via pushPoints.
+      Apply fillets to all vertical edges last for strength.
+    code: |
+      import cadquery as cq
+      T = 4.0           # plate thickness
+      BASE_W = 60.0     # horizontal base width
+      BASE_D = 50.0     # depth (extrusion)
+      WALL_H = 55.0     # vertical wall height
+      MOTOR_BOLT_R = 18.0
+      MOTOR_BORE = 24.0
+      N_BOLTS = 4
+      BOLT_D = 4.5      # M4 clearance
+      MOUNT_D = 5.5     # M5 clearance
+      # L-profile
+      l_pts = [
+          (0, 0), (BASE_W, 0), (BASE_W, T),
+          (T, T), (T, WALL_H), (0, WALL_H),
+      ]
+      bracket = cq.Workplane("XZ").polyline(l_pts).close().extrude(BASE_D)
+      # Motor bolt circle on vertical face
+      bracket = (
+          bracket.faces("<X").workplane()
+          .polarArray(MOTOR_BOLT_R, 0, 360, N_BOLTS)
+          .hole(BOLT_D)
+      )
+      # Center bore for motor shaft
+      bracket = bracket.faces("<X").workplane().hole(MOTOR_BORE)
+      # Mounting holes on base
+      bracket = (
+          bracket.faces("<Z").workplane()
+          .pushPoints([(15, BASE_D / 2 - 10), (BASE_W - 15, BASE_D / 2 - 10)])
+          .hole(MOUNT_D)
+      )
+      result = bracket.edges("|Z").fillet(2.0)
+
+  - user_request: "Create an SD card holder"
+    design_plan: |
+      Start with a box slightly larger than an SD card (26 x 34 x 6mm).
+      Fillet vertical edges for rounded corners, then shell from top.
+      Cut a slot on the front face for card insertion (24 x 2.5mm).
+      Cut a thumb notch on the back wall so the card can be pushed out.
+    code: |
+      import cadquery as cq
+      # SD card: 24x32x2.1mm — holder slightly larger
+      W = 28.0
+      D = 36.0
+      H = 6.0
+      WALL = 1.5
+      SLOT_W = 24.5
+      SLOT_H = 2.5
+      NOTCH_W = 12.0
+      NOTCH_H = 4.0
+      holder = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .edges("|Z").fillet(3.0)
+          .faces(">Z").shell(-WALL)
+      )
+      # Card insertion slot on front face
+      slot_cutter = (
+          cq.Workplane("XZ")
+          .workplane(offset=D / 2)
+          .center(0, H / 2 - WALL - SLOT_H / 2)
+          .rect(SLOT_W, SLOT_H)
+          .extrude(-WALL * 3)
+      )
+      holder = holder.cut(slot_cutter)
+      # Thumb notch on back wall
+      notch_cutter = (
+          cq.Workplane("XZ")
+          .workplane(offset=-D / 2)
+          .center(0, H / 2)
+          .rect(NOTCH_W, NOTCH_H)
+          .extrude(WALL * 3)
+      )
+      result = holder.cut(notch_cutter)
+
+  - user_request: "Make a gear"
+    design_plan: |
+      Calculate tooth geometry from module and tooth count using math.
+      Build a root circle disc, then create one trapezoidal tooth profile.
+      Rotate and union the tooth N times around the center.
+      Drill a center bore for the shaft.
+    code: |
+      import cadquery as cq
+      import math
+      N_TEETH = 16
+      MODULE = 2.0
+      FACE_W = 10.0
+      BORE_D = 8.0
+      PD = MODULE * N_TEETH
+      OD = PD + 2 * MODULE
+      RD = PD - 2.5 * MODULE
+      TOOTH_ARC = 360.0 / N_TEETH
+      HALF_T = TOOTH_ARC / 4
+      r_root = RD / 2
+      r_tip = OD / 2
+      a = math.radians(HALF_T)
+      tooth_pts = [
+          (r_root * math.cos(-a * 1.2), r_root * math.sin(-a * 1.2)),
+          (r_tip * math.cos(-a * 0.4), r_tip * math.sin(-a * 0.4)),
+          (r_tip * math.cos(a * 0.4), r_tip * math.sin(a * 0.4)),
+          (r_root * math.cos(a * 1.2), r_root * math.sin(a * 1.2)),
+      ]
+      gear = cq.Workplane("XY").circle(r_root).extrude(FACE_W)
+      tooth = cq.Workplane("XY").polyline(tooth_pts).close().extrude(FACE_W)
+      for i in range(N_TEETH):
+          rotated = tooth.rotate((0, 0, 0), (0, 0, 1), i * TOOTH_ARC)
+          gear = gear.union(rotated)
+      result = gear.faces(">Z").workplane().hole(BORE_D)
+
+  - user_request: "Design a phone stand"
+    design_plan: |
+      Create a flat rectangular base for stability.
+      Loft between two angled rectangular profiles to form the upright support.
+      Add a small lip/ledge at the bottom of the support to cradle the phone.
+      Union all parts together, then fillet edges last.
+    code: |
+      import cadquery as cq
+      # Base plate
+      BASE_W = 80.0
+      BASE_D = 60.0
+      BASE_H = 5.0
+      SUPPORT_T = 6.0
+      SUPPORT_H = 70.0
+      LIP_D = 15.0
+      LIP_H = 3.0
+      ANGLE = 15  # lean-back angle in degrees
+      base = cq.Workplane("XY").box(BASE_W, BASE_D, BASE_H)
+      # Angled support via loft between bottom and top profiles
+      support = (
+          cq.Workplane("XY")
+          .workplane(offset=BASE_H)
+          .center(0, -BASE_D / 2 + SUPPORT_T / 2)
+          .rect(BASE_W * 0.8, SUPPORT_T)
+          .workplane(offset=SUPPORT_H)
+          .center(0, SUPPORT_H * 0.26)  # lean back
+          .rect(BASE_W * 0.7, SUPPORT_T)
+          .loft()
+      )
+      # Lip at bottom-front of support to hold the phone
+      lip = (
+          cq.Workplane("XY")
+          .workplane(offset=BASE_H)
+          .center(0, -BASE_D / 2 + LIP_D / 2)
+          .rect(BASE_W * 0.6, LIP_D)
+          .extrude(LIP_H)
+      )
+      result = base.union(support).union(lip).edges().fillet(1.5)

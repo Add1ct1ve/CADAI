@@ -353,6 +353,30 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         prompt.push('\n');
     }
 
+    // -- Few-Shot Examples (design-to-code workflow demonstrations) --
+    if let Some(ref examples) = rules.few_shot_examples {
+        prompt.push_str("## Few-Shot Examples: Design-to-Code Workflow\n");
+        prompt.push_str(
+            "These examples demonstrate the complete workflow from user request to working code.\n\n",
+        );
+        for (i, ex) in examples.iter().enumerate() {
+            prompt.push_str(&format!("### Example {}\n", i + 1));
+            prompt.push_str(&format!("**User request:** \"{}\"\n", ex.user_request));
+            prompt.push_str("**Design plan:**\n");
+            for line in ex.design_plan.lines() {
+                if !line.trim().is_empty() {
+                    prompt.push_str(&format!("- {}\n", line.trim()));
+                }
+            }
+            prompt.push_str("**Code:**\n```python\n");
+            prompt.push_str(&ex.code);
+            if !ex.code.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("```\n\n");
+        }
+    }
+
     // -- Response format --
     prompt.push_str("## Response Format\n");
     if let Some(ref rf) = rules.response_format {
@@ -671,6 +695,11 @@ mod tests {
                 "preset {:?} missing dimension tables",
                 preset
             );
+            assert!(
+                prompt.contains("## Few-Shot Examples: Design-to-Code Workflow"),
+                "preset {:?} missing few-shot examples",
+                preset
+            );
         }
     }
 
@@ -791,6 +820,47 @@ mod tests {
         }
     }
 
+    // ── Few-Shot Examples in prompt ─────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_few_shot_examples_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Few-Shot Examples: Design-to-Code Workflow"),
+            "prompt should have few-shot examples section"
+        );
+        assert!(prompt.contains("complete workflow from user request to working code"));
+    }
+
+    #[test]
+    fn test_prompt_few_shot_examples_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Spot-check all 5 examples are present
+        assert!(prompt.contains("coffee mug"), "missing coffee mug example");
+        assert!(prompt.contains("motor mount"), "missing motor mount example");
+        assert!(prompt.contains("SD card"), "missing SD card example");
+        assert!(prompt.contains("gear"), "missing gear example");
+        assert!(prompt.contains("phone stand"), "missing phone stand example");
+        // Check format markers
+        assert!(prompt.contains("**User request:**"));
+        assert!(prompt.contains("**Design plan:**"));
+        assert!(prompt.contains("**Code:**"));
+        assert!(prompt.contains("### Example 1"));
+        assert!(prompt.contains("### Example 5"));
+    }
+
+    #[test]
+    fn test_all_presets_have_few_shot_examples_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Few-Shot Examples: Design-to-Code Workflow"),
+                "preset {:?} missing few-shot examples section",
+                preset
+            );
+        }
+    }
+
     // ── Section ordering ───────────────────────────────────────────────
 
     #[test]
@@ -806,6 +876,8 @@ mod tests {
         let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
         let dimtab_pos = prompt.find("## Real-World Dimension Tables").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
+        let err_pos = prompt.find("## Error Handling").unwrap();
+        let fse_pos = prompt.find("## Few-Shot Examples").unwrap();
         let resp_pos = prompt.find("## Response Format").unwrap();
 
         // Design Thinking before Capabilities
@@ -826,8 +898,12 @@ mod tests {
         assert!(apiref_pos < dimtab_pos, "API Reference should come before Dimension Tables");
         // Manufacturing after Dimension Tables
         assert!(dimtab_pos < mfg_pos, "Dimension Tables should come before Manufacturing");
+        // Error Handling after Manufacturing
+        assert!(mfg_pos < err_pos, "Manufacturing should come before Error Handling");
+        // Few-Shot Examples after Error Handling
+        assert!(err_pos < fse_pos, "Error Handling should come before Few-Shot Examples");
         // Response Format last
-        assert!(mfg_pos < resp_pos, "Manufacturing should come before Response Format");
+        assert!(fse_pos < resp_pos, "Few-Shot Examples should come before Response Format");
     }
 
     // ── default_empty produces minimal prompt ──────────────────────────
@@ -848,6 +924,7 @@ mod tests {
         assert!(!prompt.contains("## Common Anti-Patterns"));
         assert!(!prompt.contains("## CadQuery API Quick-Reference"));
         assert!(!prompt.contains("## Real-World Dimension Tables"));
+        assert!(!prompt.contains("## Few-Shot Examples"));
     }
 
     // ── Category name formatting in spatial rules ──────────────────────
