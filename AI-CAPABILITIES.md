@@ -40,36 +40,35 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 >
 > **Files affected:** `agent-rules/default.yaml`, `agent-rules/printing-focused.yaml`, `agent-rules/cnc-focused.yaml`
 
-### 1.1 Expanded Cookbook — 25+ New Recipes
+### 1.1 Expanded Cookbook — 25 New Recipes ✅
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Spur gear recipe | ⬜ | Involute tooth profile via polyline + circular pattern |
-| Threaded bolt recipe | ⬜ | Helix path + sweep for external thread |
-| Threaded nut recipe | ⬜ | Internal thread via boolean cut |
-| Compression spring recipe | ⬜ | Helix path + circular profile sweep |
-| Snap-fit hook recipe | ⬜ | Cantilever with barb — extrude + angled cut |
-| Snap-fit clip recipe | ⬜ | U-clip with detent, push-fit style |
-| Electronics enclosure recipe | ⬜ | Box + standoffs + lid with screw bosses |
-| Raspberry Pi case recipe | ⬜ | Real-world dims (85×56mm) with port cutouts |
-| Pipe elbow recipe | ⬜ | Sweep circle along arc path |
-| Pipe T-junction recipe | ⬜ | Cylinder unions + hollowing |
-| Hinge (pin style) recipe | ⬜ | Interlocking knuckles with pin hole |
-| Living hinge recipe | ⬜ | Thin flexure section between two rigid halves |
-| Knurled cylinder recipe | ⬜ | Diamond pattern via intersecting helical cuts |
-| Dovetail joint recipe | ⬜ | Trapezoidal profiles — male and female |
-| Finger joint (box joint) recipe | ⬜ | Interlocking rectangular tabs |
-| Bearing seat recipe | ⬜ | Precision bore with shoulder and snap ring groove |
-| Mounting bracket (L-shape) recipe | ⬜ | L-extrude + gusset + hole pattern |
-| Shelf bracket recipe | ⬜ | Triangular with fillet and mounting holes |
-| Pulley/wheel recipe | ⬜ | Revolve with V-groove profile |
-| Cam profile recipe | ⬜ | Revolve with eccentric spline |
-| Standoff/spacer recipe | ⬜ | Tube with hex head (concentric + boolean) |
-| Cable gland/grommet recipe | ⬜ | Revolve with stepped profile |
-| Battery holder recipe | ⬜ | Box with spring contacts and retention clips |
-| D-sub connector cutout recipe | ⬜ | Trapezoidal rounded slot — real dims |
-| USB-C port cutout recipe | ⬜ | Rounded rectangle 8.94×3.26mm |
-| Keychain tag recipe | ⬜ | Rounded plate + text emboss + ring hole |
+| Spur gear recipe | ✅ | Simplified involute via polyline tooth + rotate loop, 12 teeth, center bore |
+| Hex bolt recipe | ✅ | Polygon hex head + shaft + chamfer (no threads — helix unreliable) |
+| Compression spring recipe | ✅ | `Wire.makeHelix()` + sweep circle, 5 coils |
+| Snap-fit hook recipe | ✅ | Cantilever with barb — polyline extrude |
+| Snap-fit clip recipe | ✅ | U-clip with detent bumps, push-fit style |
+| Electronics enclosure recipe | ✅ | Box + shell + corner standoff cylinders + screw holes |
+| Raspberry Pi case recipe | ✅ | 92×63mm real dims, USB-C/HDMI/SD cutouts, standoffs |
+| Pipe elbow recipe | ✅ | Sweep annular profile along 90° arc |
+| Pipe T-junction recipe | ✅ | Outer/inner cylinder booleans (shell approach was unreliable) |
+| Hinge (pin style) recipe | ✅ | Two plates with alternating cylinder knuckles |
+| Living hinge recipe | ✅ | 0.4mm thin flexure bridge between rigid blocks |
+| Knurled cylinder recipe | ✅ | Simplified circumferential V-grooves via rotate loop |
+| Dovetail joint recipe | ✅ | Trapezoidal profiles — male and female pieces |
+| Finger joint (box joint) recipe | ✅ | Interlocking rectangular tabs via loop cuts |
+| Bearing seat recipe | ✅ | Revolved stepped bore with shoulder + snap-ring groove |
+| Mounting bracket (L-shape) recipe | ✅ | L-polyline extrude + triangular gusset + hole pattern |
+| Shelf bracket recipe | ✅ | Triangular plate with fillet and mounting holes |
+| Pulley/wheel recipe | ✅ | Revolve with V-groove profile + center bore |
+| Cam profile recipe | ✅ | Eccentric disc with shaft bore |
+| Standoff/spacer recipe | ✅ | Hex base polygon + tube body + through-hole |
+| Cable gland/grommet recipe | ✅ | Revolved stepped profile with flange and ridges |
+| Battery holder recipe | ✅ | Box cavity for AA battery + terminal contact slots |
+| D-sub connector cutout recipe | ✅ | Trapezoidal slot on panel plate — real DE-9 dims |
+| USB-C port cutout recipe | ✅ | slot2D 8.94×3.26mm cutThruAll on panel plate |
+| Keychain tag recipe | ✅ | Rounded rect plate + text emboss + ring hole |
 
 **Implementation notes:**
 - Add each recipe to the `cookbook` section of `default.yaml`
