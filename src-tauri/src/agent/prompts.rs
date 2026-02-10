@@ -320,6 +320,20 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Dimension Tables (real-world reference dimensions) --
+    if let Some(ref dim_tables) = rules.dimension_tables {
+        prompt.push_str("## Real-World Dimension Tables\n");
+        prompt.push_str("Use these dimensions instead of guessing. All values in mm.\n\n");
+        for entry in dim_tables {
+            prompt.push_str(&format!("### {}\n", entry.category));
+            prompt.push_str(&format!("{}\n", entry.description));
+            for item in &entry.data {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- Manufacturing awareness --
     if let Some(ref mfg) = rules.manufacturing {
         prompt.push_str("## Manufacturing Awareness\n");
@@ -652,6 +666,11 @@ mod tests {
                 "preset {:?} missing API reference",
                 preset
             );
+            assert!(
+                prompt.contains("## Real-World Dimension Tables"),
+                "preset {:?} missing dimension tables",
+                preset
+            );
         }
     }
 
@@ -735,6 +754,43 @@ mod tests {
         }
     }
 
+    // ── Dimension Tables in prompt ─────────────────────────────────────
+
+    #[test]
+    fn test_prompt_contains_dimension_tables_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Real-World Dimension Tables"),
+            "prompt should have dimension tables section"
+        );
+        assert!(prompt.contains("Use these dimensions instead of guessing."));
+    }
+
+    #[test]
+    fn test_prompt_dimension_tables_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Spot-check representative data from each category
+        assert!(prompt.contains("M6: shaft=6.0"), "missing M6 fastener data");
+        assert!(prompt.contains("Raspberry Pi"), "missing Raspberry Pi data");
+        assert!(prompt.contains("608"), "missing 608 bearing data");
+        assert!(prompt.contains("Credit card"), "missing credit card data");
+        assert!(prompt.contains("H7"), "missing H7 tolerance data");
+        assert!(prompt.contains("Pin in hole"), "missing pin-in-hole data");
+        assert!(prompt.contains("Aluminum"), "missing aluminum bend data");
+    }
+
+    #[test]
+    fn test_all_presets_have_dimension_tables_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Real-World Dimension Tables"),
+                "preset {:?} missing dimension tables section",
+                preset
+            );
+        }
+    }
+
     // ── Section ordering ───────────────────────────────────────────────
 
     #[test]
@@ -748,6 +804,7 @@ mod tests {
         let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
         let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
         let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
+        let dimtab_pos = prompt.find("## Real-World Dimension Tables").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
         let resp_pos = prompt.find("## Response Format").unwrap();
 
@@ -765,8 +822,10 @@ mod tests {
         assert!(cook_pos < ap_pos, "Cookbook should come before Anti-Patterns");
         // API Reference after Anti-Patterns
         assert!(ap_pos < apiref_pos, "Anti-Patterns should come before API Reference");
-        // Manufacturing after API Reference
-        assert!(apiref_pos < mfg_pos, "API Reference should come before Manufacturing");
+        // Dimension Tables after API Reference
+        assert!(apiref_pos < dimtab_pos, "API Reference should come before Dimension Tables");
+        // Manufacturing after Dimension Tables
+        assert!(dimtab_pos < mfg_pos, "Dimension Tables should come before Manufacturing");
         // Response Format last
         assert!(mfg_pos < resp_pos, "Manufacturing should come before Response Format");
     }
@@ -788,6 +847,7 @@ mod tests {
         assert!(!prompt.contains("## Manufacturing Awareness"));
         assert!(!prompt.contains("## Common Anti-Patterns"));
         assert!(!prompt.contains("## CadQuery API Quick-Reference"));
+        assert!(!prompt.contains("## Real-World Dimension Tables"));
     }
 
     // ── Category name formatting in spatial rules ──────────────────────

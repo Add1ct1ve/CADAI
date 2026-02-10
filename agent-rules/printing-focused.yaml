@@ -1768,3 +1768,90 @@ api_reference:
       - "Tags survive boolean operations — tag BEFORE a union/cut to reference original faces"
       - "Essential pattern: .tag('base') ... .union(other) ... .faces('>Z', tag='base') to find faces that got merged"
       - "Tag names are strings — must match exactly (case-sensitive)"
+
+# =============================================================================
+# REAL-WORLD DIMENSION TABLES
+# =============================================================================
+# Use these dimensions instead of guessing. All values in mm.
+
+dimension_tables:
+  - category: "Metric Fasteners (ISO 4762 / ISO 4032)"
+    description: "Socket-head cap screw + hex nut dimensions. All values in mm."
+    data:
+      - "M2: shaft=2.0, head_dia=3.8, head_h=2.0, nut_af=4.0, nut_h=1.6, clearance_hole=2.4"
+      - "M3: shaft=3.0, head_dia=5.5, head_h=3.0, nut_af=5.5, nut_h=2.4, clearance_hole=3.4"
+      - "M4: shaft=4.0, head_dia=7.0, head_h=4.0, nut_af=7.0, nut_h=3.2, clearance_hole=4.5"
+      - "M5: shaft=5.0, head_dia=8.5, head_h=5.0, nut_af=8.0, nut_h=4.7, clearance_hole=5.5"
+      - "M6: shaft=6.0, head_dia=10.0, head_h=6.0, nut_af=10.0, nut_h=5.2, clearance_hole=6.6"
+      - "M8: shaft=8.0, head_dia=13.0, head_h=8.0, nut_af=13.0, nut_h=6.8, clearance_hole=9.0"
+      - "M10: shaft=10.0, head_dia=16.0, head_h=10.0, nut_af=16.0, nut_h=8.4, clearance_hole=11.0"
+      - "M12: shaft=12.0, head_dia=18.0, head_h=12.0, nut_af=18.0, nut_h=10.8, clearance_hole=13.5"
+
+  - category: "Common Electronics Dimensions"
+    description: "Board and connector dimensions for enclosure design. All values in mm."
+    data:
+      - "Raspberry Pi 4: board=85x56, mount_holes=58x49 (M2.5), height_with_ports=17"
+      - "Arduino Uno: board=69x53, mount_holes=66x48 (M3), height_with_headers=15"
+      - "ESP32 DevKit: board=51x28, pin_rows_spacing=25.4, height=6"
+      - "USB-A receptacle: cutout=13.1x5.7, depth=17"
+      - "USB-B receptacle: cutout=12.0x11.0, depth=16"
+      - "USB-C receptacle: cutout=8.94x3.26, corner_r=1.0, depth=7.5"
+      - "Micro-USB receptacle: cutout=7.5x2.7, depth=6"
+      - "SD card slot: cutout=12.0x2.5, depth=14; microSD: cutout=12.0x1.5, depth=13"
+      - "18650 battery: dia=18.5, length=65.2 (with protection circuit), bare=18.3x65.0"
+
+  - category: "Bearing Dimensions (ISO 15)"
+    description: "Common deep-groove ball bearings. ID=inner dia, OD=outer dia, W=width. All mm."
+    data:
+      - "608 (skateboard): ID=8, OD=22, W=7"
+      - "6001: ID=12, OD=28, W=8"
+      - "6201: ID=12, OD=32, W=10"
+      - "6202: ID=15, OD=35, W=11"
+      - "6203: ID=17, OD=40, W=12"
+      - "6204: ID=20, OD=47, W=14"
+      - "Bearing seat fit: bore=OD+0.000/+0.013 (H7), shaft=ID-0.000/-0.011 (h6)"
+
+  - category: "Common Object Sizes"
+    description: "Everyday objects for reference when modeling enclosures or holders. All mm."
+    data:
+      - "Smartphone (typical): 150x73x8"
+      - "Credit card (ISO 7810): 85.6x53.98x0.76"
+      - "AA battery: dia=14.5, length=50.5"
+      - "AAA battery: dia=10.5, length=44.5"
+      - "US quarter: dia=24.26, thickness=1.75; Euro 1: dia=23.25, thickness=2.33"
+      - "Standard pen/pencil: dia=7-8, length=140-190"
+      - "Coffee mug (typical): dia=80-85, height=95, handle_clearance=30"
+      - "Tennis ball: dia=67"
+
+  - category: "Clearance and Press-Fit Tolerances (ISO 286)"
+    description: "Standard tolerance pairs for shaft-in-hole fits. Gap values for nominal 10-50mm range."
+    data:
+      - "H7/g6 (sliding fit): gap=+0.010 to +0.050 — shaft turns freely, good for bearings"
+      - "H7/h6 (location fit): gap=0.000 to +0.039 — snug, locates accurately, removable by hand"
+      - "H7/k6 (transition fit): gap=-0.018 to +0.021 — may need light press, slight interference possible"
+      - "H7/p6 (press fit): gap=-0.042 to -0.001 — requires press or heat, permanent assembly"
+      - "Rule of thumb: clearance=+0.1mm per 25mm nominal for easy sliding; press=-0.02 to -0.05mm"
+      - "For 3D prints: add +0.2mm to clearance fits to compensate for layer squish and shrinkage"
+
+  - category: "3D Printing Clearance Guidelines (FDM)"
+    description: "Practical clearances for FDM printers at 0.2mm layer height. Adjust for resin/SLS."
+    data:
+      - "Mating flat surfaces (sliding): 0.3-0.5mm gap per side"
+      - "Pin in hole (loose fit): hole_dia = pin_dia + 0.4mm"
+      - "Pin in hole (snug fit): hole_dia = pin_dia + 0.2mm"
+      - "Threaded insert M3: hole_dia=4.0; M4: hole_dia=5.0; M5: hole_dia=6.4"
+      - "Snap-fit cantilever: arm_thickness=1.0-1.5mm, deflection<arm_length*0.02"
+      - "Living hinge (single-use fold): thickness=0.3-0.5mm, width>=10mm"
+      - "Minimum wall thickness: 0.8mm (2 perimeters at 0.4mm nozzle)"
+      - "Minimum hole diameter (reliable): 2.0mm"
+
+  - category: "Sheet Metal Bend Radii"
+    description: "Minimum inside bend radii by material and thickness. All values in mm."
+    data:
+      - "Aluminum 5052-H32: t<=1.6 → R=0, t=2.0 → R=1.0, t=3.0 → R=1.5"
+      - "Aluminum 6061-T6: t<=1.6 → R=1.0t, t=2.0 → R=1.5t, t=3.0 → R=2.0t"
+      - "Mild steel (A36): t<=1.6 → R=0.5t, t=2.0 → R=1.0t, t=3.0 → R=1.5t"
+      - "Stainless 304: t<=1.6 → R=1.0t, t=2.0 → R=1.5t, t=3.0 → R=2.0t"
+      - "K-factor (neutral axis): 0.33 for air bend, 0.44 for bottoming, 0.50 for coining"
+      - "Minimum flange length: 4t + R (material thickness × 4 + bend radius)"
+      - "Hole-to-bend distance: >=2.5t + R to avoid distortion"

@@ -24,6 +24,7 @@ pub struct AgentRules {
     pub cookbook: Option<Vec<CookbookEntry>>,
     pub anti_patterns: Option<Vec<AntiPatternEntry>>,
     pub api_reference: Option<Vec<ApiReferenceEntry>>,
+    pub dimension_tables: Option<Vec<DimensionTableEntry>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +51,13 @@ pub struct ApiReferenceEntry {
     pub returns: String,
     pub params: Vec<String>,
     pub gotchas: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DimensionTableEntry {
+    pub category: String,
+    pub description: String,
+    pub data: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -133,6 +141,7 @@ impl AgentRules {
             cookbook: None,
             anti_patterns: None,
             api_reference: None,
+            dimension_tables: None,
         }
     }
 }
@@ -511,6 +520,70 @@ mod tests {
         }
     }
 
+    // ── Dimension Tables ────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_dimension_tables_has_7_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dt = rules.dimension_tables.as_ref().unwrap();
+        assert_eq!(dt.len(), 7, "default should have 7 dimension table categories");
+    }
+
+    #[test]
+    fn test_printing_dimension_tables_has_7_categories() {
+        let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
+        let dt = rules.dimension_tables.as_ref().unwrap();
+        assert_eq!(dt.len(), 7, "printing should have 7 dimension table categories");
+    }
+
+    #[test]
+    fn test_cnc_dimension_tables_has_7_categories() {
+        let rules = AgentRules::from_preset(Some("cnc")).unwrap();
+        let dt = rules.dimension_tables.as_ref().unwrap();
+        assert_eq!(dt.len(), 7, "cnc should have 7 dimension table categories");
+    }
+
+    #[test]
+    fn test_dimension_table_categories_present() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dt = rules.dimension_tables.as_ref().unwrap();
+        let cats: Vec<&str> = dt.iter().map(|e| e.category.as_str()).collect();
+        assert!(cats.iter().any(|c| c.contains("Metric Fasteners")));
+        assert!(cats.iter().any(|c| c.contains("Electronics")));
+        assert!(cats.iter().any(|c| c.contains("Bearing")));
+        assert!(cats.iter().any(|c| c.contains("Common Object")));
+        assert!(cats.iter().any(|c| c.contains("Clearance and Press-Fit")));
+        assert!(cats.iter().any(|c| c.contains("3D Printing Clearance")));
+        assert!(cats.iter().any(|c| c.contains("Sheet Metal")));
+    }
+
+    #[test]
+    fn test_all_dimension_tables_have_required_fields() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            let dt = rules.dimension_tables.as_ref().unwrap();
+            for entry in dt {
+                assert!(
+                    !entry.category.is_empty(),
+                    "Dimension table in preset {:?} has empty category",
+                    preset
+                );
+                assert!(
+                    !entry.description.is_empty(),
+                    "Dimension table '{}' in preset {:?} has empty description",
+                    entry.category,
+                    preset
+                );
+                assert!(
+                    !entry.data.is_empty(),
+                    "Dimension table '{}' in preset {:?} has empty data",
+                    entry.category,
+                    preset
+                );
+            }
+        }
+    }
+
     // ── default_empty() ────────────────────────────────────────────────
 
     #[test]
@@ -521,6 +594,7 @@ mod tests {
         assert!(rules.design_thinking.is_none());
         assert!(rules.anti_patterns.is_none());
         assert!(rules.api_reference.is_none());
+        assert!(rules.dimension_tables.is_none());
     }
 
     // ── Print-specific extras ──────────────────────────────────────────
