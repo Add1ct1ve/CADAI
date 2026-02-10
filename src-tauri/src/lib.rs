@@ -44,6 +44,8 @@ pub fn run() {
             commands::project::export_stl,
             commands::project::export_step,
             commands::parallel::generate_parallel,
+            commands::parallel::generate_design_plan,
+            commands::parallel::generate_from_plan,
             commands::parallel::retry_skipped_steps,
             commands::drawing::generate_drawing_view,
             commands::drawing::export_drawing_pdf,

@@ -29,6 +29,7 @@ export interface AppConfig {
   snap_rotation: number | null;
   snap_sketch: number | null;
   enable_consensus: boolean;
+  auto_approve_plan: boolean;
 }
 
 export interface ModelInfo {
@@ -181,6 +182,20 @@ export interface SkippedStepInfo {
   name: string;
   description: string;
   error: string;
+}
+
+export interface DesignPlanResult {
+  plan_text: string;
+  risk_score: number;
+  warnings: string[];
+  is_valid: boolean;
+}
+
+export interface PlanTemplate {
+  id: string;
+  name: string;
+  description: string;
+  plan_text: string;
 }
 
 export interface ProjectFile {

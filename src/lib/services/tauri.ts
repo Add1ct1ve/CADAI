@@ -1,6 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo } from '$lib/types';
+import type { AppConfig, ExecuteResult, PythonStatus, StreamEvent, RustChatMessage, AutoRetryResult, ProjectFile, ProviderInfo, MultiPartEvent, TokenUsageData, SkippedStepInfo, DesignPlanResult } from '$lib/types';
 
 /**
  * Test IPC with a greeting
@@ -157,6 +157,62 @@ export async function retrySkippedSteps(
   } catch (err) {
     console.error('retry_skipped_steps failed:', err);
     throw new Error(`Retry skipped steps failed: ${err}`);
+  }
+}
+
+/**
+ * Generate only the design plan (Phase 0). Returns the plan result
+ * for the user to review/edit before proceeding to code generation.
+ */
+export async function generateDesignPlan(
+  message: string,
+  history: RustChatMessage[],
+  onEvent: (event: MultiPartEvent) => void,
+): Promise<DesignPlanResult> {
+  try {
+    const channel = new Channel<MultiPartEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+
+    return await invoke<DesignPlanResult>('generate_design_plan', {
+      message,
+      history,
+      onEvent: channel,
+    });
+  } catch (err) {
+    console.error('generate_design_plan failed:', err);
+    throw new Error(`Generate design plan failed: ${err}`);
+  }
+}
+
+/**
+ * Generate code from a (possibly user-edited) design plan.
+ * Runs Phase 1+ (planner decomposition, code gen, review, validation).
+ */
+export async function generateFromPlan(
+  planText: string,
+  userRequest: string,
+  history: RustChatMessage[],
+  onEvent: (event: MultiPartEvent) => void,
+  existingCode?: string | null,
+): Promise<string> {
+  try {
+    const channel = new Channel<MultiPartEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+
+    return await invoke<string>('generate_from_plan', {
+      planText,
+      userRequest,
+      history,
+      existingCode: existingCode ?? null,
+      onEvent: channel,
+    });
+  } catch (err) {
+    console.error('generate_from_plan failed:', err);
+    throw new Error(`Generate from plan failed: ${err}`);
   }
 }
 
