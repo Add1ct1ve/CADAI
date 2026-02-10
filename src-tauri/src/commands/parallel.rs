@@ -278,21 +278,29 @@ pub async fn generate_parallel(
         message: "Designing geometry...".to_string(),
     });
 
-    // Extract manufacturing constraints for the geometry advisor
-    let manufacturing_ctx = {
+    // Extract extra context for the geometry advisor (manufacturing + dimension guidance)
+    let design_extra_context = {
         let rules = crate::agent::rules::AgentRules::from_preset(
             config.agent_rules_preset.as_deref()
         ).ok();
-        rules.and_then(|r| r.manufacturing.as_ref().map(|m| {
-            crate::agent::design::format_manufacturing_constraints(m)
-        }))
+        let mut ctx = String::new();
+        if let Some(ref r) = rules {
+            if let Some(ref m) = r.manufacturing {
+                ctx.push_str(&crate::agent::design::format_manufacturing_constraints(m));
+            }
+            if let Some(ref d) = r.dimension_guidance {
+                if !ctx.is_empty() { ctx.push_str("\n\n"); }
+                ctx.push_str(&crate::agent::design::format_dimension_guidance(d));
+            }
+        }
+        if ctx.is_empty() { None } else { Some(ctx) }
     };
 
     let design_provider = create_provider(&config)?;
     let (mut design_plan, design_usage) = design::plan_geometry(
         design_provider,
         &message,
-        manufacturing_ctx.as_deref(),
+        design_extra_context.as_deref(),
     ).await?;
     if let Some(ref u) = design_usage {
         total_usage.add(u);
@@ -321,7 +329,7 @@ pub async fn generate_parallel(
         let feedback = design::build_rejection_feedback(&validation);
         let retry_provider = create_provider(&config)?;
         let (retry_plan, retry_usage) = design::plan_geometry_with_feedback(
-            retry_provider, &message, &feedback, manufacturing_ctx.as_deref()
+            retry_provider, &message, &feedback, design_extra_context.as_deref()
         ).await?;
         design_plan = retry_plan;
         if let Some(ref u) = retry_usage {

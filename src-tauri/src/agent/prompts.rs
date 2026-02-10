@@ -334,6 +334,19 @@ pub fn build_system_prompt(rules: &AgentRules) -> String {
         }
     }
 
+    // -- Dimension Estimation Guidance --
+    if let Some(ref guidance) = rules.dimension_guidance {
+        prompt.push_str("## Dimension Estimation Guidance\n");
+        prompt.push_str("Follow these rules when choosing dimensions.\n\n");
+        for (category, items) in guidance {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+            prompt.push('\n');
+        }
+    }
+
     // -- Manufacturing awareness --
     if let Some(ref mfg) = rules.manufacturing {
         prompt.push_str("## Manufacturing Awareness\n");
@@ -882,6 +895,7 @@ mod tests {
         let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
         let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
         let dimtab_pos = prompt.find("## Real-World Dimension Tables").unwrap();
+        let dimguide_pos = prompt.find("## Dimension Estimation Guidance").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
         let err_pos = prompt.find("## Error Handling").unwrap();
         let fse_pos = prompt.find("## Few-Shot Examples").unwrap();
@@ -903,8 +917,10 @@ mod tests {
         assert!(ap_pos < apiref_pos, "Anti-Patterns should come before API Reference");
         // Dimension Tables after API Reference
         assert!(apiref_pos < dimtab_pos, "API Reference should come before Dimension Tables");
-        // Manufacturing after Dimension Tables
-        assert!(dimtab_pos < mfg_pos, "Dimension Tables should come before Manufacturing");
+        // Dimension Guidance after Dimension Tables
+        assert!(dimtab_pos < dimguide_pos, "Dimension Tables should come before Dimension Guidance");
+        // Manufacturing after Dimension Guidance
+        assert!(dimguide_pos < mfg_pos, "Dimension Guidance should come before Manufacturing");
         // Error Handling after Manufacturing
         assert!(mfg_pos < err_pos, "Manufacturing should come before Error Handling");
         // Few-Shot Examples after Error Handling
@@ -931,6 +947,7 @@ mod tests {
         assert!(!prompt.contains("## Common Anti-Patterns"));
         assert!(!prompt.contains("## CadQuery API Quick-Reference"));
         assert!(!prompt.contains("## Real-World Dimension Tables"));
+        assert!(!prompt.contains("## Dimension Estimation Guidance"));
         assert!(!prompt.contains("## Few-Shot Examples"));
     }
 
@@ -944,5 +961,52 @@ mod tests {
             prompt.contains("Boolean Cut") || prompt.contains("boolean_cut"),
             "spatial rules should have formatted category names"
         );
+    }
+
+    // ── Dimension Estimation Guidance in prompt ─────────────────────────
+
+    #[test]
+    fn test_prompt_contains_dimension_guidance_section() {
+        let prompt = build_system_prompt_for_preset(None);
+        assert!(
+            prompt.contains("## Dimension Estimation Guidance"),
+            "prompt should have dimension estimation guidance section"
+        );
+        assert!(prompt.contains("Follow these rules when choosing dimensions."));
+    }
+
+    #[test]
+    fn test_all_presets_have_dimension_guidance_in_prompt() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                prompt.contains("## Dimension Estimation Guidance"),
+                "preset {:?} missing dimension estimation guidance section",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn test_prompt_dimension_guidance_content() {
+        let prompt = build_system_prompt_for_preset(None);
+        // Spot-check key content from each category
+        assert!(prompt.contains("real-world objects"), "missing when_to_estimate content");
+        assert!(prompt.contains("Tiny: < 20mm"), "missing size_classes content");
+        assert!(prompt.contains("Human hand"), "missing scale_anchors content");
+        assert!(prompt.contains("mug/cup"), "missing proportional_reasoning content");
+        assert!(prompt.contains("Lid or cap"), "missing relative_sizing content");
+    }
+
+    #[test]
+    fn test_prompt_no_never_assume_dimensions() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let prompt = build_system_prompt_for_preset(*preset);
+            assert!(
+                !prompt.contains("Never assume dimensions"),
+                "preset {:?} still has old 'Never assume dimensions' rule",
+                preset
+            );
+        }
     }
 }

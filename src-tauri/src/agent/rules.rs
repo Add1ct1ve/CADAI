@@ -25,6 +25,7 @@ pub struct AgentRules {
     pub anti_patterns: Option<Vec<AntiPatternEntry>>,
     pub api_reference: Option<Vec<ApiReferenceEntry>>,
     pub dimension_tables: Option<Vec<DimensionTableEntry>>,
+    pub dimension_guidance: Option<HashMap<String, Vec<String>>>,
     pub few_shot_examples: Option<Vec<FewShotExample>>,
 }
 
@@ -150,6 +151,7 @@ impl AgentRules {
             anti_patterns: None,
             api_reference: None,
             dimension_tables: None,
+            dimension_guidance: None,
             few_shot_examples: None,
         }
     }
@@ -604,6 +606,7 @@ mod tests {
         assert!(rules.anti_patterns.is_none());
         assert!(rules.api_reference.is_none());
         assert!(rules.dimension_tables.is_none());
+        assert!(rules.dimension_guidance.is_none());
         assert!(rules.few_shot_examples.is_none());
     }
 
@@ -731,5 +734,39 @@ mod tests {
             excels.iter().any(|e| e.contains("CNC-ready")),
             "cnc preset should mention CNC-ready models"
         );
+    }
+
+    // ── Dimension Guidance ────────────────────────────────────────────
+
+    #[test]
+    fn test_default_has_dimension_guidance() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        assert!(
+            rules.dimension_guidance.is_some(),
+            "default preset should have dimension_guidance"
+        );
+    }
+
+    #[test]
+    fn test_all_presets_have_dimension_guidance() {
+        for preset in &[None, Some("3d-printing"), Some("cnc")] {
+            let rules = AgentRules::from_preset(*preset).unwrap();
+            assert!(
+                rules.dimension_guidance.is_some(),
+                "preset {:?} should have dimension_guidance",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn test_dimension_guidance_categories() {
+        let rules = AgentRules::from_preset(None).unwrap();
+        let dg = rules.dimension_guidance.as_ref().unwrap();
+        assert!(dg.contains_key("when_to_estimate"), "missing when_to_estimate");
+        assert!(dg.contains_key("size_classes"), "missing size_classes");
+        assert!(dg.contains_key("scale_anchors"), "missing scale_anchors");
+        assert!(dg.contains_key("proportional_reasoning"), "missing proportional_reasoning");
+        assert!(dg.contains_key("relative_sizing"), "missing relative_sizing");
     }
 }

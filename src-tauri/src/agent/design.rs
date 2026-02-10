@@ -128,6 +128,32 @@ pub fn format_manufacturing_constraints(manufacturing: &serde_yaml::Value) -> St
     out
 }
 
+/// Format dimension guidance rules into a prompt-ready string for the geometry advisor.
+pub fn format_dimension_guidance(guidance: &std::collections::HashMap<String, Vec<String>>) -> String {
+    let mut out = String::new();
+    out.push_str("## Dimension Estimation Guidance\n");
+    out.push_str("Follow these rules when choosing dimensions for your geometry plan.\n\n");
+    for (category, items) in guidance {
+        let title: String = category
+            .split('_')
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push_str(&format!("### {}\n", title));
+        for item in items {
+            out.push_str(&format!("- {}\n", item));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Parsing helpers (private)
 // ---------------------------------------------------------------------------
@@ -808,5 +834,27 @@ overhangs:
         // Header present but no bullet items beyond it
         let after_header = result.split("\n\n").last().unwrap_or("");
         assert!(after_header.trim().is_empty() || !after_header.contains("- **"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dimension guidance formatting tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_dimension_guidance_basic() {
+        let mut guidance = std::collections::HashMap::new();
+        guidance.insert("when_to_estimate".to_string(), vec![
+            "For real-world objects, use typical dimensions".to_string(),
+            "For abstract parts, ask the user".to_string(),
+        ]);
+        guidance.insert("size_classes".to_string(), vec![
+            "Tiny: < 20mm".to_string(),
+            "Small: 20-60mm".to_string(),
+        ]);
+        let result = format_dimension_guidance(&guidance);
+        assert!(result.contains("## Dimension Estimation Guidance"));
+        assert!(result.contains("Follow these rules when choosing dimensions"));
+        assert!(result.contains("real-world objects"));
+        assert!(result.contains("Tiny: < 20mm"));
     }
 }
