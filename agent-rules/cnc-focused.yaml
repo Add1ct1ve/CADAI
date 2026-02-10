@@ -284,6 +284,63 @@ code_style:
     )
 
 # =============================================================================
+# CAPABILITIES & LIMITATIONS
+# =============================================================================
+capabilities:
+  excels_at:
+    - "Parametric mechanical parts (brackets, enclosures, gears, flanges)"
+    - "Precise geometry with exact dimensions and tight tolerances"
+    - "Profile-based modeling: sketch 2D shape, then extrude/revolve/sweep/loft"
+    - "Boolean operations to build complex shapes from simple primitives"
+    - "Patterned features: arrays, mirrors, circular patterns"
+    - "Shelling, filleting, chamfering with precise control"
+    - "CNC-ready models with tool-radius internal corners and accessible features"
+  limitations:
+    - "CANNOT create true organic/sculpted surfaces (faces, characters, animals)"
+    - "CANNOT do freeform NURBS surface modeling"
+    - "Splines are approximate - good for gentle curves, not complex organic shapes"
+    - "Very complex boolean operations (>10 bodies) may fail or be slow"
+  strategy_for_complex_requests:
+    - "ALWAYS break complex shapes into simpler sub-parts"
+    - "Use boolean union/cut/intersect to combine sub-parts"
+    - "Approximate organic curves with: revolve + polyline profiles, loft between shapes, generous fillets"
+    - "For helmet/mask/vehicle shapes: start with spheres/ellipsoids, cut and combine"
+    - "If a shape cannot be built, explain the limitation and offer the closest approximation"
+    - "Prefer simpler geometry that WORKS over complex geometry that FAILS"
+    - "Ensure all features are accessible from the tool direction (Z+ for 3-axis)"
+
+# =============================================================================
+# ADVANCED TECHNIQUES
+# =============================================================================
+advanced_techniques:
+  profile_based_modeling:
+    - "Most complex shapes start as a 2D sketch swept into 3D"
+    - "revolve(): Axially symmetric shapes (vases, bowls, domes, wheels)"
+    - "sweep(): Profile follows a path (pipes, channels, rails)"
+    - "loft(): Smooth blend between different cross-sections"
+  approximating_organic_shapes:
+    - "Hemispheres: sphere + intersect with half-space box"
+    - "Rounded bodies: loft between roundedRect profiles at different heights"
+    - "Smooth transitions: large-radius fillets after boolean unions"
+    - "Teardrop/egg shapes: revolve a spline profile"
+    - "Complex enclosures: loft + shell"
+    - "Helmet-like shapes: hemisphere + cylinder extensions + boolean cuts for openings"
+  cnc_specific_techniques:
+    - "Always add tool-radius fillets to internal corners (min 1.5mm for 3mm end mill)"
+    - "Design pockets with depth/width ratio <= 3:1"
+    - "Ensure all features accessible from spindle direction"
+    - "Use standard drill sizes for holes when possible"
+  common_pitfalls:
+    - "Fillet radius larger than edge length causes crash - use smaller radius"
+    - "Shell on body with thin features causes crash - simplify first"
+    - "Boolean operations on non-overlapping bodies do nothing (no error, no effect)"
+    - "Revolve profile must be entirely on one side of the axis"
+    - "Sweep path must be a Wire object (.wire()), not just edges"
+    - "Loft profiles should have same number of segments for clean results"
+    - "Apply fillets/chamfers LAST, after all boolean operations"
+    - "Internal corners must have fillet radius >= tool radius"
+
+# =============================================================================
 # RESPONSE FORMAT
 # =============================================================================
 response_format:
@@ -445,3 +502,256 @@ cookbook:
           .circle(INNER_R)
           .extrude(HEIGHT)
       )
+
+  - title: "Revolve (wine glass)"
+    description: "Create axially symmetric shapes by revolving a polyline profile around an axis"
+    code: |
+      import cadquery as cq
+      # Wine glass profile (half cross-section) - points from bottom to top
+      # Profile must be entirely on one side of the revolve axis (positive X here)
+      profile_pts = [
+          (0, 0),      # center bottom of base
+          (30, 0),     # outer edge of base
+          (30, 3),     # base thickness
+          (3, 3),      # start of stem
+          (3, 60),     # top of stem
+          (25, 80),    # bowl flare
+          (25, 100),   # bowl top outer
+          (23, 100),   # bowl top inner (wall thickness)
+          (23, 82),    # bowl inner
+          (0, 65),     # bowl bottom center
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .polyline(profile_pts)
+          .close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+
+  - title: "Sweep (pipe along path)"
+    description: "Sweep a circular profile along a wire path to create a pipe or channel"
+    code: |
+      import cadquery as cq
+      PIPE_RADIUS = 5.0
+      # Create a path using a series of points with arcs
+      path = (
+          cq.Workplane("XZ")
+          .moveTo(0, 0)
+          .lineTo(0, 30)
+          .threePointArc((15, 45), (30, 45))
+          .lineTo(60, 45)
+          .wire()
+      )
+      # Sweep a circle along the path
+      result = (
+          cq.Workplane("XY")
+          .circle(PIPE_RADIUS)
+          .sweep(path)
+      )
+
+  - title: "Loft (square to circle transition)"
+    description: "Smooth blend between different cross-section shapes at different heights"
+    code: |
+      import cadquery as cq
+      # Bottom profile: 40x40 rounded rectangle
+      bottom = cq.Workplane("XY").rect(40, 40)
+      # Top profile: circle at Z=50
+      top = cq.Workplane("XY").workplane(offset=50).circle(15)
+      # Loft between the two profiles
+      result = bottom.loft(top)
+
+  - title: "Spline curves (ergonomic shape)"
+    description: "Use splines for smooth organic-ish curves, then revolve for 3D shape"
+    code: |
+      import cadquery as cq
+      # Spline profile for an egg/teardrop shape (revolve around Y axis)
+      spline_pts = [
+          (0, 0),
+          (12, 10),
+          (18, 25),
+          (15, 45),
+          (8, 55),
+          (0, 60),
+      ]
+      result = (
+          cq.Workplane("XZ")
+          .spline(spline_pts)
+          .close()
+          .revolve(360, (0, 0, 0), (0, 1, 0))
+      )
+
+  - title: "Advanced edge selectors"
+    description: "Select edges by direction, position, and compound filters"
+    code: |
+      import cadquery as cq
+      W, D, H = 60.0, 40.0, 30.0
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          # '|Z' selects edges parallel to Z axis (vertical edges)
+          .edges("|Z")
+          .fillet(3.0)
+          # '>Z' selects edges at the maximum Z (top edges)
+          .edges(">Z")
+          .chamfer(1.0)
+      )
+
+  - title: "Shell with face removal and ports"
+    description: "Create a hollow enclosure by shelling then cutting access ports"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 50.0, 40.0
+      WALL = 2.5
+      PORT_DIA = 15.0
+      # Shell removes material from inside, opening the selected face
+      enclosure = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .shell(-WALL)
+      )
+      # Cut a circular port on the front face
+      result = (
+          enclosure.faces(">X")
+          .workplane()
+          .hole(PORT_DIA)
+      )
+
+  - title: "Complex boolean composition (helmet shape)"
+    description: "Build complex shapes from simple primitives using boolean operations"
+    code: |
+      import cadquery as cq
+      R = 50.0       # head radius
+      WALL = 3.0     # shell thickness
+      VISOR_W = 60.0
+      VISOR_H = 25.0
+
+      # Start with a sphere
+      sphere = cq.Workplane("XY").sphere(R)
+      # Cut bottom half to get hemisphere (dome)
+      cut_box = cq.Workplane("XY").box(R * 3, R * 3, R).translate((0, 0, -R / 2))
+      dome = sphere.cut(cut_box)
+      # Extend downward with a cylinder for the jaw area
+      jaw = cq.Workplane("XY").circle(R).extrude(-20)
+      helmet_solid = dome.union(jaw)
+      # Shell it to make it hollow
+      helmet = helmet_solid.shell(-WALL)
+      # Cut visor opening on front face
+      visor_cut = (
+          cq.Workplane("XZ")
+          .workplane(offset=R)
+          .rect(VISOR_W, VISOR_H)
+          .extrude(-WALL * 3)
+      )
+      result = helmet.cut(visor_cut)
+
+  - title: "Circular pattern (polar array of holes)"
+    description: "Create features arranged in a circular pattern using polarArray"
+    code: |
+      import cadquery as cq
+      DISC_R = 40.0
+      DISC_H = 8.0
+      HOLE_DIA = 6.0
+      HOLE_CIRCLE_R = 30.0
+      NUM_HOLES = 6
+
+      result = (
+          cq.Workplane("XY")
+          .circle(DISC_R)
+          .extrude(DISC_H)
+          .faces(">Z")
+          .workplane()
+          .polarArray(HOLE_CIRCLE_R, 0, 360, NUM_HOLES)
+          .hole(HOLE_DIA)
+      )
+
+  - title: "Text embossing on a face"
+    description: "Add raised or engraved text to a face of a solid"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 30.0, 5.0
+      FONT_SIZE = 10.0
+      TEXT_DEPTH = 1.0   # positive = raised, negative would need .cutBlind
+
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .workplane()
+          .text("HELLO", FONT_SIZE, TEXT_DEPTH)
+      )
+
+  - title: "Rounded enclosure (loft between rounded rectangles)"
+    description: "Create a smooth enclosure by lofting between rounded rectangles at different heights"
+    code: |
+      import cadquery as cq
+      W_BOT, D_BOT = 60.0, 40.0  # bottom dimensions
+      W_TOP, D_TOP = 50.0, 35.0  # top dimensions (slightly smaller)
+      HEIGHT = 30.0
+      CORNER_R = 5.0
+      WALL = 2.0
+
+      # Bottom profile
+      bottom = cq.Workplane("XY").rect(W_BOT, D_BOT).val()
+      # Top profile
+      top = cq.Workplane("XY").workplane(offset=HEIGHT).rect(W_TOP, D_TOP).val()
+      # Loft and shell
+      result = (
+          cq.Workplane("XY")
+          .rect(W_BOT, D_BOT)
+          .workplane(offset=HEIGHT)
+          .rect(W_TOP, D_TOP)
+          .loft()
+          .edges("|Z")
+          .fillet(CORNER_R)
+          .faces(">Z")
+          .shell(-WALL)
+      )
+
+  - title: "Countersink and counterbore holes"
+    description: "Create standard countersink (cskHole) and counterbore (cboreHole) holes for fasteners"
+    code: |
+      import cadquery as cq
+      W, D, H = 80.0, 40.0, 10.0
+
+      result = (
+          cq.Workplane("XY")
+          .box(W, D, H)
+          .faces(">Z")
+          .workplane()
+          # Counterbore hole: hole_dia, cbore_dia, cbore_depth
+          .pushPoints([(-20, 0)])
+          .cboreHole(5.0, 10.0, 3.0)
+          # Countersink hole: hole_dia, csk_dia, csk_angle (82 or 90 deg typical)
+          .pushPoints([(20, 0)])
+          .cskHole(5.0, 10.0, 82)
+      )
+
+  - title: "Multi-body workflow (separate parts combined)"
+    description: "Build complex models from separate bodies using translate and boolean union"
+    code: |
+      import cadquery as cq
+      # Body 1: base plate
+      base = cq.Workplane("XY").box(80, 60, 5)
+      # Body 2: left pillar
+      pillar_l = (
+          cq.Workplane("XY")
+          .workplane(offset=5)
+          .center(-30, 0)
+          .circle(8)
+          .extrude(40)
+      )
+      # Body 3: right pillar
+      pillar_r = (
+          cq.Workplane("XY")
+          .workplane(offset=5)
+          .center(30, 0)
+          .circle(8)
+          .extrude(40)
+      )
+      # Body 4: top bridge
+      bridge = cq.Workplane("XY").workplane(offset=45).box(76, 16, 5)
+      # Combine all parts, then fillet the joints
+      combined = base.union(pillar_l).union(pillar_r).union(bridge)
+      # Apply fillets LAST after all booleans
+      result = combined.edges("|Z").fillet(2.0)
