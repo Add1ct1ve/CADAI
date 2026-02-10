@@ -5,7 +5,8 @@ use tauri::State;
 use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::StreamDelta;
+use crate::ai::cost;
+use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::agent::design;
 use crate::agent::prompts;
 use crate::agent::review;
@@ -88,6 +89,13 @@ pub enum MultiPartEvent {
     ReviewComplete {
         was_modified: bool,
         explanation: String,
+    },
+    TokenUsage {
+        phase: String,
+        input_tokens: u32,
+        output_tokens: u32,
+        total_tokens: u32,
+        cost_usd: Option<f64>,
     },
     Done {
         success: bool,
@@ -223,6 +231,27 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
 }
 
 // ---------------------------------------------------------------------------
+// Token usage helper
+// ---------------------------------------------------------------------------
+
+fn emit_usage(
+    on_event: &Channel<MultiPartEvent>,
+    phase: &str,
+    usage: &TokenUsage,
+    provider: &str,
+    model: &str,
+) {
+    let cost_usd = cost::estimate_cost(provider, model, usage);
+    let _ = on_event.send(MultiPartEvent::TokenUsage {
+        phase: phase.to_string(),
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total(),
+        cost_usd,
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Command
 // ---------------------------------------------------------------------------
 
@@ -238,6 +267,10 @@ pub async fn generate_parallel(
         prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref());
     let user_request = message.clone();
 
+    let provider_id = config.ai_provider.clone();
+    let model_id = config.model.clone();
+    let mut total_usage = TokenUsage::default();
+
     // -----------------------------------------------------------------------
     // Phase 0: Geometry Design Plan (always runs)
     // -----------------------------------------------------------------------
@@ -246,7 +279,11 @@ pub async fn generate_parallel(
     });
 
     let design_provider = create_provider(&config)?;
-    let mut design_plan = design::plan_geometry(design_provider, &message).await?;
+    let (mut design_plan, design_usage) = design::plan_geometry(design_provider, &message).await?;
+    if let Some(ref u) = design_usage {
+        total_usage.add(u);
+        emit_usage(&on_event, "design", u, &provider_id, &model_id);
+    }
 
     // Validate the design plan (deterministic, no AI call).
     let validation = design::validate_plan(&design_plan.text);
@@ -269,9 +306,14 @@ pub async fn generate_parallel(
 
         let feedback = design::build_rejection_feedback(&validation);
         let retry_provider = create_provider(&config)?;
-        design_plan = design::plan_geometry_with_feedback(
+        let (retry_plan, retry_usage) = design::plan_geometry_with_feedback(
             retry_provider, &message, &feedback
         ).await?;
+        design_plan = retry_plan;
+        if let Some(ref u) = retry_usage {
+            total_usage.add(u);
+            emit_usage(&on_event, "design", u, &provider_id, &model_id);
+        }
 
         // Validate retry but accept even if still risky (max 1 retry).
         let retry_validation = design::validate_plan(&design_plan.text);
@@ -315,7 +357,11 @@ pub async fn generate_parallel(
         },
     ];
 
-    let plan_json = planner.complete(&planner_messages, Some(1024)).await?;
+    let (plan_json, plan_usage) = planner.complete(&planner_messages, Some(1024)).await?;
+    if let Some(ref u) = plan_usage {
+        total_usage.add(u);
+        emit_usage(&on_event, "plan", u, &provider_id, &model_id);
+    }
 
     // Try to parse the plan; fall back to single mode on failure.
     let plan: GenerationPlan = parse_plan(&plan_json);
@@ -360,7 +406,12 @@ pub async fn generate_parallel(
         }
 
         match provider_handle.await {
-            Ok(Ok(())) => {}
+            Ok(Ok(stream_usage)) => {
+                if let Some(ref u) = stream_usage {
+                    total_usage.add(u);
+                    emit_usage(&on_event, "generate", u, &provider_id, &model_id);
+                }
+            }
             Ok(Err(e)) => return Err(e),
             Err(e) => {
                 return Err(AppError::AiProviderError(format!(
@@ -383,7 +434,11 @@ pub async fn generate_parallel(
 
                 let review_provider = create_provider(&config)?;
                 match review::review_code(review_provider, &user_request, &code, Some(&design_plan.text)).await {
-                    Ok(result) => {
+                    Ok((result, review_usage)) => {
+                        if let Some(ref u) = review_usage {
+                            total_usage.add(u);
+                            emit_usage(&on_event, "review", u, &provider_id, &model_id);
+                        }
                         let _ = on_event.send(MultiPartEvent::ReviewComplete {
                             was_modified: result.was_modified,
                             explanation: result.explanation.clone(),
@@ -397,6 +452,10 @@ pub async fn generate_parallel(
                                 &code,
                                 &result.code,
                             );
+                            // Emit total usage
+                            if total_usage.total() > 0 {
+                                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+                            }
                             let _ = on_event.send(MultiPartEvent::Done {
                                 success: true,
                                 error: None,
@@ -410,6 +469,11 @@ pub async fn generate_parallel(
                     }
                 }
             }
+        }
+
+        // Emit total usage before Done
+        if total_usage.total() > 0 {
+            emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
         }
 
         let _ = on_event.send(MultiPartEvent::Done {
@@ -466,7 +530,7 @@ pub async fn generate_parallel(
             }
 
             let result = match stream_handle.await {
-                Ok(Ok(())) => Ok(full_response),
+                Ok(Ok(usage)) => Ok((full_response, usage)),
                 Ok(Err(e)) => Err(e.to_string()),
                 Err(e) => Err(format!("Part task panicked: {}", e)),
             };
@@ -486,7 +550,11 @@ pub async fn generate_parallel(
         let position = plan.parts[idx].position;
 
         match handle.await {
-            Ok((_, Ok(response))) => {
+            Ok((_, Ok((response, part_usage)))) => {
+                // Accumulate part usage
+                if let Some(ref u) = part_usage {
+                    total_usage.add(u);
+                }
                 // Extract python code from the response
                 let code = extract_code_from_response(&response);
                 match code {
@@ -529,6 +597,11 @@ pub async fn generate_parallel(
         }
     }
 
+    // Emit accumulated generate usage for all parts
+    if total_usage.total() > 0 {
+        emit_usage(&on_event, "generate", &total_usage, &provider_id, &model_id);
+    }
+
     if !any_success {
         let _ = on_event.send(MultiPartEvent::Done {
             success: false,
@@ -560,7 +633,11 @@ pub async fn generate_parallel(
                 });
                 let review_provider = create_provider(&config)?;
                 match review::review_code(review_provider, &user_request, &code, Some(&design_plan.text)).await {
-                    Ok(result) => {
+                    Ok((result, review_usage)) => {
+                        if let Some(ref u) = review_usage {
+                            total_usage.add(u);
+                            emit_usage(&on_event, "review", u, &provider_id, &model_id);
+                        }
                         let _ = on_event.send(MultiPartEvent::ReviewComplete {
                             was_modified: result.was_modified,
                             explanation: result.explanation.clone(),
@@ -579,6 +656,11 @@ pub async fn generate_parallel(
             } else {
                 code
             };
+
+            // Emit total usage before Done
+            if total_usage.total() > 0 {
+                emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
+            }
 
             let _ = on_event.send(MultiPartEvent::FinalCode { code: final_code.clone() });
             let _ = on_event.send(MultiPartEvent::Done {

@@ -1,7 +1,7 @@
 use regex::Regex;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::AiProvider;
+use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::error::AppError;
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are a CadQuery code reviewer. Your job is to verify that generated CadQuery code correctly implements what the user requested.
@@ -89,7 +89,7 @@ pub async fn review_code(
     user_request: &str,
     generated_code: &str,
     design_plan: Option<&str>,
-) -> Result<ReviewResult, AppError> {
+) -> Result<(ReviewResult, Option<TokenUsage>), AppError> {
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -101,9 +101,9 @@ pub async fn review_code(
         },
     ];
 
-    let response = provider.complete(&messages, Some(2048)).await?;
+    let (response, usage) = provider.complete(&messages, Some(2048)).await?;
 
-    Ok(parse_review_response(&response, generated_code))
+    Ok((parse_review_response(&response, generated_code), usage))
 }
 
 /// Parse the reviewer's response into a ReviewResult.

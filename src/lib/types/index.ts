@@ -75,6 +75,14 @@ export interface StreamEvent {
   delta: string;
   done: boolean;
   event_type?: string;
+  token_usage?: TokenUsageData;
+}
+
+export interface TokenUsageData {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number | null;
 }
 
 export interface RustChatMessage {
@@ -127,6 +135,7 @@ export type MultiPartEvent =
   | { kind: 'FinalCode'; code: string }
   | { kind: 'ReviewStatus'; message: string }
   | { kind: 'ReviewComplete'; was_modified: boolean; explanation: string }
+  | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
   | { kind: 'Done'; success: boolean; error?: string };
 
 export interface PartProgress {

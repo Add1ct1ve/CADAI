@@ -268,12 +268,12 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Token counting per AI call | ⬜ | Extract `usage.prompt_tokens` and `usage.completion_tokens` from API response |
-| Accumulate per-generation totals | ⬜ | Sum across design + plan + generate + review calls |
-| Cost estimation by provider | ⬜ | Rate table: Claude, OpenAI, Gemini, Kimi, etc. |
-| Surface to frontend | ⬜ | New event type in `MultiPartEvent` / `StreamEvent` |
-| Display in chat UI | ⬜ | Small badge: "1,247 tokens / $0.003" next to each generation |
-| Generation history tracking | ⬜ | Store token usage in AppState for session summary |
+| Token counting per AI call | ✅ | All 4 providers (Claude, OpenAI, Gemini, Ollama) return `TokenUsage` from `complete()` and `stream()` |
+| Accumulate per-generation totals | ✅ | `generate_parallel` sums across design + plan + generate + review phases |
+| Cost estimation by provider | ✅ | `ai/cost.rs` rate table: Claude, OpenAI, DeepSeek, Qwen, Kimi, Gemini, Ollama |
+| Surface to frontend | ✅ | `MultiPartEvent::TokenUsage` + `StreamEvent.token_usage` with cost_usd |
+| Display in chat UI | ✅ | Small badge: "1,247 tokens / $0.003" — shows "free (local)" for Ollama |
+| Generation history tracking | ⬜ | Store token usage in AppState for session summary (deferred) |
 
 **Implementation notes:**
 - Modify `AiProvider` trait: `complete()` and `stream()` return `TokenUsage` alongside response

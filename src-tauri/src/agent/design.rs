@@ -2,7 +2,7 @@ use regex::Regex;
 use serde::Serialize;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::AiProvider;
+use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::error::AppError;
 
 /// The geometry design plan produced by the advisor before code generation.
@@ -384,7 +384,7 @@ pub async fn plan_geometry_with_feedback(
     provider: Box<dyn AiProvider>,
     user_request: &str,
     feedback: &str,
-) -> Result<DesignPlan, AppError> {
+) -> Result<(DesignPlan, Option<TokenUsage>), AppError> {
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -407,8 +407,8 @@ pub async fn plan_geometry_with_feedback(
         },
     ];
 
-    let plan_text = provider.complete(&messages, Some(2048)).await?;
-    Ok(DesignPlan { text: plan_text })
+    let (plan_text, usage) = provider.complete(&messages, Some(2048)).await?;
+    Ok((DesignPlan { text: plan_text }, usage))
 }
 
 /// Call the AI to produce a geometry design plan for the user's request.
@@ -419,7 +419,7 @@ pub async fn plan_geometry_with_feedback(
 pub async fn plan_geometry(
     provider: Box<dyn AiProvider>,
     user_request: &str,
-) -> Result<DesignPlan, AppError> {
+) -> Result<(DesignPlan, Option<TokenUsage>), AppError> {
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -433,9 +433,9 @@ pub async fn plan_geometry(
 
     // Use complete (non-streaming) since the plan is relatively short
     // and we want the full text before proceeding to code generation.
-    let plan_text = provider.complete(&messages, Some(2048)).await?;
+    let (plan_text, usage) = provider.complete(&messages, Some(2048)).await?;
 
-    Ok(DesignPlan { text: plan_text })
+    Ok((DesignPlan { text: plan_text }, usage))
 }
 
 #[cfg(test)]

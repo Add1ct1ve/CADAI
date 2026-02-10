@@ -8,7 +8,8 @@ use crate::ai::gemini::GeminiProvider;
 use crate::ai::message::ChatMessage;
 use crate::ai::ollama::OllamaProvider;
 use crate::ai::openai::OpenAiProvider;
-use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::cost;
+use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
 use crate::agent::prompts;
 use crate::agent::rules::{AgentRules, AntiPatternEntry};
 use crate::agent::validate;
@@ -21,9 +22,19 @@ use crate::state::AppState;
 pub struct StreamEvent {
     pub delta: String,
     pub done: bool,
-    /// Optional event type: "design_plan" for geometry plans, defaults to normal response.
+    /// Optional event type: "design_plan" for geometry plans, "token_usage" for usage data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<StreamTokenUsage>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct StreamTokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub total_tokens: u32,
+    pub cost_usd: Option<f64>,
 }
 
 /// Result returned by the auto_retry command.
@@ -112,12 +123,12 @@ pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>,
 }
 
 /// Stream an AI response from the provider, forwarding deltas over the Tauri channel.
-/// Returns the fully accumulated response string.
+/// Returns the fully accumulated response string and optional token usage.
 pub(crate) async fn stream_ai_response(
     provider: Box<dyn AiProvider>,
     messages: Vec<ChatMessage>,
     on_event: &Channel<StreamEvent>,
-) -> Result<String, AppError> {
+) -> Result<(String, Option<TokenUsage>), AppError> {
     let (tx, mut rx) = mpsc::channel::<StreamDelta>(100);
 
     let provider_handle = tokio::spawn(async move { provider.stream(&messages, tx).await });
@@ -130,11 +141,12 @@ pub(crate) async fn stream_ai_response(
             delta: delta.content,
             done: delta.done,
             event_type: None,
+            token_usage: None,
         });
     }
 
-    match provider_handle.await {
-        Ok(Ok(())) => {}
+    let usage = match provider_handle.await {
+        Ok(Ok(usage)) => usage,
         Ok(Err(e)) => return Err(e),
         Err(e) => {
             return Err(AppError::AiProviderError(format!(
@@ -142,9 +154,9 @@ pub(crate) async fn stream_ai_response(
                 e
             )));
         }
-    }
+    };
 
-    Ok(full_response)
+    Ok((full_response, usage))
 }
 
 #[tauri::command]
@@ -177,7 +189,25 @@ pub async fn send_message(
     });
 
     // Stream and return the full response.
-    stream_ai_response(provider, messages, &on_event).await
+    let (full_response, usage) = stream_ai_response(provider, messages, &on_event).await?;
+
+    // Emit token usage event if available.
+    if let Some(ref u) = usage {
+        let cost_usd = cost::estimate_cost(&config.ai_provider, &config.model, u);
+        let _ = on_event.send(StreamEvent {
+            delta: String::new(),
+            done: true,
+            event_type: Some("token_usage".to_string()),
+            token_usage: Some(StreamTokenUsage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                total_tokens: u.total(),
+                cost_usd,
+            }),
+        });
+    }
+
+    Ok(full_response)
 }
 
 /// Build a targeted retry prompt from the error classification and strategy.
@@ -293,7 +323,23 @@ pub async fn auto_retry(
     });
 
     // Stream the AI response.
-    let full_response = stream_ai_response(provider, messages, &on_event).await?;
+    let (full_response, usage) = stream_ai_response(provider, messages, &on_event).await?;
+
+    // Emit token usage event if available.
+    if let Some(ref u) = usage {
+        let cost_usd = cost::estimate_cost(&config.ai_provider, &config.model, u);
+        let _ = on_event.send(StreamEvent {
+            delta: String::new(),
+            done: true,
+            event_type: Some("token_usage".to_string()),
+            token_usage: Some(StreamTokenUsage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                total_tokens: u.total(),
+                cost_usd,
+            }),
+        });
+    }
 
     // Extract code from AI response.
     let code = validate::extract_python_code(&full_response);

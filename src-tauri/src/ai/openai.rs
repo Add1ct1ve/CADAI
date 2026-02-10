@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
-use crate::ai::provider::{AiProvider, StreamDelta};
+use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
 use crate::ai::streaming::parse_sse_events;
 use crate::error::AppError;
 
@@ -42,6 +42,13 @@ struct OpenAiRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAiStreamOptions>,
+}
+
+#[derive(Serialize)]
+struct OpenAiStreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize)]
@@ -54,6 +61,13 @@ struct OpenAiMessage {
 #[allow(dead_code)]
 struct OpenAiResponse {
     choices: Vec<OpenAiChoice>,
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +92,7 @@ struct OpenAiDeltaContent {
 #[derive(Deserialize)]
 struct OpenAiStreamChunk {
     choices: Vec<OpenAiStreamChoice>,
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Deserialize)]
@@ -97,7 +112,7 @@ impl From<&ChatMessage> for OpenAiMessage {
 
 #[async_trait]
 impl AiProvider for OpenAiProvider {
-    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String, AppError> {
+    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
         let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
 
         let body = OpenAiRequest {
@@ -105,6 +120,7 @@ impl AiProvider for OpenAiProvider {
             messages: openai_messages,
             stream: false,
             max_tokens,
+            stream_options: None,
         };
 
         let response = self
@@ -141,14 +157,19 @@ impl AiProvider for OpenAiProvider {
             .and_then(|m| m.content.clone())
             .unwrap_or_default();
 
-        Ok(text)
+        let usage = resp.usage.map(|u| TokenUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+        });
+
+        Ok((text, usage))
     }
 
     async fn stream(
         &self,
         messages: &[ChatMessage],
         tx: mpsc::Sender<StreamDelta>,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<TokenUsage>, AppError> {
         let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
 
         let body = OpenAiRequest {
@@ -156,6 +177,7 @@ impl AiProvider for OpenAiProvider {
             messages: openai_messages,
             stream: true,
             max_tokens: None,
+            stream_options: Some(OpenAiStreamOptions { include_usage: true }),
         };
 
         let response = self
@@ -182,6 +204,7 @@ impl AiProvider for OpenAiProvider {
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk = chunk_result.map_err(|e| {
@@ -199,6 +222,13 @@ impl AiProvider for OpenAiProvider {
                 let events = parse_sse_events(&event_block);
                 for event_data in events {
                     if let Ok(chunk) = serde_json::from_str::<OpenAiStreamChunk>(&event_data) {
+                        // Capture usage from the final chunk
+                        if let Some(u) = &chunk.usage {
+                            tracked_usage = Some(TokenUsage {
+                                input_tokens: u.prompt_tokens,
+                                output_tokens: u.completion_tokens,
+                            });
+                        }
                         for choice in &chunk.choices {
                             if let Some(delta) = &choice.delta {
                                 if let Some(ref content) = delta.content {
@@ -232,6 +262,6 @@ impl AiProvider for OpenAiProvider {
             })
             .await;
 
-        Ok(())
+        Ok(tracked_usage)
     }
 }
