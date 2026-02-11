@@ -1535,21 +1535,18 @@ async fn run_generation_pipeline(
         emit_usage(on_event, "generate", total_usage, provider_id, model_id);
     }
 
-    // Spawn background per-part STL tasks (non-blocking, for individual part preview)
+    // Run per-part STL tasks and await completion so preview events arrive before command ends.
     if let Some(ctx) = execution_ctx {
-        for part_entry in &part_codes {
+        let mut stl_tasks = Vec::new();
+        for (part_idx, part_entry) in part_codes.iter().enumerate() {
             if let Some((name, code, _pos)) = part_entry {
                 let part_name = name.clone();
                 let part_code = code.clone();
-                let part_idx = part_codes
-                    .iter()
-                    .position(|p| p.as_ref().map(|(n, _, _)| n == &part_name).unwrap_or(false))
-                    .unwrap_or(0);
                 let venv_dir = ctx.venv_dir.clone();
                 let runner_script = ctx.runner_script.clone();
                 let evt_channel = on_event.clone();
 
-                tokio::spawn(async move {
+                stl_tasks.push(tokio::spawn(async move {
                     match executor::execute_with_timeout_isolated(
                         &part_code,
                         &venv_dir,
@@ -1574,8 +1571,12 @@ async fn run_generation_pipeline(
                             });
                         }
                     }
-                });
+                }));
             }
+        }
+
+        for task in stl_tasks {
+            let _ = task.await;
         }
     }
 
@@ -2605,7 +2606,7 @@ pub async fn retry_part(
                 error: None,
             });
 
-            // Spawn background STL execution for the retried part
+            // Run STL execution for retried part and await completion so preview event is delivered.
             let venv_path = state.venv_path.lock().unwrap().clone();
             if let Some(venv_dir) = venv_path {
                 if let Ok(runner_script) = super::find_python_script("runner.py") {
@@ -2614,32 +2615,30 @@ pub async fn retry_part(
                     let evt_channel = on_event.clone();
                     let pi = part_index;
 
-                    tokio::spawn(async move {
-                        match executor::execute_with_timeout_isolated(
-                            &part_code,
-                            &venv_dir,
-                            &runner_script,
-                        )
-                        .await
-                        {
-                            Ok(exec_result) => {
-                                let stl_base64 = base64::engine::general_purpose::STANDARD
-                                    .encode(&exec_result.stl_data);
-                                let _ = evt_channel.send(MultiPartEvent::PartStlReady {
-                                    part_index: pi,
-                                    part_name,
-                                    stl_base64,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = evt_channel.send(MultiPartEvent::PartStlFailed {
-                                    part_index: pi,
-                                    part_name: part_name.clone(),
-                                    error: e,
-                                });
-                            }
+                    match executor::execute_with_timeout_isolated(
+                        &part_code,
+                        &venv_dir,
+                        &runner_script,
+                    )
+                    .await
+                    {
+                        Ok(exec_result) => {
+                            let stl_base64 = base64::engine::general_purpose::STANDARD
+                                .encode(&exec_result.stl_data);
+                            let _ = evt_channel.send(MultiPartEvent::PartStlReady {
+                                part_index: pi,
+                                part_name,
+                                stl_base64,
+                            });
                         }
-                    });
+                        Err(e) => {
+                            let _ = evt_channel.send(MultiPartEvent::PartStlFailed {
+                                part_index: pi,
+                                part_name: part_name.clone(),
+                                error: e,
+                            });
+                        }
+                    }
                 }
             }
 
