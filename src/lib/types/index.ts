@@ -151,6 +151,7 @@ export type MultiPartEvent =
   | { kind: 'PartComplete'; part_index: number; part_name: string; success: boolean; error?: string }
   | { kind: 'PartCodeExtracted'; part_index: number; part_name: string; code: string }
   | { kind: 'PartStlReady'; part_index: number; part_name: string; stl_base64: string }
+  | { kind: 'PartStlFailed'; part_index: number; part_name: string; error: string }
   | { kind: 'AssemblyStatus'; message: string }
   | { kind: 'FinalCode'; code: string; stl_base64?: string }
   | { kind: 'ReviewStatus'; message: string }
