@@ -15,6 +15,105 @@ The output file will be written as binary STL.
 import sys
 import os
 import traceback
+from collections.abc import Mapping
+
+
+def _is_string_like(value):
+    return isinstance(value, (str, bytes, bytearray))
+
+
+def _extract_exportables(result):
+    """
+    Flatten a user-provided `result` into CadQuery-exportable objects.
+
+    Supports:
+    - a single Shape / Solid / Compound
+    - Workplane (via .vals()/.val())
+    - list/tuple/set of the above
+    - dict of named parts (values are inspected)
+    """
+    found = []
+    invalid = []
+    seen_ids = set()
+
+    def add_candidate(candidate):
+        if candidate is None:
+            return
+        if _is_string_like(candidate):
+            invalid.append(f"string:{str(candidate)[:40]}")
+            return
+
+        if isinstance(candidate, Mapping):
+            for value in candidate.values():
+                add_candidate(value)
+            return
+
+        if isinstance(candidate, (list, tuple, set)):
+            for value in candidate:
+                add_candidate(value)
+            return
+
+        # Workplane with multiple objects.
+        if hasattr(candidate, "vals") and callable(candidate.vals):
+            try:
+                values = candidate.vals()
+                if values:
+                    for value in values:
+                        add_candidate(value)
+                    return
+            except Exception:
+                pass
+
+        # Workplane with a single object.
+        if hasattr(candidate, "val") and callable(candidate.val):
+            try:
+                value = candidate.val()
+                if value is not None and value is not candidate:
+                    add_candidate(value)
+                    return
+            except Exception:
+                pass
+
+        # CadQuery shape-like object.
+        if hasattr(candidate, "wrapped"):
+            obj_id = id(candidate)
+            if obj_id not in seen_ids:
+                seen_ids.add(obj_id)
+                found.append(candidate)
+            return
+
+        # Numbers / bools / other scalars are not exportable geometry.
+        if isinstance(candidate, (int, float, bool)):
+            invalid.append(f"scalar:{candidate}")
+            return
+
+        # Unknown object type that did not resolve to a CadQuery shape.
+        invalid.append(f"type:{type(candidate).__name__}")
+
+    add_candidate(result)
+    return found, invalid
+
+
+def _normalize_result_for_export(result, cq):
+    exportables, invalid = _extract_exportables(result)
+    if not exportables:
+        raise ValueError(
+            "result did not contain exportable CadQuery geometry. "
+            "Assign a CadQuery Workplane/Shape or a collection of those to `result`."
+        )
+
+    if invalid:
+        examples = ", ".join(invalid[:3])
+        raise ValueError(
+            "result mixed geometry with non-geometry values "
+            f"({examples}). Assign only CadQuery geometry objects to `result`."
+        )
+
+    if len(exportables) == 1:
+        return exportables[0]
+
+    # Multiple parts: export as one compound (preserves all generated solids).
+    return cq.Compound.makeCompound(exportables)
 
 
 def main():
@@ -49,11 +148,12 @@ def main():
     # Export based on file extension
     try:
         import cadquery as cq
+        normalized = _normalize_result_for_export(result, cq)
         ext = os.path.splitext(output_file)[1].lower()
         if ext in ('.step', '.stp'):
-            cq.exporters.export(result, output_file, cq.exporters.ExportTypes.STEP)
+            cq.exporters.export(normalized, output_file, cq.exporters.ExportTypes.STEP)
         else:
-            cq.exporters.export(result, output_file, cq.exporters.ExportTypes.STL)
+            cq.exporters.export(normalized, output_file, cq.exporters.ExportTypes.STL)
     except Exception:
         traceback.print_exc()
         sys.exit(4)
