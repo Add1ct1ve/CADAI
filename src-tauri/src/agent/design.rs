@@ -451,40 +451,31 @@ fn sanitize_plan_text(plan_text: &str) -> String {
 ///
 /// Returns None if no recognizable section labels are found.
 fn normalize_section_labels(plan_text: &str) -> Option<String> {
-    fn canonical_label(line: &str) -> Option<&'static str> {
-        let mut s = line.trim();
-        if s.is_empty() {
-            return None;
-        }
+    fn parse_section_label_line(line: &str) -> Option<(&'static str, String)> {
+        let re = Regex::new(
+            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|cadquery approach|build plan(?: structure)?|approximation notes)[*_`#\s]*:?\s*(.*)$",
+        )
+        .unwrap();
+        let caps = re.captures(line)?;
+        let raw_label = caps.get(1)?.as_str().to_lowercase();
+        let remainder = caps
+            .get(2)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
 
-        // Drop common markdown/list prefixes
-        while let Some(first) = s.chars().next() {
-            if first == '#' || first == '-' || first == '*' || first == ' ' {
-                s = s[1..].trim_start();
-            } else {
-                break;
-            }
-        }
-
-        // Drop markdown emphasis and trailing punctuation
-        let cleaned = s
-            .replace('*', "")
-            .trim()
-            .trim_end_matches(':')
-            .trim()
-            .to_lowercase();
-
-        if cleaned == "object analysis" {
-            Some("Object Analysis")
-        } else if cleaned == "cadquery approach" {
-            Some("CadQuery Approach")
-        } else if cleaned == "build plan" || cleaned == "build plan structure" {
-            Some("Build Plan")
-        } else if cleaned == "approximation notes" {
-            Some("Approximation Notes")
+        let label = if raw_label == "object analysis" {
+            "Object Analysis"
+        } else if raw_label == "cadquery approach" {
+            "CadQuery Approach"
+        } else if raw_label == "build plan" || raw_label == "build plan structure" {
+            "Build Plan"
+        } else if raw_label == "approximation notes" {
+            "Approximation Notes"
         } else {
-            None
-        }
+            return None;
+        };
+
+        Some((label, remainder))
     }
 
     let mut current: Option<&'static str> = None;
@@ -493,10 +484,13 @@ fn normalize_section_labels(plan_text: &str) -> Option<String> {
     let mut seen_any = false;
 
     for raw_line in plan_text.lines() {
-        if let Some(lbl) = canonical_label(raw_line) {
+        if let Some((lbl, remainder)) = parse_section_label_line(raw_line) {
             current = Some(lbl);
             seen_any = true;
             sections.entry(lbl).or_default();
+            if !remainder.is_empty() {
+                sections.entry(lbl).or_default().push(remainder);
+            }
             continue;
         }
 
@@ -1457,6 +1451,28 @@ overhangs:
         assert!(sanitized.contains("### Approximation Notes"));
         assert!(sanitized.contains("1. Extrude 42x28x5mm base."));
         assert!(!sanitized.contains("Load template"));
+    }
+
+    #[test]
+    fn test_normalize_section_labels_from_numbered_list_style() {
+        let text = "Key aspects:\n\
+            1. *Object Analysis*:\n\
+            - Wrist-worn tracker housing.\n\
+            2. *CadQuery Approach*:\n\
+            - Use extrude, shell, cut, union.\n\
+            3. *Build Plan*:\n\
+            1. Extrude 42x28x5mm base.\n\
+            2. Cut 20x2.5mm slots.\n\
+            4. *Approximation Notes*:\n\
+            - Dome approximated by cylindrical segment.";
+
+        let sanitized = sanitize_plan_text(text);
+        assert!(sanitized.contains("### Object Analysis"));
+        assert!(sanitized.contains("### CadQuery Approach"));
+        assert!(sanitized.contains("### Build Plan"));
+        assert!(sanitized.contains("### Approximation Notes"));
+        assert!(sanitized.contains("1. Extrude 42x28x5mm base."));
+        assert!(sanitized.contains("2. Cut 20x2.5mm slots."));
     }
 
     #[test]
