@@ -65,6 +65,47 @@ pub struct StructuredError {
 fn classify_ocp_error(message: &str, full_stderr: &str) -> ErrorCategory {
     let combined = format!("{} {}", message, full_stderr).to_lowercase();
 
+    if combined.contains("no pending wires present")
+        || (combined.contains("sweep") && combined.contains("wire"))
+    {
+        return ErrorCategory::Topology(TopologySubKind::SweepFailure);
+    }
+    if combined.contains("cannot find a solid on the stack")
+        || combined.contains("cannot find a solid in the parent chain")
+    {
+        return ErrorCategory::Topology(TopologySubKind::FilletFailure);
+    }
+    if combined.contains("stdfail_notdone")
+        || combined.contains("brep_api: command not done")
+        || combined.contains("command not done")
+    {
+        if combined.contains("fillet") || combined.contains("chamfer") {
+            return ErrorCategory::Topology(TopologySubKind::FilletFailure);
+        }
+        if combined.contains("shell") || combined.contains("offset") {
+            return ErrorCategory::Topology(TopologySubKind::ShellFailure);
+        }
+        if combined.contains("boolean")
+            || combined.contains("fuse")
+            || combined.contains("cut")
+            || combined.contains("common")
+            || combined.contains("intersect")
+            || combined.contains("union")
+        {
+            return ErrorCategory::Topology(TopologySubKind::BooleanFailure);
+        }
+        if combined.contains("sweep") {
+            return ErrorCategory::Topology(TopologySubKind::SweepFailure);
+        }
+        if combined.contains("loft") {
+            return ErrorCategory::Topology(TopologySubKind::LoftFailure);
+        }
+        if combined.contains("revolve") || combined.contains("revolution") {
+            return ErrorCategory::Topology(TopologySubKind::RevolveFailure);
+        }
+        return ErrorCategory::Topology(TopologySubKind::General);
+    }
+
     if combined.contains("fillet") || combined.contains("chamfer") {
         ErrorCategory::Topology(TopologySubKind::FilletFailure)
     } else if combined.contains("shell") || combined.contains("offset") {
@@ -91,12 +132,12 @@ fn classify_ocp_error(message: &str, full_stderr: &str) -> ErrorCategory {
 /// Classify an error into a category based on error type, message, and full stderr.
 #[allow(dead_code)]
 fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCategory {
+    let lower = format!("{} {}", message, full_stderr).to_lowercase();
     match error_type {
         "SyntaxError" | "IndentationError" => ErrorCategory::Syntax,
         "NameError" | "ModuleNotFoundError" | "ImportError" => ErrorCategory::ImportRuntime,
         "AttributeError" => ErrorCategory::ApiMisuse,
         "TypeError" => {
-            let lower = format!("{} {}", message, full_stderr).to_lowercase();
             if lower.contains("cadquery") || lower.contains("workplane") || lower.contains("cq.") {
                 ErrorCategory::ApiMisuse
             } else {
@@ -108,15 +149,17 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
         }
         _ if error_type.starts_with("Standard_") => classify_ocp_error(message, full_stderr),
         "ValueError" => {
-            let lower = format!("{} {}", message, full_stderr).to_lowercase();
             if lower.contains("sweep") || lower.contains("wire") {
                 ErrorCategory::Topology(TopologySubKind::SweepFailure)
+            } else if lower.contains("cannot find a solid on the stack")
+                || lower.contains("cannot find a solid in the parent chain")
+            {
+                ErrorCategory::Topology(TopologySubKind::FilletFailure)
             } else {
                 ErrorCategory::ApiMisuse
             }
         }
         "RuntimeError" => {
-            let lower = format!("{} {}", message, full_stderr).to_lowercase();
             if lower.contains("ocp")
                 || lower.contains("stdfail")
                 || lower.contains("brep")
@@ -245,29 +288,42 @@ pub fn parse_traceback(stderr: &str) -> StructuredError {
 
     // Try to extract the error type and message from the last line of the traceback.
     // Python tracebacks end with "ErrorType: message"
-    let error_re = Regex::new(r"(?m)^(\w*Error|\w*Exception|OCP\.\w+):\s*(.*)$").ok();
-    if let Some(re) = error_re {
-        // Find the last match (the actual error line)
-        let mut last_match: Option<(String, String)> = None;
-        for cap in re.captures_iter(stderr) {
-            last_match = Some((cap[1].to_string(), cap[2].trim().to_string()));
+    let mut last_match: Option<(String, String)> = None;
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.contains(':') {
+            continue;
         }
+        let (left, right) = match trimmed.split_once(':') {
+            Some(v) => v,
+            None => continue,
+        };
+        let error_type = left.trim();
+        let message = right.trim();
+        let is_exception_like = error_type.contains("Error")
+            || error_type.contains("Exception")
+            || error_type.starts_with("OCP.")
+            || error_type.starts_with("StdFail")
+            || error_type.starts_with("Standard_");
+        if is_exception_like && !message.is_empty() {
+            last_match = Some((error_type.to_string(), message.to_string()));
+        }
+    }
 
-        if let Some((error_type, message)) = last_match {
-            let category = classify_error(&error_type, &message, stderr);
-            let failing_operation = extract_failing_operation(stderr);
-            let context = extract_error_context(stderr, &message);
-            let suggestion = generate_suggestion(&error_type, &message, stderr, &category);
-            return StructuredError {
-                error_type,
-                message,
-                line_number,
-                suggestion,
-                category,
-                failing_operation,
-                context,
-            };
-        }
+    if let Some((error_type, message)) = last_match {
+        let category = classify_error(&error_type, &message, stderr);
+        let failing_operation = extract_failing_operation(stderr);
+        let context = extract_error_context(stderr, &message);
+        let suggestion = generate_suggestion(&error_type, &message, stderr, &category);
+        return StructuredError {
+            error_type,
+            message,
+            line_number,
+            suggestion,
+            category,
+            failing_operation,
+            context,
+        };
     }
 
     // Fallback: use the last non-empty line as the error message
@@ -928,6 +984,43 @@ NameError: name 'cq' is not defined"#;
                 "result.sweep(path)"
             ),
             ErrorCategory::Topology(TopologySubKind::SweepFailure)
+        );
+    }
+
+    #[test]
+    fn test_parse_traceback_dotted_ocp_type() {
+        let stderr = r#"Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+OCP.OCP.StdFail.StdFail_NotDone: BRep_API: command not done"#;
+        let err = parse_traceback(stderr);
+        assert_eq!(err.error_type, "OCP.OCP.StdFail.StdFail_NotDone");
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::General)
+        );
+    }
+
+    #[test]
+    fn test_classify_no_pending_wires_deterministically() {
+        assert_eq!(
+            classify_error(
+                "ValueError",
+                "No pending wires present",
+                "result.sweep(path)"
+            ),
+            ErrorCategory::Topology(TopologySubKind::SweepFailure)
+        );
+    }
+
+    #[test]
+    fn test_classify_cannot_find_solid_deterministically() {
+        assert_eq!(
+            classify_error(
+                "ValueError",
+                "Cannot find a solid on the stack or in the parent chain",
+                "result = body.edges().fillet(1.0)"
+            ),
+            ErrorCategory::Topology(TopologySubKind::FilletFailure)
         );
     }
 

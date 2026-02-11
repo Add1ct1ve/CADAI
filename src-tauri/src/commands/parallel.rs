@@ -1,9 +1,10 @@
-use base64::Engine;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 use crate::agent::confidence;
 use crate::agent::consensus;
@@ -241,6 +242,12 @@ struct PipelineOutcome {
     static_findings: Vec<String>,
     post_check_soft_failed: bool,
     post_check_soft_fail_reason: Option<String>,
+    part_acceptance_rate: Option<f32>,
+    assembly_success_rate: Option<f32>,
+    partial_preview_shown: bool,
+    empty_viewport_after_generation: bool,
+    retry_ladder_stage_reached: Option<u32>,
+    failure_signatures: Vec<String>,
 }
 
 /// Record a generation attempt into the session memory.
@@ -303,6 +310,12 @@ fn record_generation_trace(
         final_error: outcome.error.clone(),
         post_check_soft_failed: outcome.post_check_soft_failed,
         post_check_soft_fail_reason: outcome.post_check_soft_fail_reason.clone(),
+        part_acceptance_rate: outcome.part_acceptance_rate,
+        assembly_success_rate: outcome.assembly_success_rate,
+        partial_preview_shown: outcome.partial_preview_shown,
+        empty_viewport_after_generation: outcome.empty_viewport_after_generation,
+        retry_ladder_stage_reached: outcome.retry_ladder_stage_reached,
+        failure_signatures: outcome.failure_signatures.clone(),
         mechanism_candidates: retrieval_result
             .items
             .iter()
@@ -370,7 +383,26 @@ Rules:
 
 Keep your response as short as possible. For single mode, return ONLY {"mode":"single"} with no other text."#;
 
-fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str) -> String {
+fn reliability_policy_text(profile: &crate::config::GenerationReliabilityProfile) -> &'static str {
+    match profile {
+        crate::config::GenerationReliabilityProfile::ReliabilityFirst => {
+            "reliability_first: avoid loft+shell first-pass, avoid blanket edges().fillet(), prefer robust primitives + boolean subtraction."
+        }
+        crate::config::GenerationReliabilityProfile::Balanced => {
+            "balanced: use robust operations first, allow advanced operations if strongly justified."
+        }
+        crate::config::GenerationReliabilityProfile::FidelityFirst => {
+            "fidelity_first: prioritize geometric fidelity but still provide safe fallback in comments/structure."
+        }
+    }
+}
+
+fn build_part_prompt(
+    system_prompt: &str,
+    part: &PartSpec,
+    design_context: &str,
+    config: &crate::config::AppConfig,
+) -> String {
     format!(
         "{}\n\n\
         ## Geometry Design Context\n{}\n\n\
@@ -378,9 +410,15 @@ fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str)
         Generate ONLY this part: **{}**\n\n\
         Description: {}\n\n\
         Constraints:\n{}\n\n\
+        Active reliability policy: {}\n\
+        Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\
         The final result variable MUST contain ONLY this single part.\n\
         Do NOT generate any other parts. Do NOT create an assembly.\n\
-        Wrap your code in <CODE>...</CODE> tags (```python fences also accepted).",
+        STRICT OUTPUT CONTRACT:\n\
+        - Return code only (no prose).\n\
+        - Wrap code in <CODE>...</CODE> tags.\n\
+        - Must assign final geometry to variable `result`.\n\
+        - Keep repair-friendly structure (named intermediates over one giant chain).",
         system_prompt,
         design_context,
         part.name,
@@ -390,6 +428,7 @@ fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str)
             .map(|c| format!("- {}", c))
             .collect::<Vec<_>>()
             .join("\n"),
+        reliability_policy_text(&config.generation_reliability_profile),
     )
 }
 
@@ -409,7 +448,7 @@ async fn request_code_only_part_retry(
         - No prose, no markdown explanation, no bullets.\n\
         - Must assign final geometry to variable named result.\n\
         - Generate ONLY the '{}' part.",
-        build_part_prompt(system_prompt, part, design_context),
+        build_part_prompt(system_prompt, part, design_context, config),
         part.name
     );
 
@@ -713,7 +752,10 @@ async fn run_design_plan_phase(
         ));
     }
 
-    let mut validation = design::validate_plan(&design_plan.text);
+    let mut validation = design::validate_plan_with_profile(
+        &design_plan.text,
+        &config.generation_reliability_profile,
+    );
 
     let _ = on_event.send(MultiPartEvent::PlanValidation {
         risk_score: validation.risk_score,
@@ -751,7 +793,10 @@ async fn run_design_plan_phase(
             emit_usage(on_event, "design", u, provider_id, model_id);
         }
 
-        validation = design::validate_plan(&design_plan.text);
+        validation = design::validate_plan_with_profile(
+            &design_plan.text,
+            &config.generation_reliability_profile,
+        );
         let _ = on_event.send(MultiPartEvent::PlanValidation {
             risk_score: validation.risk_score,
             warnings: validation.warnings.clone(),
@@ -791,7 +836,12 @@ async fn run_design_plan_phase(
             plan_text: design_plan.text.clone(),
         };
 
-        let conf = confidence::assess_confidence(&final_validation, cookbook_ref, patterns_ref);
+        let conf = confidence::assess_confidence_with_profile(
+            &final_validation,
+            cookbook_ref,
+            patterns_ref,
+            &config.generation_reliability_profile,
+        );
         let _ = on_event.send(MultiPartEvent::ConfidenceAssessment {
             level: match conf.level {
                 confidence::ConfidenceLevel::High => "high".to_string(),
@@ -1033,6 +1083,12 @@ async fn run_generation_pipeline(
                     static_findings: vec![],
                     post_check_soft_failed: false,
                     post_check_soft_fail_reason: None,
+                    part_acceptance_rate: None,
+                    assembly_success_rate: None,
+                    partial_preview_shown: result.stl_base64.is_some(),
+                    empty_viewport_after_generation: result.stl_base64.is_none(),
+                    retry_ladder_stage_reached: None,
+                    failure_signatures: vec![],
                 });
             }
             // No Python execution context → fall through to single-shot
@@ -1202,6 +1258,12 @@ async fn run_generation_pipeline(
                         static_findings: vec![],
                         post_check_soft_failed: false,
                         post_check_soft_fail_reason: None,
+                        part_acceptance_rate: None,
+                        assembly_success_rate: None,
+                        partial_preview_shown: false,
+                        empty_viewport_after_generation: false,
+                        retry_ladder_stage_reached: None,
+                        failure_signatures: vec![],
                     });
                 }
 
@@ -1351,6 +1413,12 @@ async fn run_generation_pipeline(
                 static_findings: validation_result.static_findings,
                 post_check_soft_failed: validation_result.post_check_warning.is_some(),
                 post_check_soft_fail_reason: validation_result.post_check_warning,
+                part_acceptance_rate: None,
+                assembly_success_rate: None,
+                partial_preview_shown: validation_result.stl_base64.is_some(),
+                empty_viewport_after_generation: validation_result.stl_base64.is_none(),
+                retry_ladder_stage_reached: validation_result.retry_ladder_stage_reached,
+                failure_signatures: vec![],
             });
         }
 
@@ -1381,6 +1449,12 @@ async fn run_generation_pipeline(
             static_findings: vec![],
             post_check_soft_failed: false,
             post_check_soft_fail_reason: None,
+            part_acceptance_rate: None,
+            assembly_success_rate: None,
+            partial_preview_shown: false,
+            empty_viewport_after_generation: false,
+            retry_ladder_stage_reached: None,
+            failure_signatures: vec![],
         });
     }
 
@@ -1395,7 +1469,7 @@ async fn run_generation_pipeline(
 
     for (idx, part) in plan.parts.iter().enumerate() {
         let part_provider = create_provider(config)?;
-        let part_prompt = build_part_prompt(system_prompt, part, plan_text);
+        let part_prompt = build_part_prompt(system_prompt, part, plan_text, config);
         let part_name = part.name.clone();
         let event_channel = on_event.clone();
 
@@ -1535,12 +1609,15 @@ async fn run_generation_pipeline(
         emit_usage(on_event, "generate", total_usage, provider_id, model_id);
     }
 
-    // Run per-part STL generation before assembly so preview can still work if final assembly fails.
+    // Per-part acceptance before assembly (static validate + execute/repair + geometry checks).
+    let mut accepted_parts: Vec<(String, String, [f64; 3])> = Vec::new();
+    let mut accepted_retry_stage: Option<u32> = None;
+    let mut part_failure_signatures: Vec<String> = Vec::new();
+    let mut partial_preview_available = false;
+
     if let Some(ctx) = execution_ctx {
-        for (part_idx, part_entry) in part_codes.iter().enumerate() {
-            if let Some((name, code, _pos)) = part_entry {
-                let part_name = name.clone();
-                let part_code = code.clone();
+        for (part_idx, part_entry) in part_codes.iter_mut().enumerate() {
+            if let Some((name, code, pos)) = part_entry.clone() {
                 let part_request = plan.parts[part_idx].description.clone();
                 let preview_ctx = executor::ExecutionContext {
                     venv_dir: ctx.venv_dir.clone(),
@@ -1548,31 +1625,52 @@ async fn run_generation_pipeline(
                     config: config.clone(),
                 };
 
-                match build_part_preview_stl_with_repair(
-                    &part_code,
-                    &preview_ctx,
-                    system_prompt,
-                    &part_request,
-                )
-                .await
+                match evaluate_part_acceptance(&code, &preview_ctx, system_prompt, &part_request)
+                    .await
                 {
-                    Ok(stl_base64) => {
-                        let _ = on_event.send(MultiPartEvent::PartStlReady {
-                            part_index: part_idx,
-                            part_name,
-                            stl_base64,
-                        });
+                    Ok(artifact) => {
+                        if let Some(stage) = artifact.retry_ladder_stage_reached {
+                            accepted_retry_stage =
+                                Some(accepted_retry_stage.map(|s| s.max(stage)).unwrap_or(stage));
+                        }
+                        if let Some(ref warning) = artifact.post_check_warning {
+                            let _ = on_event.send(MultiPartEvent::PostGeometryValidationWarning {
+                                message: warning.clone(),
+                            });
+                        }
+                        if config.preview_on_partial_failure {
+                            if let Some(stl_base64) = artifact.stl_base64.clone() {
+                                partial_preview_available = true;
+                                let _ = on_event.send(MultiPartEvent::PartStlReady {
+                                    part_index: part_idx,
+                                    part_name: name.clone(),
+                                    stl_base64,
+                                });
+                            }
+                        }
+                        *part_entry = Some((name.clone(), artifact.code.clone(), pos));
+                        accepted_parts.push((name, artifact.code, pos));
                     }
                     Err(e) => {
+                        part_failure_signatures.push(e.clone());
+                        *part_entry = None;
                         let _ = on_event.send(MultiPartEvent::PartStlFailed {
                             part_index: part_idx,
-                            part_name,
-                            error: e,
+                            part_name: name.clone(),
+                            error: e.clone(),
+                        });
+                        let _ = on_event.send(MultiPartEvent::PartComplete {
+                            part_index: part_idx,
+                            part_name: name,
+                            success: false,
+                            error: Some(format!("Rejected in per-part acceptance: {}", e)),
                         });
                     }
                 }
             }
         }
+    } else {
+        accepted_parts = part_codes.into_iter().flatten().collect();
     }
 
     if !any_success {
@@ -1586,6 +1684,30 @@ async fn run_generation_pipeline(
         ));
     }
 
+    if accepted_parts.is_empty() {
+        let _ = on_event.send(MultiPartEvent::Done {
+            success: false,
+            error: Some("All generated parts were rejected by per-part acceptance".to_string()),
+            validated: true,
+        });
+        return Ok(PipelineOutcome {
+            response: String::new(),
+            final_code: None,
+            success: false,
+            error: Some("All generated parts were rejected by per-part acceptance".to_string()),
+            validation_attempts: None,
+            static_findings: vec![],
+            post_check_soft_failed: false,
+            post_check_soft_fail_reason: None,
+            part_acceptance_rate: Some(0.0),
+            assembly_success_rate: Some(0.0),
+            partial_preview_shown: partial_preview_available,
+            empty_viewport_after_generation: !partial_preview_available,
+            retry_ladder_stage_reached: accepted_retry_stage,
+            failure_signatures: part_failure_signatures,
+        });
+    }
+
     // -----------------------------------------------------------------------
     // Phase 3: Assemble
     // -----------------------------------------------------------------------
@@ -1593,8 +1715,10 @@ async fn run_generation_pipeline(
         message: "Assembling parts...".to_string(),
     });
 
-    let successful_parts: Vec<(String, String, [f64; 3])> =
-        part_codes.into_iter().flatten().collect();
+    let successful_parts = accepted_parts;
+    let strict_multipart_required = request_requires_multipart_contract(user_request, plan_text);
+    let required_parts_met =
+        !strict_multipart_required || successful_parts.len() == plan.parts.len();
 
     match assemble_parts(&successful_parts) {
         Ok(code) => {
@@ -1692,7 +1816,32 @@ async fn run_generation_pipeline(
                         static_findings: validation_result.static_findings,
                         post_check_soft_failed: validation_result.post_check_warning.is_some(),
                         post_check_soft_fail_reason: validation_result.post_check_warning,
+                        part_acceptance_rate: Some(
+                            successful_parts.len() as f32 / plan.parts.len() as f32,
+                        ),
+                        assembly_success_rate: Some(0.0),
+                        partial_preview_shown: partial_preview_available,
+                        empty_viewport_after_generation: !partial_preview_available,
+                        retry_ladder_stage_reached: validation_result
+                            .retry_ladder_stage_reached
+                            .or(accepted_retry_stage),
+                        failure_signatures: part_failure_signatures,
                     });
+                }
+
+                let mut done_error = validation_result.error.clone();
+                let final_success = if required_parts_met {
+                    validation_result.success
+                } else {
+                    done_error = Some(format!(
+                        "Only {}/{} parts accepted; strict multipart contract requires all parts.",
+                        successful_parts.len(),
+                        plan.parts.len()
+                    ));
+                    false
+                };
+                if !required_parts_met {
+                    part_failure_signatures.push("multipart_contract_missing_parts".to_string());
                 }
 
                 if total_usage.total() > 0 {
@@ -1700,20 +1849,31 @@ async fn run_generation_pipeline(
                 }
 
                 let _ = on_event.send(MultiPartEvent::Done {
-                    success: validation_result.success,
-                    error: validation_result.error.clone(),
+                    success: final_success,
+                    error: done_error.clone(),
                     validated: true,
                 });
 
                 return Ok(PipelineOutcome {
                     response: validation_result.code.clone(),
                     final_code: Some(validation_result.code),
-                    success: validation_result.success,
-                    error: validation_result.error,
+                    success: final_success,
+                    error: done_error,
                     validation_attempts: Some(validation_result.attempts),
                     static_findings: validation_result.static_findings,
                     post_check_soft_failed: validation_result.post_check_warning.is_some(),
                     post_check_soft_fail_reason: validation_result.post_check_warning,
+                    part_acceptance_rate: Some(
+                        successful_parts.len() as f32 / plan.parts.len() as f32,
+                    ),
+                    assembly_success_rate: Some(if final_success { 1.0 } else { 0.0 }),
+                    partial_preview_shown: partial_preview_available,
+                    empty_viewport_after_generation: validation_result.stl_base64.is_none()
+                        && !partial_preview_available,
+                    retry_ladder_stage_reached: validation_result
+                        .retry_ladder_stage_reached
+                        .or(accepted_retry_stage),
+                    failure_signatures: part_failure_signatures,
                 });
             }
 
@@ -1726,20 +1886,35 @@ async fn run_generation_pipeline(
                 code: final_code.clone(),
                 stl_base64: None,
             });
+            let done_error = if required_parts_met {
+                None
+            } else {
+                Some(format!(
+                    "Only {}/{} parts accepted; strict multipart contract requires all parts.",
+                    successful_parts.len(),
+                    plan.parts.len()
+                ))
+            };
             let _ = on_event.send(MultiPartEvent::Done {
-                success: true,
-                error: None,
+                success: done_error.is_none(),
+                error: done_error.clone(),
                 validated: false,
             });
             Ok(PipelineOutcome {
                 response: final_code.clone(),
                 final_code: Some(final_code),
-                success: true,
-                error: None,
+                success: done_error.is_none(),
+                error: done_error,
                 validation_attempts: None,
                 static_findings: vec![],
                 post_check_soft_failed: false,
                 post_check_soft_fail_reason: None,
+                part_acceptance_rate: Some(successful_parts.len() as f32 / plan.parts.len() as f32),
+                assembly_success_rate: Some(if required_parts_met { 1.0 } else { 0.0 }),
+                partial_preview_shown: partial_preview_available,
+                empty_viewport_after_generation: !partial_preview_available,
+                retry_ladder_stage_reached: accepted_retry_stage,
+                failure_signatures: part_failure_signatures,
             })
         }
         Err(e) => {
@@ -1967,6 +2142,12 @@ pub async fn generate_parallel(
                 static_findings: validation_result.static_findings.clone(),
                 post_check_soft_failed: validation_result.post_check_warning.is_some(),
                 post_check_soft_fail_reason: validation_result.post_check_warning.clone(),
+                part_acceptance_rate: None,
+                assembly_success_rate: None,
+                partial_preview_shown: validation_result.stl_base64.is_some(),
+                empty_viewport_after_generation: validation_result.stl_base64.is_none(),
+                retry_ladder_stage_reached: validation_result.retry_ladder_stage_reached,
+                failure_signatures: vec![],
             };
 
             record_generation_attempt(
@@ -2032,6 +2213,12 @@ pub async fn generate_parallel(
             static_findings: vec![],
             post_check_soft_failed: false,
             post_check_soft_fail_reason: None,
+            part_acceptance_rate: None,
+            assembly_success_rate: None,
+            partial_preview_shown: false,
+            empty_viewport_after_generation: false,
+            retry_ladder_stage_reached: None,
+            failure_signatures: vec![],
         };
         record_generation_trace(&config, &user_request, &retrieval_result, None, &outcome);
 
@@ -2055,19 +2242,38 @@ pub async fn generate_parallel(
     // -----------------------------------------------------------------------
     // Phase 1+: Generation pipeline (planner, code gen, review, validation)
     // -----------------------------------------------------------------------
-    let outcome = run_generation_pipeline(
-        &design_plan.text,
-        &user_request,
-        history,
-        &config,
-        &system_prompt,
-        &on_event,
-        execution_ctx.as_ref(),
-        &mut total_usage,
-        &provider_id,
-        &model_id,
+    let generation_timeout = Duration::from_secs(config.max_generation_runtime_seconds as u64);
+    let outcome = match timeout(
+        generation_timeout,
+        run_generation_pipeline(
+            &design_plan.text,
+            &user_request,
+            history,
+            &config,
+            &system_prompt,
+            &on_event,
+            execution_ctx.as_ref(),
+            &mut total_usage,
+            &provider_id,
+            &model_id,
+        ),
     )
-    .await?;
+    .await
+    {
+        Ok(outcome) => outcome?,
+        Err(_) => {
+            let msg = format!(
+                "Generation runtime exceeded {} seconds",
+                config.max_generation_runtime_seconds
+            );
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: false,
+                error: Some(msg.clone()),
+                validated: false,
+            });
+            return Err(AppError::AiProviderError(msg));
+        }
+    };
 
     record_generation_attempt(
         &state,
@@ -2164,19 +2370,38 @@ pub async fn generate_from_plan(
         }
     };
 
-    let outcome = run_generation_pipeline(
-        &plan_text,
-        &user_request,
-        history,
-        &config,
-        &system_prompt,
-        &on_event,
-        execution_ctx.as_ref(),
-        &mut total_usage,
-        &provider_id,
-        &model_id,
+    let generation_timeout = Duration::from_secs(config.max_generation_runtime_seconds as u64);
+    let outcome = match timeout(
+        generation_timeout,
+        run_generation_pipeline(
+            &plan_text,
+            &user_request,
+            history,
+            &config,
+            &system_prompt,
+            &on_event,
+            execution_ctx.as_ref(),
+            &mut total_usage,
+            &provider_id,
+            &model_id,
+        ),
     )
-    .await?;
+    .await
+    {
+        Ok(outcome) => outcome?,
+        Err(_) => {
+            let msg = format!(
+                "Generation runtime exceeded {} seconds",
+                config.max_generation_runtime_seconds
+            );
+            let _ = on_event.send(MultiPartEvent::Done {
+                success: false,
+                error: Some(msg.clone()),
+                validated: false,
+            });
+            return Err(AppError::AiProviderError(msg));
+        }
+    };
 
     record_generation_attempt(
         &state,
@@ -2268,36 +2493,55 @@ fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
 }
 
+struct PartAcceptanceArtifact {
+    code: String,
+    stl_base64: Option<String>,
+    post_check_warning: Option<String>,
+    retry_ladder_stage_reached: Option<u32>,
+}
+
+async fn evaluate_part_acceptance(
+    part_code: &str,
+    ctx: &executor::ExecutionContext,
+    system_prompt: &str,
+    part_request: &str,
+) -> Result<PartAcceptanceArtifact, String> {
+    let no_event = |_evt: executor::ValidationEvent| {};
+    let validation = executor::validate_and_retry(
+        part_code.to_string(),
+        ctx,
+        system_prompt,
+        Some(part_request),
+        &no_event,
+    )
+    .await
+    .map_err(|e| format!("part acceptance validation error: {}", e))?;
+
+    if !validation.success {
+        return Err(validation
+            .error
+            .unwrap_or_else(|| "part validation failed".to_string()));
+    }
+
+    Ok(PartAcceptanceArtifact {
+        code: validation.code,
+        stl_base64: validation.stl_base64,
+        post_check_warning: validation.post_check_warning,
+        retry_ladder_stage_reached: validation.retry_ladder_stage_reached,
+    })
+}
+
 async fn build_part_preview_stl_with_repair(
     part_code: &str,
     ctx: &executor::ExecutionContext,
     system_prompt: &str,
     part_request: &str,
 ) -> Result<String, String> {
-    match executor::execute_with_timeout_isolated(part_code, &ctx.venv_dir, &ctx.runner_script)
-        .await
-    {
-        Ok(exec_result) => {
-            Ok(base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data))
-        }
-        Err(first_err) => {
-            let no_event = |_evt: executor::ValidationEvent| {};
-            match executor::validate_and_retry(
-                part_code.to_string(),
-                ctx,
-                system_prompt,
-                Some(part_request),
-                &no_event,
-            )
-            .await
-            {
-                Ok(validation) if validation.success => validation
-                    .stl_base64
-                    .ok_or_else(|| "validated part preview is missing STL output".to_string()),
-                Ok(validation) => Err(validation.error.unwrap_or(first_err)),
-                Err(e) => Err(format!("part preview validation error: {}", e)),
-            }
-        }
+    match evaluate_part_acceptance(part_code, ctx, system_prompt, part_request).await {
+        Ok(artifact) => artifact
+            .stl_base64
+            .ok_or_else(|| "validated part preview is missing STL output".to_string()),
+        Err(e) => Err(e),
     }
 }
 
@@ -2547,7 +2791,7 @@ pub async fn retry_part(
     }
 
     // Build part prompt
-    let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text);
+    let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text, &config);
 
     let part_messages = vec![
         ChatMessage {

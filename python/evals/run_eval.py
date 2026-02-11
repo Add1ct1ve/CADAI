@@ -209,6 +209,62 @@ def summarize(results: List[CaseResult]) -> Dict[str, Any]:
     }
 
 
+def evaluate_gates(
+    summary: Dict[str, Any],
+    baseline_summary: Optional[Dict[str, Any]],
+    gate_first_pass: float,
+    gate_success_within: float,
+    gate_manifold: float,
+    gate_max_drop_pp: float,
+) -> List[str]:
+    failures: List[str] = []
+
+    first_pass = float(summary.get("first_pass_success_rate", 0.0))
+    within = float(summary.get("success_within_max_attempts_rate", 0.0))
+    manifold = float(summary.get("manifold_pass_rate", 0.0))
+
+    if first_pass < gate_first_pass:
+        failures.append(
+            f"first_pass_success_rate {first_pass:.2f}% < gate {gate_first_pass:.2f}%"
+        )
+    if within < gate_success_within:
+        failures.append(
+            "success_within_max_attempts_rate "
+            f"{within:.2f}% < gate {gate_success_within:.2f}%"
+        )
+    if manifold < gate_manifold:
+        failures.append(f"manifold_pass_rate {manifold:.2f}% < gate {gate_manifold:.2f}%")
+
+    if baseline_summary:
+        baseline_first = float(baseline_summary.get("first_pass_success_rate", first_pass))
+        baseline_within = float(
+            baseline_summary.get("success_within_max_attempts_rate", within)
+        )
+        baseline_manifold = float(baseline_summary.get("manifold_pass_rate", manifold))
+
+        drop_first = baseline_first - first_pass
+        drop_within = baseline_within - within
+        drop_manifold = baseline_manifold - manifold
+
+        if drop_first > gate_max_drop_pp:
+            failures.append(
+                "first_pass_success_rate regression "
+                f"{drop_first:.2f}pp > max {gate_max_drop_pp:.2f}pp"
+            )
+        if drop_within > gate_max_drop_pp:
+            failures.append(
+                "success_within_max_attempts_rate regression "
+                f"{drop_within:.2f}pp > max {gate_max_drop_pp:.2f}pp"
+            )
+        if drop_manifold > gate_max_drop_pp:
+            failures.append(
+                "manifold_pass_rate regression "
+                f"{drop_manifold:.2f}pp > max {gate_max_drop_pp:.2f}pp"
+            )
+
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cases-dir", default="python/evals/cases")
@@ -218,6 +274,20 @@ def main() -> int:
     parser.add_argument("--generator-cmd", default=None)
     parser.add_argument("--max-attempts", type=int, default=4)
     parser.add_argument("--out", default="python/evals/last_eval_summary.json")
+    parser.add_argument(
+        "--baseline-summary",
+        default=None,
+        help="Path to prior summary JSON for regression checks.",
+    )
+    parser.add_argument(
+        "--enforce-gates",
+        action="store_true",
+        help="Fail (non-zero exit) if any gate is not met.",
+    )
+    parser.add_argument("--gate-first-pass", type=float, default=55.0)
+    parser.add_argument("--gate-success-within", type=float, default=88.0)
+    parser.add_argument("--gate-manifold", type=float, default=95.0)
+    parser.add_argument("--gate-max-drop-pp", type=float, default=3.0)
     args = parser.parse_args()
 
     workdir = Path.cwd()
@@ -295,8 +365,35 @@ def main() -> int:
         print(f"[{status}] {case_id} ({category}) attempts={attempts_used} time={duration:.2f}s")
 
     summary = summarize(results)
+    baseline_summary: Optional[Dict[str, Any]] = None
+    if args.baseline_summary:
+        try:
+            with Path(args.baseline_summary).open("r", encoding="utf-8") as fp:
+                baseline_data = json.load(fp)
+                baseline_summary = baseline_data.get("summary", baseline_data)
+        except Exception as ex:
+            print(f"Warning: could not load baseline summary: {ex}")
+
+    gate_failures = evaluate_gates(
+        summary=summary,
+        baseline_summary=baseline_summary,
+        gate_first_pass=args.gate_first_pass,
+        gate_success_within=args.gate_success_within,
+        gate_manifold=args.gate_manifold,
+        gate_max_drop_pp=args.gate_max_drop_pp,
+    )
+
     detailed = {
         "summary": summary,
+        "gates": {
+            "first_pass_min": args.gate_first_pass,
+            "success_within_min": args.gate_success_within,
+            "manifold_min": args.gate_manifold,
+            "max_regression_drop_pp": args.gate_max_drop_pp,
+            "passed": len(gate_failures) == 0,
+            "failures": gate_failures,
+            "enforced": bool(args.enforce_gates),
+        },
         "results": [r.__dict__ for r in results],
     }
 
@@ -306,7 +403,17 @@ def main() -> int:
 
     print("\nEvaluation summary")
     print(json.dumps(summary, indent=2))
+    print("\nGate check")
+    if gate_failures:
+        print("FAILED")
+        for f in gate_failures:
+            print(f"- {f}")
+    else:
+        print("PASSED")
     print(f"\nSaved detailed report to {out_path}")
+
+    if args.enforce_gates and gate_failures:
+        return 2
 
     return 0
 

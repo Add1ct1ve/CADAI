@@ -24,6 +24,12 @@ pub struct GenerationTraceV1 {
     pub final_error: Option<String>,
     pub post_check_soft_failed: bool,
     pub post_check_soft_fail_reason: Option<String>,
+    pub part_acceptance_rate: Option<f32>,
+    pub assembly_success_rate: Option<f32>,
+    pub partial_preview_shown: bool,
+    pub empty_viewport_after_generation: bool,
+    pub retry_ladder_stage_reached: Option<u32>,
+    pub failure_signatures: Vec<String>,
     pub mechanism_candidates: Vec<String>,
     pub mechanism_selected_ids: Vec<String>,
 }
