@@ -490,7 +490,12 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         .map(|s| extract_operations(s))
         .unwrap_or_default();
 
-    let dimensions = extract_dimensions(plan_text);
+    // Scope dimensional risk checks to numbered Build Plan steps only.
+    // This avoids false negatives/positives from prose or leaked "thinking" text.
+    let dimensions = build_plan_steps_text
+        .as_ref()
+        .map(|s| extract_dimensions(s))
+        .unwrap_or_default();
     let fillet_radii = extract_fillet_radii(plan_text);
     let chamfer_sizes = extract_chamfer_sizes(plan_text);
     // Scope boolean counting to numbered Build Plan steps only
