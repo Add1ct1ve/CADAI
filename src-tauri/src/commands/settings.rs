@@ -18,10 +18,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<AppConfig, String> {
 }
 
 #[tauri::command]
-pub fn update_settings(
-    state: State<'_, AppState>,
-    config: AppConfig,
-) -> Result<(), String> {
+pub fn update_settings(state: State<'_, AppState>, config: AppConfig) -> Result<(), String> {
     // Save to disk
     config.save().map_err(|e| format!("{}", e))?;
     // Update in memory

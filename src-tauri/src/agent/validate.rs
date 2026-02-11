@@ -97,10 +97,7 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
         "AttributeError" => ErrorCategory::ApiMisuse,
         "TypeError" => {
             let lower = format!("{} {}", message, full_stderr).to_lowercase();
-            if lower.contains("cadquery")
-                || lower.contains("workplane")
-                || lower.contains("cq.")
-            {
+            if lower.contains("cadquery") || lower.contains("workplane") || lower.contains("cq.") {
                 ErrorCategory::ApiMisuse
             } else {
                 ErrorCategory::Unknown
@@ -109,9 +106,7 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
         _ if error_type.starts_with("OCP") || error_type.starts_with("StdFail") => {
             classify_ocp_error(message, full_stderr)
         }
-        _ if error_type.starts_with("Standard_") => {
-            classify_ocp_error(message, full_stderr)
-        }
+        _ if error_type.starts_with("Standard_") => classify_ocp_error(message, full_stderr),
         "ValueError" => {
             let lower = format!("{} {}", message, full_stderr).to_lowercase();
             if lower.contains("sweep") || lower.contains("wire") {
@@ -138,16 +133,30 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
 
 /// Known CadQuery operations for extraction from tracebacks.
 const CQ_OPERATIONS: &[&str] = &[
-    "fillet", "chamfer", "shell", "loft", "sweep", "revolve", "cut", "union", "intersect",
-    "extrude", "hole", "translate", "rotate", "mirror", "offset", "fuse", "combine",
+    "fillet",
+    "chamfer",
+    "shell",
+    "loft",
+    "sweep",
+    "revolve",
+    "cut",
+    "union",
+    "intersect",
+    "extrude",
+    "hole",
+    "translate",
+    "rotate",
+    "mirror",
+    "offset",
+    "fuse",
+    "combine",
 ];
 
 /// Extract the failing CadQuery operation from a traceback by scanning user code lines.
 #[allow(dead_code)]
 fn extract_failing_operation(full_stderr: &str) -> Option<String> {
     // Match lines from user code files in the traceback
-    let file_re =
-        Regex::new(r#"(?m)File "(?:input\.py|<string>|script\.py)".*\n\s+(.+)"#).ok()?;
+    let file_re = Regex::new(r#"(?m)File "(?:input\.py|<string>|script\.py)".*\n\s+(.+)"#).ok()?;
 
     // Collect all user code lines from the traceback
     let mut user_lines: Vec<String> = Vec::new();
@@ -181,8 +190,7 @@ fn extract_failing_operation(full_stderr: &str) -> Option<String> {
 #[allow(dead_code)]
 fn extract_error_context(full_stderr: &str, message: &str) -> Option<ErrorContext> {
     // Extract the last user source line from traceback
-    let file_re =
-        Regex::new(r#"(?m)File "(?:input\.py|<string>|script\.py)".*\n\s+(.+)"#).ok()?;
+    let file_re = Regex::new(r#"(?m)File "(?:input\.py|<string>|script\.py)".*\n\s+(.+)"#).ok()?;
 
     let mut source_line: Option<String> = None;
     for cap in file_re.captures_iter(full_stderr) {
@@ -434,7 +442,11 @@ fn match_anti_pattern(error: &StructuredError, code: Option<&str>) -> Option<Str
 ///
 /// The optional `code` parameter allows detecting blanket `.edges().fillet()` patterns
 /// to provide smarter retry advice (wrap in try/except instead of reducing radius).
-pub fn get_retry_strategy(error: &StructuredError, attempt: u32, code: Option<&str>) -> RetryStrategy {
+pub fn get_retry_strategy(
+    error: &StructuredError,
+    attempt: u32,
+    code: Option<&str>,
+) -> RetryStrategy {
     let anti_pattern = match_anti_pattern(error, code);
 
     // Attempt 3+: nuclear option — same for all categories.
@@ -645,12 +657,7 @@ pub fn validate_cadquery_code(code: &str) -> Result<(), Vec<String>> {
     }
 
     // Check for forbidden patterns.
-    let forbidden = [
-        "show_object",
-        "display(",
-        "matplotlib",
-        "plt.show",
-    ];
+    let forbidden = ["show_object", "display(", "matplotlib", "plt.show"];
     for pattern in &forbidden {
         if code.contains(pattern) {
             errors.push(format!("Forbidden pattern found: {}", pattern));
@@ -697,7 +704,8 @@ mod tests {
 
     #[test]
     fn test_validate_forbidden_pattern() {
-        let code = "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\nshow_object(result)";
+        let code =
+            "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\nshow_object(result)";
         let errors = validate_cadquery_code(code).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("show_object")));
     }
@@ -786,7 +794,11 @@ NameError: name 'cq' is not defined"#;
     #[test]
     fn test_classify_attribute_error_on_cq() {
         assert_eq!(
-            classify_error("AttributeError", "'Workplane' object has no attribute 'bxo'", ""),
+            classify_error(
+                "AttributeError",
+                "'Workplane' object has no attribute 'bxo'",
+                ""
+            ),
             ErrorCategory::ApiMisuse
         );
     }
@@ -850,11 +862,7 @@ NameError: name 'cq' is not defined"#;
     #[test]
     fn test_classify_ocp_stdfail_loft() {
         assert_eq!(
-            classify_error(
-                "OCP.StdFail_NotDone",
-                "loft failed",
-                "result.loft()"
-            ),
+            classify_error("OCP.StdFail_NotDone", "loft failed", "result.loft()"),
             ErrorCategory::Topology(TopologySubKind::LoftFailure)
         );
     }
@@ -862,11 +870,7 @@ NameError: name 'cq' is not defined"#;
     #[test]
     fn test_classify_ocp_stdfail_sweep() {
         assert_eq!(
-            classify_error(
-                "OCP.StdFail_NotDone",
-                "sweep failed",
-                "result.sweep(path)"
-            ),
+            classify_error("OCP.StdFail_NotDone", "sweep failed", "result.sweep(path)"),
             ErrorCategory::Topology(TopologySubKind::SweepFailure)
         );
     }
@@ -886,11 +890,7 @@ NameError: name 'cq' is not defined"#;
     #[test]
     fn test_classify_ocp_stdfail_generic_is_geometry_kernel() {
         assert_eq!(
-            classify_error(
-                "OCP.StdFail_NotDone",
-                "some unknown OCP error",
-                ""
-            ),
+            classify_error("OCP.StdFail_NotDone", "some unknown OCP error", ""),
             ErrorCategory::GeometryKernel
         );
     }
@@ -947,7 +947,10 @@ NameError: name 'cq' is not defined"#;
   File "input.py", line 5, in <module>
     result = base.fillet(2.0)
 OCP.StdFail_NotDone: BRep_API: not done"#;
-        assert_eq!(extract_failing_operation(stderr), Some("fillet".to_string()));
+        assert_eq!(
+            extract_failing_operation(stderr),
+            Some("fillet".to_string())
+        );
     }
 
     #[test]
@@ -989,7 +992,10 @@ SyntaxError: unexpected EOF"#;
     raise StdFail_NotDone
 OCP.StdFail_NotDone: BRep_API: not done"#;
         let err = parse_traceback(stderr);
-        assert_eq!(err.category, ErrorCategory::Topology(TopologySubKind::FilletFailure));
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::FilletFailure)
+        );
         assert_eq!(err.failing_operation, Some("fillet".to_string()));
         assert!(err.suggestion.unwrap().contains("Fillet radius"));
     }
@@ -1003,7 +1009,10 @@ OCP.StdFail_NotDone: BRep_API: not done"#;
     raise StdFail_NotDone
 OCP.StdFail_NotDone: Shell offset not done"#;
         let err = parse_traceback(stderr);
-        assert_eq!(err.category, ErrorCategory::Topology(TopologySubKind::ShellFailure));
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::ShellFailure)
+        );
         assert_eq!(err.failing_operation, Some("shell".to_string()));
         assert!(err.suggestion.unwrap().contains("Shell operation"));
     }
@@ -1017,7 +1026,10 @@ OCP.StdFail_NotDone: Shell offset not done"#;
     raise StdFail_NotDone
 OCP.StdFail_NotDone: Boolean operation (cut) failed"#;
         let err = parse_traceback(stderr);
-        assert_eq!(err.category, ErrorCategory::Topology(TopologySubKind::BooleanFailure));
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::BooleanFailure)
+        );
         assert_eq!(err.failing_operation, Some("cut".to_string()));
         assert!(err.suggestion.unwrap().contains("Boolean operation"));
     }
@@ -1051,7 +1063,10 @@ TypeError: translate() requires a 3-tuple for cadquery.Workplane"#;
     result = profile.sweep(path)
 ValueError: Cannot sweep along path: expected Wire, got Edge"#;
         let err = parse_traceback(stderr);
-        assert_eq!(err.category, ErrorCategory::Topology(TopologySubKind::SweepFailure));
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::SweepFailure)
+        );
         assert_eq!(err.failing_operation, Some("sweep".to_string()));
         assert!(err.suggestion.unwrap().contains("Sweep failed"));
     }
@@ -1059,7 +1074,11 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     // ========== RetryStrategy tests ==========
 
     /// Helper: create a StructuredError with the given category.
-    fn make_error(category: ErrorCategory, message: &str, failing_op: Option<&str>) -> StructuredError {
+    fn make_error(
+        category: ErrorCategory,
+        message: &str,
+        failing_op: Option<&str>,
+    ) -> StructuredError {
         StructuredError {
             error_type: "TestError".to_string(),
             message: message.to_string(),
@@ -1236,13 +1255,17 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
         let strategy = get_retry_strategy(&err, 2, None);
         assert!(strategy.fix_instruction.contains("fillet/chamfer radius"));
         assert!(strategy.fix_instruction.contains("simpler geometric"));
-        assert!(strategy.forbidden_operations.contains(&"fillet".to_string()));
+        assert!(strategy
+            .forbidden_operations
+            .contains(&"fillet".to_string()));
 
         // Non-topology errors get generic simplification.
         let err2 = make_error(ErrorCategory::Syntax, "invalid syntax", None);
         let strategy2 = get_retry_strategy(&err2, 2, None);
         assert!(strategy2.fix_instruction.contains("syntax error"));
-        assert!(strategy2.fix_instruction.contains("simplify the overall approach"));
+        assert!(strategy2
+            .fix_instruction
+            .contains("simplify the overall approach"));
     }
 
     #[test]
@@ -1257,8 +1280,12 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
         assert!(strategy.fix_instruction.contains("ONLY basic shapes"));
         assert!(strategy.forbidden_operations.contains(&"sweep".to_string()));
         assert!(strategy.forbidden_operations.contains(&"loft".to_string()));
-        assert!(strategy.forbidden_operations.contains(&"spline".to_string()));
-        assert!(strategy.forbidden_operations.contains(&"revolve".to_string()));
+        assert!(strategy
+            .forbidden_operations
+            .contains(&"spline".to_string()));
+        assert!(strategy
+            .forbidden_operations
+            .contains(&"revolve".to_string()));
         assert!(strategy.forbidden_operations.contains(&"shell".to_string()));
     }
 
@@ -1343,6 +1370,9 @@ body = body.cut(cq.Workplane("XY").center(-20,0).circle(10).extrude(60))
 result = body.edges().fillet(2.0)
 "#;
         let warning = check_risky_fillet_pattern(code);
-        assert!(warning.is_some(), "should detect multi-boolean + blanket fillet");
+        assert!(
+            warning.is_some(),
+            "should detect multi-boolean + blanket fillet"
+        );
     }
 }

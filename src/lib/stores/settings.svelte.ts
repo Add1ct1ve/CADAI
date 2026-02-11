@@ -19,6 +19,10 @@ const defaultConfig: AppConfig = {
   snap_sketch: 0.5,
   enable_consensus: false,
   auto_approve_plan: false,
+  retrieval_enabled: true,
+  retrieval_token_budget: 3500,
+  telemetry_enabled: true,
+  max_validation_attempts: 4,
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });

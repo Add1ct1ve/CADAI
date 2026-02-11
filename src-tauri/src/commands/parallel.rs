@@ -5,9 +5,6 @@ use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::mpsc;
 
-use crate::ai::message::ChatMessage;
-use crate::ai::cost;
-use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::agent::confidence;
 use crate::agent::consensus;
 use crate::agent::design;
@@ -16,8 +13,13 @@ use crate::agent::iterative;
 use crate::agent::memory;
 use crate::agent::modify;
 use crate::agent::prompts;
+use crate::agent::retrieval;
 use crate::agent::review;
+use crate::agent::telemetry;
 use crate::agent::validate::ErrorCategory;
+use crate::ai::cost;
+use crate::ai::message::ChatMessage;
+use crate::ai::provider::{StreamDelta, TokenUsage};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -48,6 +50,12 @@ pub struct PartSpec {
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum MultiPartEvent {
+    RetrievalStatus {
+        message: String,
+        items: Vec<crate::agent::retrieval::RetrievedContextItem>,
+        used_embeddings: bool,
+        lexical_fallback: bool,
+    },
     /// Geometry design plan produced before code generation.
     DesignPlan {
         plan_text: String,
@@ -129,6 +137,10 @@ pub enum MultiPartEvent {
         max_attempts: u32,
         message: String,
     },
+    StaticValidationReport {
+        passed: bool,
+        findings: Vec<String>,
+    },
     ValidationSuccess {
         attempt: u32,
         message: String,
@@ -138,6 +150,9 @@ pub enum MultiPartEvent {
         error_category: String,
         error_message: String,
         will_retry: bool,
+    },
+    PostGeometryValidationReport {
+        report: executor::PostGeometryValidationReport,
     },
     IterativeStart {
         total_steps: usize,
@@ -214,6 +229,8 @@ struct PipelineOutcome {
     final_code: Option<String>,
     success: bool,
     error: Option<String>,
+    validation_attempts: Option<u32>,
+    static_findings: Vec<String>,
 }
 
 /// Record a generation attempt into the session memory.
@@ -238,6 +255,47 @@ fn record_generation_attempt(
         error_summary: error_summary.map(|s| s.chars().take(120).collect()),
     };
     state.session_memory.lock().unwrap().record_attempt(attempt);
+}
+
+fn record_generation_trace(
+    config: &crate::config::AppConfig,
+    user_request: &str,
+    retrieval_result: &retrieval::RetrievalResult,
+    plan_risk_score: Option<u32>,
+    outcome: &PipelineOutcome,
+) {
+    if !config.telemetry_enabled {
+        return;
+    }
+
+    let trace = telemetry::GenerationTraceV1 {
+        version: 1,
+        timestamp_ms: telemetry::now_ms(),
+        request_hash: telemetry::hash_request(user_request),
+        intent_tags: telemetry::infer_intent_tags(user_request),
+        provider: config.ai_provider.clone(),
+        model: config.model.clone(),
+        retrieved_items: retrieval_result
+            .items
+            .iter()
+            .map(|i| telemetry::TraceRetrievedItem {
+                source: i.source.clone(),
+                id: i.id.clone(),
+                title: i.title.clone(),
+                score: i.score,
+            })
+            .collect(),
+        plan_risk_score,
+        confidence_score: None,
+        static_findings: outcome.static_findings.clone(),
+        execution_success: outcome.success,
+        retry_attempts: outcome.validation_attempts,
+        final_error: outcome.error.clone(),
+    };
+
+    if let Err(e) = telemetry::write_trace(&trace) {
+        eprintln!("telemetry write failed: {}", e);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,8 +393,7 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
             .lines()
             .filter(|line| {
                 let trimmed = line.trim();
-                !trimmed.starts_with("import cadquery")
-                    && !trimmed.starts_with("from cadquery")
+                !trimmed.starts_with("import cadquery") && !trimmed.starts_with("from cadquery")
             })
             .collect();
 
@@ -388,6 +445,102 @@ fn emit_usage(
     });
 }
 
+fn forward_validation_event(on_event: &Channel<MultiPartEvent>, evt: executor::ValidationEvent) {
+    match evt {
+        executor::ValidationEvent::Attempt {
+            attempt,
+            max_attempts,
+            message,
+        } => {
+            let _ = on_event.send(MultiPartEvent::ValidationAttempt {
+                attempt,
+                max_attempts,
+                message,
+            });
+        }
+        executor::ValidationEvent::StaticValidation { passed, findings } => {
+            let _ = on_event.send(MultiPartEvent::StaticValidationReport { passed, findings });
+        }
+        executor::ValidationEvent::Success { attempt, message } => {
+            let _ = on_event.send(MultiPartEvent::ValidationSuccess { attempt, message });
+        }
+        executor::ValidationEvent::Failed {
+            attempt,
+            error_category,
+            error_message,
+            will_retry,
+        } => {
+            let _ = on_event.send(MultiPartEvent::ValidationFailed {
+                attempt,
+                error_category,
+                error_message,
+                will_retry,
+            });
+        }
+        executor::ValidationEvent::PostGeometryValidation { report } => {
+            let _ = on_event.send(MultiPartEvent::PostGeometryValidationReport { report });
+        }
+    }
+}
+
+async fn build_system_prompt_with_retrieval(
+    config: &crate::config::AppConfig,
+    cq_version: Option<&str>,
+    query: &str,
+    session_context: Option<String>,
+    on_event: &Channel<MultiPartEvent>,
+) -> (String, retrieval::RetrievalResult) {
+    let base = prompts::build_compact_system_prompt_for_preset(
+        config.agent_rules_preset.as_deref(),
+        cq_version,
+    );
+
+    let _ = on_event.send(MultiPartEvent::RetrievalStatus {
+        message: "Retrieving CAD guidance...".to_string(),
+        items: vec![],
+        used_embeddings: false,
+        lexical_fallback: false,
+    });
+
+    let mut retrieval_result = retrieval::retrieve_context(
+        query,
+        config,
+        config.agent_rules_preset.as_deref(),
+        cq_version,
+    )
+    .await;
+
+    let _ = on_event.send(MultiPartEvent::RetrievalStatus {
+        message: if retrieval_result.items.is_empty() {
+            "No retrieval snippets matched; using compact core prompt.".to_string()
+        } else {
+            format!(
+                "Selected {} retrieval snippets.",
+                retrieval_result.items.len()
+            )
+        },
+        items: retrieval_result.items.clone(),
+        used_embeddings: retrieval_result.used_embeddings,
+        lexical_fallback: retrieval_result.lexical_fallback,
+    });
+
+    let mut system_prompt = base;
+    if let Some(ctx) = session_context {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&ctx);
+    }
+    if !retrieval_result.context_markdown.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&retrieval_result.context_markdown);
+    }
+
+    if retrieval_result.items.is_empty() {
+        retrieval_result = retrieval::RetrievalResult::empty();
+    }
+
+    (system_prompt, retrieval_result)
+}
+
 // ---------------------------------------------------------------------------
 // Extracted helpers (shared by generate_parallel, generate_design_plan, generate_from_plan)
 // ---------------------------------------------------------------------------
@@ -408,8 +561,7 @@ async fn run_design_plan_phase(
 
     let design_extra_context = {
         let rules =
-            crate::agent::rules::AgentRules::from_preset(config.agent_rules_preset.as_deref())
-                .ok();
+            crate::agent::rules::AgentRules::from_preset(config.agent_rules_preset.as_deref()).ok();
         let mut ctx = String::new();
         if let Some(ref r) = rules {
             if let Some(ref m) = r.manufacturing {
@@ -514,8 +666,7 @@ async fn run_design_plan_phase(
     // Compute and emit confidence assessment
     {
         let confidence_rules =
-            crate::agent::rules::AgentRules::from_preset(config.agent_rules_preset.as_deref())
-                .ok();
+            crate::agent::rules::AgentRules::from_preset(config.agent_rules_preset.as_deref()).ok();
         let cookbook_ref = confidence_rules
             .as_ref()
             .and_then(|r| r.cookbook.as_deref());
@@ -541,7 +692,11 @@ async fn run_design_plan_phase(
                 confidence::ConfidenceLevel::Low => "low".to_string(),
             },
             score: conf.score,
-            cookbook_matches: conf.cookbook_matches.iter().map(|m| m.title.clone()).collect(),
+            cookbook_matches: conf
+                .cookbook_matches
+                .iter()
+                .map(|m| m.title.clone())
+                .collect(),
             warnings: conf.warnings.clone(),
             message: conf.message.clone(),
         });
@@ -605,9 +760,7 @@ async fn run_generation_pipeline(
 
     let plan: GenerationPlan = parse_plan(&plan_json);
 
-    let _ = on_event.send(MultiPartEvent::PlanResult {
-        plan: plan.clone(),
-    });
+    let _ = on_event.send(MultiPartEvent::PlanResult { plan: plan.clone() });
 
     // -----------------------------------------------------------------------
     // Single mode: fall through to normal streaming
@@ -619,18 +772,13 @@ async fn run_generation_pipeline(
         if iterative::should_use_iterative(&build_steps) {
             if let Some(ctx) = execution_ctx {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
-                    message: format!(
-                        "Building step by step ({} steps)...",
-                        build_steps.len()
-                    ),
+                    message: format!("Building step by step ({} steps)...", build_steps.len()),
                 });
 
                 let on_iter_event = |evt: iterative::IterativeEvent| match evt {
                     iterative::IterativeEvent::Start { total_steps, steps } => {
-                        let _ = on_event.send(MultiPartEvent::IterativeStart {
-                            total_steps,
-                            steps,
-                        });
+                        let _ =
+                            on_event.send(MultiPartEvent::IterativeStart { total_steps, steps });
                     }
                     iterative::IterativeEvent::StepStarted {
                         step_index,
@@ -731,6 +879,8 @@ async fn run_generation_pipeline(
                     final_code: Some(result.final_code),
                     success: result.success,
                     error: iter_error,
+                    validation_attempts: None,
+                    static_findings: vec![],
                 });
             }
             // No Python execution context → fall through to single-shot
@@ -757,8 +907,7 @@ async fn run_generation_pipeline(
 
                 let on_consensus_event = |evt: consensus::ConsensusEvent| match evt {
                     consensus::ConsensusEvent::Started { candidate_count } => {
-                        let _ = on_event
-                            .send(MultiPartEvent::ConsensusStarted { candidate_count });
+                        let _ = on_event.send(MultiPartEvent::ConsensusStarted { candidate_count });
                     }
                     consensus::ConsensusEvent::CandidateUpdate {
                         label,
@@ -852,43 +1001,15 @@ async fn run_generation_pipeline(
                             stl_base64: winner.stl_base64.clone(),
                         });
                     } else {
-                        let on_validation_event = |evt: executor::ValidationEvent| match evt {
-                            executor::ValidationEvent::Attempt {
-                                attempt,
-                                max_attempts,
-                                message,
-                            } => {
-                                let _ = on_event.send(MultiPartEvent::ValidationAttempt {
-                                    attempt,
-                                    max_attempts,
-                                    message,
-                                });
-                            }
-                            executor::ValidationEvent::Success { attempt, message } => {
-                                let _ = on_event.send(MultiPartEvent::ValidationSuccess {
-                                    attempt,
-                                    message,
-                                });
-                            }
-                            executor::ValidationEvent::Failed {
-                                attempt,
-                                error_category,
-                                error_message,
-                                will_retry,
-                            } => {
-                                let _ = on_event.send(MultiPartEvent::ValidationFailed {
-                                    attempt,
-                                    error_category,
-                                    error_message,
-                                    will_retry,
-                                });
-                            }
+                        let on_validation_event = |evt: executor::ValidationEvent| {
+                            forward_validation_event(on_event, evt)
                         };
 
                         let validation_result = executor::validate_and_retry(
                             final_code.clone(),
                             ctx,
                             system_prompt,
+                            Some(user_request),
                             &on_validation_event,
                         )
                         .await?;
@@ -925,13 +1046,16 @@ async fn run_generation_pipeline(
                         final_code: Some(final_code),
                         success: true,
                         error: None,
+                        validation_attempts: None,
+                        static_findings: vec![],
                     });
                 }
 
                 // Consensus failed — fall through
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
-                    message: "Consensus failed to produce code, falling back to single generation..."
-                        .to_string(),
+                    message:
+                        "Consensus failed to produce code, falling back to single generation..."
+                            .to_string(),
                 });
             }
             // No execution context — fall through to single-shot
@@ -1022,43 +1146,14 @@ async fn run_generation_pipeline(
 
         // Backend validation
         if let (Some(code), Some(ctx)) = (&final_code, execution_ctx) {
-            let on_validation_event = |evt: executor::ValidationEvent| match evt {
-                executor::ValidationEvent::Attempt {
-                    attempt,
-                    max_attempts,
-                    message,
-                } => {
-                    let _ = on_event.send(MultiPartEvent::ValidationAttempt {
-                        attempt,
-                        max_attempts,
-                        message,
-                    });
-                }
-                executor::ValidationEvent::Success { attempt, message } => {
-                    let _ = on_event.send(MultiPartEvent::ValidationSuccess {
-                        attempt,
-                        message,
-                    });
-                }
-                executor::ValidationEvent::Failed {
-                    attempt,
-                    error_category,
-                    error_message,
-                    will_retry,
-                } => {
-                    let _ = on_event.send(MultiPartEvent::ValidationFailed {
-                        attempt,
-                        error_category,
-                        error_message,
-                        will_retry,
-                    });
-                }
-            };
+            let on_validation_event =
+                |evt: executor::ValidationEvent| forward_validation_event(on_event, evt);
 
             let validation_result = executor::validate_and_retry(
                 code.clone(),
                 ctx,
                 system_prompt,
+                Some(user_request),
                 &on_validation_event,
             )
             .await?;
@@ -1098,6 +1193,8 @@ async fn run_generation_pipeline(
                 final_code: Some(validation_result.code),
                 success: validation_result.success,
                 error: validation_result.error,
+                validation_attempts: Some(validation_result.attempts),
+                static_findings: validation_result.static_findings,
             });
         }
 
@@ -1124,6 +1221,8 @@ async fn run_generation_pipeline(
             final_code,
             success: true,
             error: None,
+            validation_attempts: None,
+            static_findings: vec![],
         });
     }
 
@@ -1250,9 +1349,10 @@ async fn run_generation_pipeline(
             if let Some((name, code, _pos)) = part_entry {
                 let part_name = name.clone();
                 let part_code = code.clone();
-                let part_idx = part_codes.iter().position(|p| {
-                    p.as_ref().map(|(n, _, _)| n == &part_name).unwrap_or(false)
-                }).unwrap_or(0);
+                let part_idx = part_codes
+                    .iter()
+                    .position(|p| p.as_ref().map(|(n, _, _)| n == &part_name).unwrap_or(false))
+                    .unwrap_or(0);
                 let venv_dir = ctx.venv_dir.clone();
                 let runner_script = ctx.runner_script.clone();
                 let evt_channel = on_event.clone();
@@ -1339,43 +1439,14 @@ async fn run_generation_pipeline(
             };
 
             if let Some(ctx) = execution_ctx {
-                let on_validation_event = |evt: executor::ValidationEvent| match evt {
-                    executor::ValidationEvent::Attempt {
-                        attempt,
-                        max_attempts,
-                        message,
-                    } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationAttempt {
-                            attempt,
-                            max_attempts,
-                            message,
-                        });
-                    }
-                    executor::ValidationEvent::Success { attempt, message } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationSuccess {
-                            attempt,
-                            message,
-                        });
-                    }
-                    executor::ValidationEvent::Failed {
-                        attempt,
-                        error_category,
-                        error_message,
-                        will_retry,
-                    } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationFailed {
-                            attempt,
-                            error_category,
-                            error_message,
-                            will_retry,
-                        });
-                    }
-                };
+                let on_validation_event =
+                    |evt: executor::ValidationEvent| forward_validation_event(on_event, evt);
 
                 let validation_result = executor::validate_and_retry(
                     final_code.clone(),
                     ctx,
                     system_prompt,
+                    Some(user_request),
                     &on_validation_event,
                 )
                 .await?;
@@ -1411,6 +1482,8 @@ async fn run_generation_pipeline(
                     final_code: Some(validation_result.code),
                     success: validation_result.success,
                     error: validation_result.error,
+                    validation_attempts: Some(validation_result.attempts),
+                    static_findings: validation_result.static_findings,
                 });
             }
 
@@ -1433,6 +1506,8 @@ async fn run_generation_pipeline(
                 final_code: Some(final_code),
                 success: true,
                 error: None,
+                validation_attempts: None,
+                static_findings: vec![],
             })
         }
         Err(e) => {
@@ -1460,15 +1535,16 @@ pub async fn generate_parallel(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt = {
-        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
-        let session_ctx = state.session_memory.lock().unwrap().build_context_section();
-        match session_ctx {
-            Some(ctx) => format!("{}\n\n{}", base, ctx),
-            None => base,
-        }
-    };
     let user_request = message.clone();
+    let session_ctx = state.session_memory.lock().unwrap().build_context_section();
+    let (system_prompt, retrieval_result) = build_system_prompt_with_retrieval(
+        &config,
+        cq_version.as_deref(),
+        &message,
+        session_ctx,
+        &on_event,
+    )
+    .await;
 
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
@@ -1478,16 +1554,14 @@ pub async fn generate_parallel(
     let execution_ctx = {
         let venv_path = state.venv_path.lock().unwrap().clone();
         match venv_path {
-            Some(venv_dir) => {
-                match super::find_python_script("runner.py") {
-                    Ok(runner_script) => Some(executor::ExecutionContext {
-                        venv_dir,
-                        runner_script,
-                        config: config.clone(),
-                    }),
-                    Err(_) => None,
-                }
-            }
+            Some(venv_dir) => match super::find_python_script("runner.py") {
+                Ok(runner_script) => Some(executor::ExecutionContext {
+                    venv_dir,
+                    runner_script,
+                    config: config.clone(),
+                }),
+                Err(_) => None,
+            },
             None => None,
         }
     };
@@ -1495,10 +1569,8 @@ pub async fn generate_parallel(
     // -----------------------------------------------------------------------
     // Modification branch: detect and handle code modifications (early return)
     // -----------------------------------------------------------------------
-    let modification_intent = modify::detect_modification_intent(
-        &message,
-        existing_code.as_deref(),
-    );
+    let modification_intent =
+        modify::detect_modification_intent(&message, existing_code.as_deref());
 
     if modification_intent.is_modification {
         let intent_summary = modification_intent
@@ -1600,33 +1672,27 @@ pub async fn generate_parallel(
 
         // Optional: backend validation
         if let (Some(code), Some(ref ctx)) = (&final_code, &execution_ctx) {
-            let on_validation_event = |evt: executor::ValidationEvent| {
-                match evt {
-                    executor::ValidationEvent::Attempt { attempt, max_attempts, message } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationAttempt {
-                            attempt, max_attempts, message,
-                        });
-                    }
-                    executor::ValidationEvent::Success { attempt, message } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationSuccess {
-                            attempt, message,
-                        });
-                    }
-                    executor::ValidationEvent::Failed { attempt, error_category, error_message, will_retry } => {
-                        let _ = on_event.send(MultiPartEvent::ValidationFailed {
-                            attempt, error_category, error_message, will_retry,
-                        });
-                    }
-                }
-            };
+            let on_validation_event =
+                |evt: executor::ValidationEvent| forward_validation_event(&on_event, evt);
 
             let validation_result = executor::validate_and_retry(
-                code.clone(), ctx, &system_prompt, &on_validation_event,
-            ).await?;
+                code.clone(),
+                ctx,
+                &system_prompt,
+                Some(&user_request),
+                &on_validation_event,
+            )
+            .await?;
 
             if validation_result.retry_usage.total() > 0 {
                 total_usage.add(&validation_result.retry_usage);
-                emit_usage(&on_event, "validation", &validation_result.retry_usage, &provider_id, &model_id);
+                emit_usage(
+                    &on_event,
+                    "validation",
+                    &validation_result.retry_usage,
+                    &provider_id,
+                    &model_id,
+                );
             }
 
             let new_code = &validation_result.code;
@@ -1660,6 +1726,15 @@ pub async fn generate_parallel(
                 validated: true,
             });
 
+            let outcome = PipelineOutcome {
+                response: final_response.clone(),
+                final_code: Some(validation_result.code.clone()),
+                success: validation_result.success,
+                error: validation_result.error.clone(),
+                validation_attempts: Some(validation_result.attempts),
+                static_findings: validation_result.static_findings.clone(),
+            };
+
             record_generation_attempt(
                 &state,
                 &user_request,
@@ -1667,8 +1742,9 @@ pub async fn generate_parallel(
                 validation_result.success,
                 None,
                 None,
-                validation_result.error,
+                validation_result.error.clone(),
             );
+            record_generation_trace(&config, &user_request, &retrieval_result, None, &outcome);
 
             return Ok(final_response);
         }
@@ -1713,6 +1789,15 @@ pub async fn generate_parallel(
             None,
             None,
         );
+        let outcome = PipelineOutcome {
+            response: final_response.clone(),
+            final_code: final_code.clone(),
+            success: true,
+            error: None,
+            validation_attempts: None,
+            static_findings: vec![],
+        };
+        record_generation_trace(&config, &user_request, &retrieval_result, None, &outcome);
 
         return Ok(final_response);
     }
@@ -1720,7 +1805,7 @@ pub async fn generate_parallel(
     // -----------------------------------------------------------------------
     // Phase 0: Geometry Design Plan (always runs)
     // -----------------------------------------------------------------------
-    let (design_plan, _plan_result) = run_design_plan_phase(
+    let (design_plan, plan_result) = run_design_plan_phase(
         &message,
         &config,
         &on_event,
@@ -1755,7 +1840,14 @@ pub async fn generate_parallel(
         outcome.success,
         None,
         None,
-        outcome.error,
+        outcome.error.clone(),
+    );
+    record_generation_trace(
+        &config,
+        &user_request,
+        &retrieval_result,
+        Some(plan_result.risk_score),
+        &outcome,
     );
 
     Ok(outcome.response)
@@ -1807,14 +1899,16 @@ pub async fn generate_from_plan(
     let _ = existing_code; // reserved for future use
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt = {
-        let base = prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
-        let session_ctx = state.session_memory.lock().unwrap().build_context_section();
-        match session_ctx {
-            Some(ctx) => format!("{}\n\n{}", base, ctx),
-            None => base,
-        }
-    };
+    let session_ctx = state.session_memory.lock().unwrap().build_context_section();
+    let retrieval_query = format!("{}\n\n{}", user_request, plan_text);
+    let (system_prompt, retrieval_result) = build_system_prompt_with_retrieval(
+        &config,
+        cq_version.as_deref(),
+        &retrieval_query,
+        session_ctx,
+        &on_event,
+    )
+    .await;
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
@@ -1855,8 +1949,9 @@ pub async fn generate_from_plan(
         outcome.success,
         None,
         None,
-        outcome.error,
+        outcome.error.clone(),
     );
+    record_generation_trace(&config, &user_request, &retrieval_result, None, &outcome);
 
     Ok(outcome.response)
 }
@@ -1902,8 +1997,22 @@ pub async fn retry_skipped_steps(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt =
-        crate::agent::prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
+    let mut system_prompt = crate::agent::prompts::build_compact_system_prompt_for_preset(
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    );
+    let retrieval_query = format!("{}\n\n{}", user_request, design_plan_text);
+    let retrieval_result = retrieval::retrieve_context(
+        &retrieval_query,
+        &config,
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    )
+    .await;
+    if !retrieval_result.context_markdown.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&retrieval_result.context_markdown);
+    }
 
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
@@ -1940,55 +2049,53 @@ pub async fn retry_skipped_steps(
         })
         .collect();
 
-    let on_iter_event = |evt: iterative::IterativeEvent| {
-        match evt {
-            iterative::IterativeEvent::Start { total_steps, steps } => {
-                let _ = on_event.send(MultiPartEvent::IterativeStart { total_steps, steps });
-            }
-            iterative::IterativeEvent::StepStarted {
+    let on_iter_event = |evt: iterative::IterativeEvent| match evt {
+        iterative::IterativeEvent::Start { total_steps, steps } => {
+            let _ = on_event.send(MultiPartEvent::IterativeStart { total_steps, steps });
+        }
+        iterative::IterativeEvent::StepStarted {
+            step_index,
+            step_name,
+            description,
+        } => {
+            let _ = on_event.send(MultiPartEvent::IterativeStepStarted {
                 step_index,
                 step_name,
                 description,
-            } => {
-                let _ = on_event.send(MultiPartEvent::IterativeStepStarted {
-                    step_index,
-                    step_name,
-                    description,
-                });
-            }
-            iterative::IterativeEvent::StepComplete {
+            });
+        }
+        iterative::IterativeEvent::StepComplete {
+            step_index,
+            success,
+            stl_base64,
+        } => {
+            let _ = on_event.send(MultiPartEvent::IterativeStepComplete {
                 step_index,
                 success,
                 stl_base64,
-            } => {
-                let _ = on_event.send(MultiPartEvent::IterativeStepComplete {
-                    step_index,
-                    success,
-                    stl_base64,
-                });
-            }
-            iterative::IterativeEvent::StepRetry {
+            });
+        }
+        iterative::IterativeEvent::StepRetry {
+            step_index,
+            attempt,
+            error,
+        } => {
+            let _ = on_event.send(MultiPartEvent::IterativeStepRetry {
                 step_index,
                 attempt,
                 error,
-            } => {
-                let _ = on_event.send(MultiPartEvent::IterativeStepRetry {
-                    step_index,
-                    attempt,
-                    error,
-                });
-            }
-            iterative::IterativeEvent::StepSkipped {
+            });
+        }
+        iterative::IterativeEvent::StepSkipped {
+            step_index,
+            name,
+            error,
+        } => {
+            let _ = on_event.send(MultiPartEvent::IterativeStepSkipped {
                 step_index,
                 name,
                 error,
-            } => {
-                let _ = on_event.send(MultiPartEvent::IterativeStepSkipped {
-                    step_index,
-                    name,
-                    error,
-                });
-            }
+            });
         }
     };
 
@@ -2058,11 +2165,26 @@ pub async fn retry_part(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt =
-        prompts::build_system_prompt_for_preset(config.agent_rules_preset.as_deref(), cq_version.as_deref());
+    let mut system_prompt = prompts::build_compact_system_prompt_for_preset(
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    );
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
+
+    let retrieval_query = format!("{}\n\n{}", design_plan_text, part_spec.description);
+    let retrieval_result = retrieval::retrieve_context(
+        &retrieval_query,
+        &config,
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    )
+    .await;
+    if !retrieval_result.context_markdown.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&retrieval_result.context_markdown);
+    }
 
     // Build part prompt
     let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text);
@@ -2081,8 +2203,7 @@ pub async fn retry_part(
     // Stream generation for the single part
     let provider = create_provider(&config)?;
     let (tx, mut rx) = mpsc::channel::<StreamDelta>(100);
-    let provider_handle =
-        tokio::spawn(async move { provider.stream(&part_messages, tx).await });
+    let provider_handle = tokio::spawn(async move { provider.stream(&part_messages, tx).await });
 
     let mut full_response = String::new();
     while let Some(delta) = rx.recv().await {

@@ -46,7 +46,11 @@ mod tests {
 
     #[test]
     fn test_trim_no_truncation_needed() {
-        let messages = vec![msg("system", "sys"), msg("user", "hi"), msg("assistant", "hello")];
+        let messages = vec![
+            msg("system", "sys"),
+            msg("user", "hi"),
+            msg("assistant", "hello"),
+        ];
         let result = trim_history(&messages, 10);
         assert_eq!(result.len(), 3);
     }

@@ -126,8 +126,13 @@ impl From<&ChatMessage> for OpenAiMessage {
 
 #[async_trait]
 impl AiProvider for OpenAiProvider {
-    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
-        let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<(String, Option<TokenUsage>), AppError> {
+        let openai_messages: Vec<OpenAiMessage> =
+            messages.iter().map(OpenAiMessage::from).collect();
 
         let body = OpenAiRequest {
             model: self.model.clone(),
@@ -199,14 +204,17 @@ impl AiProvider for OpenAiProvider {
         messages: &[ChatMessage],
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<Option<TokenUsage>, AppError> {
-        let openai_messages: Vec<OpenAiMessage> = messages.iter().map(OpenAiMessage::from).collect();
+        let openai_messages: Vec<OpenAiMessage> =
+            messages.iter().map(OpenAiMessage::from).collect();
 
         let body = OpenAiRequest {
             model: self.model.clone(),
             messages: openai_messages,
             stream: true,
             max_tokens: None,
-            stream_options: Some(OpenAiStreamOptions { include_usage: true }),
+            stream_options: Some(OpenAiStreamOptions {
+                include_usage: true,
+            }),
             temperature: self.temperature,
         };
 
@@ -237,9 +245,8 @@ impl AiProvider for OpenAiProvider {
         let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                AppError::AiProviderError(format!("Stream read error: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| AppError::AiProviderError(format!("Stream read error: {}", e)))?;
 
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);

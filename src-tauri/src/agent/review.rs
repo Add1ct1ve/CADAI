@@ -233,8 +233,7 @@ mod tests {
 
     #[test]
     fn test_parse_approved_with_extra_text() {
-        let result =
-            parse_review_response("APPROVED\nThe code looks good.", "original code");
+        let result = parse_review_response("APPROVED\nThe code looks good.", "original code");
         assert!(!result.was_modified);
         assert_eq!(result.code, "original code");
     }

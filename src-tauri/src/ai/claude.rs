@@ -136,7 +136,11 @@ struct ClaudeStreamEndUsage {
 
 #[async_trait]
 impl AiProvider for ClaudeProvider {
-    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<(String, Option<TokenUsage>), AppError> {
         let (system, claude_messages) = self.build_request(messages, false);
 
         let body = ClaudeRequest {
@@ -244,9 +248,8 @@ impl AiProvider for ClaudeProvider {
         let mut has_usage = false;
 
         while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                AppError::AiProviderError(format!("Stream read error: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| AppError::AiProviderError(format!("Stream read error: {}", e)))?;
 
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);

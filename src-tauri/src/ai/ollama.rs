@@ -100,7 +100,11 @@ impl From<&ChatMessage> for OllamaMessage {
 
 #[async_trait]
 impl AiProvider for OllamaProvider {
-    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        _max_tokens: Option<u32>,
+    ) -> Result<(String, Option<TokenUsage>), AppError> {
         let ollama_messages: Vec<OllamaMessage> =
             messages.iter().map(OllamaMessage::from).collect();
 
@@ -141,10 +145,7 @@ impl AiProvider for OllamaProvider {
             .await
             .map_err(|e| AppError::AiProviderError(format!("Failed to parse response: {}", e)))?;
 
-        let text = resp
-            .message
-            .and_then(|m| m.content)
-            .unwrap_or_default();
+        let text = resp.message.and_then(|m| m.content).unwrap_or_default();
 
         if text.is_empty() {
             eprintln!(
@@ -154,7 +155,10 @@ impl AiProvider for OllamaProvider {
         }
 
         let usage = match (resp.prompt_eval_count, resp.eval_count) {
-            (Some(input), Some(output)) => Some(TokenUsage { input_tokens: input, output_tokens: output }),
+            (Some(input), Some(output)) => Some(TokenUsage {
+                input_tokens: input,
+                output_tokens: output,
+            }),
             _ => None,
         };
 
@@ -207,9 +211,8 @@ impl AiProvider for OllamaProvider {
         let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                AppError::AiProviderError(format!("Stream read error: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| AppError::AiProviderError(format!("Stream read error: {}", e)))?;
 
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
@@ -232,8 +235,13 @@ impl AiProvider for OllamaProvider {
 
                     // Capture usage from the done line
                     if is_done {
-                        if let (Some(input), Some(output)) = (stream_line.prompt_eval_count, stream_line.eval_count) {
-                            tracked_usage = Some(TokenUsage { input_tokens: input, output_tokens: output });
+                        if let (Some(input), Some(output)) =
+                            (stream_line.prompt_eval_count, stream_line.eval_count)
+                        {
+                            tracked_usage = Some(TokenUsage {
+                                input_tokens: input,
+                                output_tokens: output,
+                            });
                         }
                     }
 

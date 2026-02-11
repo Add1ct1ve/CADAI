@@ -85,9 +85,7 @@ fn try_heuristic(response: &str) -> Option<ExtractionOutcome> {
     let re = Regex::new(r"```\w*\s*\n([\s\S]*?)```").ok()?;
     for cap in re.captures_iter(response) {
         let code = cap[1].trim().to_string();
-        if !code.is_empty()
-            && (code.contains("import cadquery") || code.contains("cq."))
-        {
+        if !code.is_empty() && (code.contains("import cadquery") || code.contains("cq.")) {
             return Some(ExtractionOutcome {
                 code,
                 format: ExtractionFormat::Heuristic,
@@ -111,7 +109,8 @@ mod tests {
 
     #[test]
     fn test_extract_xml_tags_case_insensitive() {
-        let response = "<code>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(5,5,5)\n</code>";
+        let response =
+            "<code>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(5,5,5)\n</code>";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::XmlTags);
         assert!(outcome.code.contains("import cadquery"));
@@ -127,7 +126,8 @@ mod tests {
 
     #[test]
     fn test_extract_heuristic() {
-        let response = "Here:\n```\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```";
+        let response =
+            "Here:\n```\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::Heuristic);
         assert!(outcome.code.contains("import cadquery"));
@@ -165,7 +165,8 @@ mod tests {
 
     #[test]
     fn test_extract_code_convenience() {
-        let response = "<CODE>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n</CODE>";
+        let response =
+            "<CODE>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n</CODE>";
         let code = extract_code(response).unwrap();
         assert!(code.contains("import cadquery as cq"));
     }

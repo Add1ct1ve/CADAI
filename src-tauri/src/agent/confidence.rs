@@ -119,9 +119,7 @@ pub fn assess_confidence(
                 "Moderate complexity".to_string()
             }
         }
-        ConfidenceLevel::Low => {
-            "Complex design with risky operation combinations".to_string()
-        }
+        ConfidenceLevel::Low => "Complex design with risky operation combinations".to_string(),
     };
 
     if !pattern_matches.is_empty() {
@@ -273,10 +271,7 @@ pub fn match_design_patterns(
 mod tests {
     use super::*;
 
-    fn make_validation(
-        risk_score: u32,
-        operations: Vec<&str>,
-    ) -> PlanValidation {
+    fn make_validation(risk_score: u32, operations: Vec<&str>) -> PlanValidation {
         PlanValidation {
             is_valid: risk_score <= 7,
             risk_score,
@@ -293,7 +288,8 @@ mod tests {
             CookbookEntry {
                 title: "Hollow box (shell operation)".to_string(),
                 description: Some("Create a box and shell it to make hollow".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)".to_string(),
+                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)"
+                    .to_string(),
                 min_version: None,
             },
             CookbookEntry {
@@ -311,12 +307,15 @@ mod tests {
             CookbookEntry {
                 title: "Simple extrude box".to_string(),
                 description: Some("Extrude a rectangle to create a box".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)".to_string(),
+                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)"
+                    .to_string(),
                 min_version: None,
             },
             CookbookEntry {
                 title: "Sweep pipe along path".to_string(),
-                description: Some("Sweep a circular profile along a path to create a pipe".to_string()),
+                description: Some(
+                    "Sweep a circular profile along a path to create a pipe".to_string(),
+                ),
                 code: "import cadquery as cq\nresult = cq.Workplane('XY').sweep()".to_string(),
                 min_version: None,
             },
@@ -354,8 +353,7 @@ mod tests {
 
     #[test]
     fn test_low_confidence_complex() {
-        let validation =
-            make_validation(8, vec!["loft", "shell", "cut", "union", "fuse"]);
+        let validation = make_validation(8, vec!["loft", "shell", "cut", "union", "fuse"]);
         let result = assess_confidence(&validation, None, None);
         // base = 20, 0 cookbook matches + 5 distinct ops → -10 → 10
         assert!(result.score < 40, "score {} should be < 40", result.score);
@@ -372,7 +370,9 @@ mod tests {
             "should match at least one cookbook entry"
         );
         assert!(
-            matches.iter().any(|m| m.title.contains("shell") || m.title.contains("Hollow")),
+            matches
+                .iter()
+                .any(|m| m.title.contains("shell") || m.title.contains("Hollow")),
             "should match the shell recipe"
         );
     }
@@ -397,11 +397,14 @@ mod tests {
         let validation = make_validation(0, vec!["extrude", "shell"]);
         let cookbook = make_cookbook();
         let result = assess_confidence(&validation, Some(&cookbook), None);
-        assert!(result.score <= 100, "score {} should be <= 100", result.score);
+        assert!(
+            result.score <= 100,
+            "score {} should be <= 100",
+            result.score
+        );
 
         // Very high risk + no cookbook + many ops = should not go below 0
-        let validation2 =
-            make_validation(10, vec!["loft", "shell", "sweep", "revolve", "cut"]);
+        let validation2 = make_validation(10, vec!["loft", "shell", "sweep", "revolve", "cut"]);
         let result2 = assess_confidence(&validation2, None, None);
         assert!(result2.score >= 0, "score should not be negative");
         assert!(result2.score <= 100);
@@ -412,31 +415,36 @@ mod tests {
         let validation = make_validation(5, vec!["loft", "shell"]);
         let result = assess_confidence(&validation, None, None);
         assert!(
-            result.warnings.iter().any(|w| w.contains("loft") && w.contains("shell")),
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("loft") && w.contains("shell")),
             "should warn about loft + shell"
         );
     }
 
     #[test]
     fn test_warnings_novel_combination() {
-        let validation =
-            make_validation(3, vec!["chamfer", "intersect", "fillet"]);
+        let validation = make_validation(3, vec!["chamfer", "intersect", "fillet"]);
         let result = assess_confidence(&validation, None, None);
         assert!(
-            result.warnings.iter().any(|w| w.contains("Novel operation")),
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("Novel operation")),
             "should warn about novel combination"
         );
     }
 
     #[test]
     fn test_warnings_high_complexity() {
-        let validation = make_validation(
-            3,
-            vec!["loft", "shell", "cut", "union", "fillet"],
-        );
+        let validation = make_validation(3, vec!["loft", "shell", "cut", "union", "fillet"]);
         let result = assess_confidence(&validation, None, None);
         assert!(
-            result.warnings.iter().any(|w| w.contains("High complexity")),
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("High complexity")),
             "should warn about high complexity"
         );
     }
@@ -444,7 +452,11 @@ mod tests {
     #[test]
     fn test_match_cookbook_capped_at_3() {
         // Create many matching entries
-        let ops = vec!["extrude".to_string(), "shell".to_string(), "cut".to_string()];
+        let ops = vec![
+            "extrude".to_string(),
+            "shell".to_string(),
+            "cut".to_string(),
+        ];
         let mut cookbook = Vec::new();
         for i in 0..10 {
             cookbook.push(CookbookEntry {
@@ -473,8 +485,9 @@ mod tests {
                     "case".to_string(),
                 ],
                 parameters: vec!["INNER_W (mm)".to_string()],
-                base_code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)"
-                    .to_string(),
+                base_code:
+                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)"
+                        .to_string(),
                 variants: vec!["Snap-fit".to_string()],
                 gotchas: vec!["Shell before bosses".to_string()],
             },
@@ -487,8 +500,9 @@ mod tests {
                     "spur gear".to_string(),
                 ],
                 parameters: vec!["MODULE (mm)".to_string()],
-                base_code: "import cadquery as cq\nresult = cq.Workplane('XY').circle(10).extrude(5)"
-                    .to_string(),
+                base_code:
+                    "import cadquery as cq\nresult = cq.Workplane('XY').circle(10).extrude(5)"
+                        .to_string(),
                 variants: vec!["Helical".to_string()],
                 gotchas: vec!["Bore last".to_string()],
             },
@@ -547,11 +561,7 @@ mod tests {
         let validation = make_validation(3, vec!["extrude", "shell"]);
         let cookbook = make_cookbook();
         let patterns = make_patterns();
-        let result = assess_confidence(
-            &validation,
-            Some(&cookbook),
-            Some(&patterns),
-        );
+        let result = assess_confidence(&validation, Some(&cookbook), Some(&patterns));
         // With pattern match, score should be boosted by +10
         let result_no_pattern = assess_confidence(&validation, Some(&cookbook), None);
         assert!(

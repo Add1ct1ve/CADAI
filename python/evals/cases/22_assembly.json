@@ -1,0 +1,5 @@
+{
+  "id": "case_22_assembly",
+  "category": "assembly",
+  "prompt": "Build a two-part snap-fit box with male/female tabs and 0.25mm assembly clearance. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

@@ -680,6 +680,16 @@
             }
             break;
 
+          case 'RetrievalStatus':
+            {
+              const detail = event.items.length > 0
+                ? `${event.message} (${event.items.length} snippets)`
+                : event.message;
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${last}\n${detail}`);
+            }
+            break;
+
           case 'ConfidenceAssessment':
             confidenceData = {
               level: event.level,
@@ -790,6 +800,15 @@
             }
             break;
 
+          case 'StaticValidationReport':
+            {
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              if (!event.passed && event.findings.length > 0) {
+                chatStore.updateLastMessage(`${last}\nStatic validation: ${event.findings[0]}`);
+              }
+            }
+            break;
+
           case 'ValidationSuccess':
             {
               const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
@@ -808,6 +827,16 @@
               if (!event.will_retry) {
                 updateConfidence({ validationSuccess: false });
               }
+            }
+            break;
+
+          case 'PostGeometryValidationReport':
+            {
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              const summary = event.report.manifold && event.report.bbox_ok
+                ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
+                : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
+              chatStore.updateLastMessage(`${last}\n${summary}`);
             }
             break;
 
@@ -1203,6 +1232,16 @@
               }
               break;
 
+            case 'RetrievalStatus':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const detail = event.items.length > 0
+                  ? `${event.message} (${event.items.length} snippets)`
+                  : event.message;
+                chatStore.updateLastMessage(`${last}\n${detail}`);
+              }
+              break;
+
             case 'PlanResult':
               if (planTimerInterval) {
                 clearInterval(planTimerInterval);
@@ -1311,6 +1350,15 @@
               }
               break;
 
+            case 'StaticValidationReport':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                if (!event.passed && event.findings.length > 0) {
+                  chatStore.updateLastMessage(`${last}\nStatic validation: ${event.findings[0]}`);
+                }
+              }
+              break;
+
             case 'ValidationSuccess':
               {
                 const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
@@ -1329,6 +1377,16 @@
                 if (!event.will_retry) {
                   updateConfidence({ validationSuccess: false });
                 }
+              }
+              break;
+
+            case 'PostGeometryValidationReport':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const summary = event.report.manifold && event.report.bbox_ok
+                  ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
+                  : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
+                chatStore.updateLastMessage(`${last}\n${summary}`);
               }
               break;
 

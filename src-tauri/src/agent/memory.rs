@@ -113,14 +113,8 @@ impl SessionMemory {
                     let key = op.clone();
                     if !seen_failures.contains(&key) {
                         seen_failures.push(key);
-                        let summary = attempt
-                            .error_summary
-                            .as_deref()
-                            .unwrap_or("unknown reason");
-                        learnings.push(format!(
-                            "{}() failed — {}",
-                            op, summary
-                        ));
+                        let summary = attempt.error_summary.as_deref().unwrap_or("unknown reason");
+                        learnings.push(format!("{}() failed — {}", op, summary));
                     }
                 }
             }
@@ -151,8 +145,8 @@ impl SessionMemory {
 pub fn extract_operations_from_code(code: &str) -> Vec<String> {
     let pattern = Regex::new(r"\.(\w+)\s*\(").unwrap();
     let known_ops = [
-        "extrude", "revolve", "loft", "sweep", "shell", "fillet", "chamfer",
-        "cut", "union", "hole", "tag",
+        "extrude", "revolve", "loft", "sweep", "shell", "fillet", "chamfer", "cut", "union",
+        "hole", "tag",
     ];
 
     let mut ops = Vec::new();

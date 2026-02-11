@@ -1,0 +1,5 @@
+{
+  "id": "case_17_fixture",
+  "category": "fixture",
+  "prompt": "Create a linear rail carriage block with bolt pattern and relief pockets. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

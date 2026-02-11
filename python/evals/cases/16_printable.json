@@ -1,0 +1,5 @@
+{
+  "id": "case_16_printable",
+  "category": "printable",
+  "prompt": "Generate a robust printable hinge pair with pin clearance and chamfered insertion lead-ins. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

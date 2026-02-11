@@ -30,6 +30,10 @@ export interface AppConfig {
   snap_sketch: number | null;
   enable_consensus: boolean;
   auto_approve_plan: boolean;
+  retrieval_enabled: boolean;
+  retrieval_token_budget: number;
+  telemetry_enabled: boolean;
+  max_validation_attempts: number;
 }
 
 export interface ModelInfo {
@@ -141,8 +145,11 @@ export type MultiPartEvent =
   | { kind: 'ReviewStatus'; message: string }
   | { kind: 'ReviewComplete'; was_modified: boolean; explanation: string }
   | { kind: 'ValidationAttempt'; attempt: number; max_attempts: number; message: string }
+  | { kind: 'StaticValidationReport'; passed: boolean; findings: string[] }
   | { kind: 'ValidationSuccess'; attempt: number; message: string }
   | { kind: 'ValidationFailed'; attempt: number; error_category: string; error_message: string; will_retry: boolean }
+  | { kind: 'PostGeometryValidationReport'; report: { watertight: boolean; manifold: boolean; degenerate_faces: number; euler_number: number; triangle_count: number; bbox_ok: boolean; warnings: string[] } }
+  | { kind: 'RetrievalStatus'; message: string; items: { source: string; id: string; title: string; score: number }[]; used_embeddings: boolean; lexical_fallback: boolean }
   | { kind: 'IterativeStart'; total_steps: number; steps: { index: number; name: string; description: string; operations: string[] }[] }
   | { kind: 'IterativeStepStarted'; step_index: number; step_name: string; description: string }
   | { kind: 'IterativeStepComplete'; step_index: number; success: boolean; stl_base64?: string }

@@ -73,9 +73,7 @@ pub fn get_provider_registry() -> Vec<ProviderInfo> {
             id: "qwen".to_string(),
             display_name: "Qwen".to_string(),
             requires_api_key: true,
-            base_url: Some(
-                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string(),
-            ),
+            base_url: Some("https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string()),
             models: vec![
                 ModelInfo {
                     id: "qwen3-coder-plus".to_string(),

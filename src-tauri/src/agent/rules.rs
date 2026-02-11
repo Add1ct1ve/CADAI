@@ -183,8 +183,8 @@ mod tests {
 
     #[test]
     fn test_default_yaml_parses() {
-        let rules: AgentRules = serde_yaml::from_str(DEFAULT_YAML)
-            .expect("default.yaml should parse without errors");
+        let rules: AgentRules =
+            serde_yaml::from_str(DEFAULT_YAML).expect("default.yaml should parse without errors");
         assert_eq!(rules.version, Some(1));
     }
 
@@ -197,8 +197,8 @@ mod tests {
 
     #[test]
     fn test_cnc_yaml_parses() {
-        let rules: AgentRules = serde_yaml::from_str(CNC_YAML)
-            .expect("cnc-focused.yaml should parse without errors");
+        let rules: AgentRules =
+            serde_yaml::from_str(CNC_YAML).expect("cnc-focused.yaml should parse without errors");
         assert_eq!(rules.version, Some(1));
     }
 
@@ -303,7 +303,11 @@ mod tests {
     fn test_printing_cookbook_has_48_recipes() {
         let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
         let cookbook = rules.cookbook.as_ref().unwrap();
-        assert_eq!(cookbook.len(), 48, "printing cookbook should have 48 recipes");
+        assert_eq!(
+            cookbook.len(),
+            48,
+            "printing cookbook should have 48 recipes"
+        );
     }
 
     #[test]
@@ -555,14 +559,22 @@ mod tests {
     fn test_default_dimension_tables_has_7_categories() {
         let rules = AgentRules::from_preset(None).unwrap();
         let dt = rules.dimension_tables.as_ref().unwrap();
-        assert_eq!(dt.len(), 7, "default should have 7 dimension table categories");
+        assert_eq!(
+            dt.len(),
+            7,
+            "default should have 7 dimension table categories"
+        );
     }
 
     #[test]
     fn test_printing_dimension_tables_has_7_categories() {
         let rules = AgentRules::from_preset(Some("3d-printing")).unwrap();
         let dt = rules.dimension_tables.as_ref().unwrap();
-        assert_eq!(dt.len(), 7, "printing should have 7 dimension table categories");
+        assert_eq!(
+            dt.len(),
+            7,
+            "printing should have 7 dimension table categories"
+        );
     }
 
     #[test]
@@ -894,21 +906,49 @@ mod tests {
     fn test_operation_interactions_has_8_categories() {
         let rules = AgentRules::from_preset(None).unwrap();
         let oi = rules.operation_interactions.as_ref().unwrap();
-        assert_eq!(oi.len(), 8, "operation_interactions should have 8 categories");
+        assert_eq!(
+            oi.len(),
+            8,
+            "operation_interactions should have 8 categories"
+        );
     }
 
     #[test]
     fn test_operation_interactions_categories_present() {
         let rules = AgentRules::from_preset(None).unwrap();
         let oi = rules.operation_interactions.as_ref().unwrap();
-        assert!(oi.contains_key("fillet_after_boolean"), "missing fillet_after_boolean");
-        assert!(oi.contains_key("shell_after_fillet"), "missing shell_after_fillet");
-        assert!(oi.contains_key("loft_then_shell"), "missing loft_then_shell");
-        assert!(oi.contains_key("boolean_chain_limit"), "missing boolean_chain_limit");
-        assert!(oi.contains_key("extrude_on_face"), "missing extrude_on_face");
-        assert!(oi.contains_key("sweep_with_boolean"), "missing sweep_with_boolean");
-        assert!(oi.contains_key("revolve_then_cut"), "missing revolve_then_cut");
-        assert!(oi.contains_key("operation_ordering"), "missing operation_ordering");
+        assert!(
+            oi.contains_key("fillet_after_boolean"),
+            "missing fillet_after_boolean"
+        );
+        assert!(
+            oi.contains_key("shell_after_fillet"),
+            "missing shell_after_fillet"
+        );
+        assert!(
+            oi.contains_key("loft_then_shell"),
+            "missing loft_then_shell"
+        );
+        assert!(
+            oi.contains_key("boolean_chain_limit"),
+            "missing boolean_chain_limit"
+        );
+        assert!(
+            oi.contains_key("extrude_on_face"),
+            "missing extrude_on_face"
+        );
+        assert!(
+            oi.contains_key("sweep_with_boolean"),
+            "missing sweep_with_boolean"
+        );
+        assert!(
+            oi.contains_key("revolve_then_cut"),
+            "missing revolve_then_cut"
+        );
+        assert!(
+            oi.contains_key("operation_ordering"),
+            "missing operation_ordering"
+        );
     }
 
     // ── Dimension Guidance ────────────────────────────────────────────
@@ -938,11 +978,20 @@ mod tests {
     fn test_dimension_guidance_categories() {
         let rules = AgentRules::from_preset(None).unwrap();
         let dg = rules.dimension_guidance.as_ref().unwrap();
-        assert!(dg.contains_key("when_to_estimate"), "missing when_to_estimate");
+        assert!(
+            dg.contains_key("when_to_estimate"),
+            "missing when_to_estimate"
+        );
         assert!(dg.contains_key("size_classes"), "missing size_classes");
         assert!(dg.contains_key("scale_anchors"), "missing scale_anchors");
-        assert!(dg.contains_key("proportional_reasoning"), "missing proportional_reasoning");
-        assert!(dg.contains_key("relative_sizing"), "missing relative_sizing");
+        assert!(
+            dg.contains_key("proportional_reasoning"),
+            "missing proportional_reasoning"
+        );
+        assert!(
+            dg.contains_key("relative_sizing"),
+            "missing relative_sizing"
+        );
     }
 
     // ── Failure Prevention ────────────────────────────────────────────
@@ -973,9 +1022,21 @@ mod tests {
         let rules = AgentRules::from_preset(None).unwrap();
         let fp = rules.failure_prevention.as_ref().unwrap();
         assert!(fp.contains_key("self_diagnosis"), "missing self_diagnosis");
-        assert!(fp.contains_key("preemptive_warnings"), "missing preemptive_warnings");
-        assert!(fp.contains_key("alternative_operations"), "missing alternative_operations");
-        assert!(fp.contains_key("complexity_assessment"), "missing complexity_assessment");
-        assert!(fp.contains_key("pre_output_checklist"), "missing pre_output_checklist");
+        assert!(
+            fp.contains_key("preemptive_warnings"),
+            "missing preemptive_warnings"
+        );
+        assert!(
+            fp.contains_key("alternative_operations"),
+            "missing alternative_operations"
+        );
+        assert!(
+            fp.contains_key("complexity_assessment"),
+            "missing complexity_assessment"
+        );
+        assert!(
+            fp.contains_key("pre_output_checklist"),
+            "missing pre_output_checklist"
+        );
     }
 }

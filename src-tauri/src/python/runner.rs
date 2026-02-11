@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use crate::error::AppError;
 use super::venv;
+use crate::error::AppError;
 
 const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30_000;
 const POLL_INTERVAL_MS: u64 = 25;
@@ -96,12 +96,7 @@ pub fn execute_cadquery(
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
-    execute_cadquery_with_timeout_ms(
-        venv_dir,
-        runner_script,
-        code,
-        DEFAULT_EXECUTION_TIMEOUT_MS,
-    )
+    execute_cadquery_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
 }
 
 /// Execute CadQuery Python code and return STL data, with a hard timeout.
@@ -141,9 +136,7 @@ pub fn execute_cadquery_with_timeout_ms(
         }
 
         if !output_file.exists() {
-            return Err(AppError::CadQueryError(
-                "STL file was not generated".into(),
-            ));
+            return Err(AppError::CadQueryError("STL file was not generated".into()));
         }
 
         let stl_data = std::fs::read(&output_file)?;
@@ -184,9 +177,7 @@ pub fn execute_python_script(
         cmd_args.push(arg.to_string());
     }
 
-    let output = Command::new(&python)
-        .args(&cmd_args)
-        .output()?;
+    let output = Command::new(&python).args(&cmd_args).output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -207,12 +198,7 @@ pub fn execute_cadquery_isolated(
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
-    execute_cadquery_with_timeout_ms(
-        venv_dir,
-        runner_script,
-        code,
-        DEFAULT_EXECUTION_TIMEOUT_MS,
-    )
+    execute_cadquery_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
 }
 
 /// Execute CadQuery Python code and export directly to a specific file path.

@@ -1,0 +1,5 @@
+{
+  "id": "whoop_style_housing",
+  "category": "wearable_enclosure",
+  "prompt": "Create a fully parametric, editable CAD model of a wrist-worn fitness tracker housing with a snap-fit back plate inspired by Whoop design. Use mm units. Parameters: housing_length=42, housing_width=28, height_center=7.5, height_ends=5, wall=1.8, top_thk=1.5, corner_r=5, back_plate_thk=1.5, back_lip=1.5, snap_tolerance=0.15, oring_width=1.2, oring_depth=0.8, button_length=12, button_width=4, button_offset=6, membrane_thk=0.6, band_slot_width=20, band_slot_height=2.5, band_slot_depth=5. Two bodies: Housing and BackPlate. Origin at center of bottom face. Features: rounded base profile, curved top dome (center 7.5 end 5), shelled cavity, back plate ledge, O-ring groove, two end band slots, side pill button membrane cutout, matching back plate with lip and O-ring ridge, optional screw holes. Ensure parametric updates, watertight geometry, and manufacturing-ready clearances for 3D printing."
+}
