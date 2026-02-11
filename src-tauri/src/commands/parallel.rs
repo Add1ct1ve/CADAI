@@ -10,12 +10,14 @@ use crate::agent::confidence;
 use crate::agent::consensus;
 use crate::agent::design;
 use crate::agent::executor;
+use crate::agent::fallback_templates;
 use crate::agent::iterative;
 use crate::agent::memory;
 use crate::agent::modify;
 use crate::agent::prompts;
 use crate::agent::retrieval;
 use crate::agent::review;
+use crate::agent::semantic_validate;
 use crate::agent::telemetry;
 use crate::agent::validate::ErrorCategory;
 use crate::ai::cost;
@@ -67,6 +69,9 @@ pub enum MultiPartEvent {
         warnings: Vec<String>,
         is_valid: bool,
         rejected_reason: Option<String>,
+        fatal_combo: bool,
+        negation_conflict: bool,
+        repair_sensitive_ops: Vec<String>,
     },
     /// Generation confidence assessment based on plan risk + cookbook matching.
     ConfidenceAssessment {
@@ -162,6 +167,15 @@ pub enum MultiPartEvent {
     },
     PostGeometryValidationWarning {
         message: String,
+    },
+    SemanticValidationReport {
+        part_name: String,
+        passed: bool,
+        findings: Vec<String>,
+    },
+    FallbackActivated {
+        reason: String,
+        template_id: String,
     },
     IterativeStart {
         total_steps: usize,
@@ -285,6 +299,40 @@ fn record_generation_trace(
         return;
     }
 
+    let semantic_failure_signatures = outcome
+        .failure_signatures
+        .iter()
+        .filter(|s| s.to_lowercase().contains("semantic"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let split_part_rejection_count = outcome
+        .failure_signatures
+        .iter()
+        .filter(|s| {
+            let lower = s.to_lowercase();
+            lower.contains("component count") || lower.contains("split_part")
+        })
+        .count() as u32;
+    let fallback_activation_count = outcome
+        .failure_signatures
+        .iter()
+        .filter(|s| s.starts_with("fallback_activated:"))
+        .count() as u32;
+    let fallback_activation_rate = if let Some(acceptance_rate) = outcome.part_acceptance_rate {
+        let denom = if acceptance_rate > 0.0 {
+            (1.0 / acceptance_rate).max(1.0)
+        } else {
+            1.0
+        };
+        Some((fallback_activation_count as f32 / denom).min(1.0))
+    } else {
+        Some(if fallback_activation_count > 0 {
+            1.0
+        } else {
+            0.0
+        })
+    };
+
     let trace = telemetry::GenerationTraceV1 {
         version: 1,
         timestamp_ms: telemetry::now_ms(),
@@ -312,6 +360,11 @@ fn record_generation_trace(
         post_check_soft_fail_reason: outcome.post_check_soft_fail_reason.clone(),
         part_acceptance_rate: outcome.part_acceptance_rate,
         assembly_success_rate: outcome.assembly_success_rate,
+        semantic_acceptance_rate: outcome.part_acceptance_rate,
+        false_fatal_plan_rejection_count: 0,
+        fallback_activation_rate,
+        split_part_rejection_count,
+        semantic_failure_signatures,
         partial_preview_shown: outcome.partial_preview_shown,
         empty_viewport_after_generation: outcome.empty_viewport_after_generation,
         retry_ladder_stage_reached: outcome.retry_ladder_stage_reached,
@@ -353,7 +406,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
   "parts": [
     {
       "name": "snake_case_name",
-      "description": "Detailed geometric description with ALL dimensions in mm. Include the specific CadQuery operations to use (loft, revolve, booleans). Reference the geometry design plan. This description must be fully self-contained.",
+      "description": "Detailed geometric description with ALL dimensions in mm. State a robust primary path (reliability-first) and an optional higher-fidelity fallback path. Reference the geometry design plan. This description must be fully self-contained.",
       "position": [x, y, z],
       "constraints": ["any constraints like 'inner diameter must match outer diameter of part X'"]
     }
@@ -371,9 +424,10 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 - Complex shapes built from boolean operations on one body → single mode
 
 ## Part description requirements (multi mode only)
-- Include specific CadQuery operations: "Use loft() between ellipses at heights 0, 80, 160mm"
 - Include all dimensions in mm
 - Include geometric detail from the design plan: profiles, cross-sections, radii
+- Use reliability-first phrasing for the primary path (prefer extrude + cut/union + explicit intermediates)
+- Mention shell+loft only as optional fallback when absolutely required
 - Each part description must be self-contained (another AI must be able to build it without other context)
 
 Rules:
@@ -762,6 +816,9 @@ async fn run_design_plan_phase(
         warnings: validation.warnings.clone(),
         is_valid: validation.is_valid,
         rejected_reason: validation.rejected_reason.clone(),
+        fatal_combo: validation.risk_signals.fatal_combo,
+        negation_conflict: validation.risk_signals.negation_conflict,
+        repair_sensitive_ops: validation.risk_signals.repair_sensitive_ops.clone(),
     });
 
     // Give the planner multiple chances to return a valid structured plan.
@@ -802,9 +859,38 @@ async fn run_design_plan_phase(
             warnings: validation.warnings.clone(),
             is_valid: validation.is_valid,
             rejected_reason: validation.rejected_reason.clone(),
+            fatal_combo: validation.risk_signals.fatal_combo,
+            negation_conflict: validation.risk_signals.negation_conflict,
+            repair_sensitive_ops: validation.risk_signals.repair_sensitive_ops.clone(),
         });
 
         attempts += 1;
+    }
+
+    if !validation.is_valid
+        && config.deterministic_fallback_enabled
+        && attempts >= config.fallback_after_plan_failures as usize
+    {
+        if let Some(fallback_plan) = fallback_templates::maybe_fallback_plan(message) {
+            let _ = on_event.send(MultiPartEvent::FallbackActivated {
+                reason: fallback_plan.reason.clone(),
+                template_id: fallback_plan.template_id.to_string(),
+            });
+            design_plan.text = fallback_plan.plan_text;
+            validation = design::validate_plan_with_profile(
+                &design_plan.text,
+                &config.generation_reliability_profile,
+            );
+            let _ = on_event.send(MultiPartEvent::PlanValidation {
+                risk_score: validation.risk_score,
+                warnings: validation.warnings.clone(),
+                is_valid: validation.is_valid,
+                rejected_reason: validation.rejected_reason.clone(),
+                fatal_combo: validation.risk_signals.fatal_combo,
+                negation_conflict: validation.risk_signals.negation_conflict,
+                repair_sensitive_ops: validation.risk_signals.repair_sensitive_ops.clone(),
+            });
+        }
     }
 
     let final_risk_score = validation.risk_score;
@@ -826,18 +912,8 @@ async fn run_design_plan_phase(
             .as_ref()
             .and_then(|r| r.design_patterns.as_deref());
 
-        let final_validation = design::PlanValidation {
-            is_valid: final_is_valid,
-            risk_score: final_risk_score,
-            warnings: final_warnings.clone(),
-            rejected_reason: None,
-            extracted_operations: design::extract_operations_from_text(&design_plan.text),
-            extracted_dimensions: vec![],
-            plan_text: design_plan.text.clone(),
-        };
-
         let conf = confidence::assess_confidence_with_profile(
-            &final_validation,
+            &validation,
             cookbook_ref,
             patterns_ref,
             &config.generation_reliability_profile,
@@ -1180,6 +1256,7 @@ async fn run_generation_pipeline(
                             user_request,
                             code,
                             Some(plan_text),
+                            &config.reviewer_mode,
                         )
                         .await
                         {
@@ -1336,8 +1413,14 @@ async fn run_generation_pipeline(
                 });
 
                 let review_provider = create_provider(config)?;
-                match review::review_code(review_provider, user_request, code, Some(plan_text))
-                    .await
+                match review::review_code(
+                    review_provider,
+                    user_request,
+                    code,
+                    Some(plan_text),
+                    &config.reviewer_mode,
+                )
+                .await
                 {
                     Ok((result, review_usage)) => {
                         if let Some(ref u) = review_usage {
@@ -1619,19 +1702,64 @@ async fn run_generation_pipeline(
         for (part_idx, part_entry) in part_codes.iter_mut().enumerate() {
             if let Some((name, code, pos)) = part_entry.clone() {
                 let part_request = plan.parts[part_idx].description.clone();
+                let semantic_contract =
+                    semantic_validate::build_default_contract(&name, &part_request);
                 let preview_ctx = executor::ExecutionContext {
                     venv_dir: ctx.venv_dir.clone(),
                     runner_script: ctx.runner_script.clone(),
                     config: config.clone(),
                 };
 
-                match evaluate_part_acceptance(&code, &preview_ctx, system_prompt, &part_request)
-                    .await
-                {
+                let mut artifact_result = evaluate_part_acceptance(
+                    &code,
+                    &preview_ctx,
+                    system_prompt,
+                    &part_request,
+                    &name,
+                    Some(&semantic_contract),
+                )
+                .await;
+
+                let should_try_fallback = config.deterministic_fallback_enabled
+                    && config.fallback_after_plan_failures <= 2
+                    && artifact_result.is_err();
+                if should_try_fallback {
+                    if let Some(template) =
+                        fallback_templates::maybe_template_for_part(&name, &part_request)
+                    {
+                        part_failure_signatures
+                            .push(format!("fallback_activated:{}", template.template_id));
+                        let _ = on_event.send(MultiPartEvent::FallbackActivated {
+                            reason: template.reason.clone(),
+                            template_id: template.template_id.to_string(),
+                        });
+                        artifact_result = evaluate_part_acceptance(
+                            &template.code,
+                            &preview_ctx,
+                            system_prompt,
+                            &part_request,
+                            &name,
+                            Some(&semantic_contract),
+                        )
+                        .await;
+                    }
+                }
+
+                match artifact_result {
                     Ok(artifact) => {
+                        let _ = on_event.send(MultiPartEvent::SemanticValidationReport {
+                            part_name: name.clone(),
+                            passed: true,
+                            findings: artifact.semantic_findings.clone(),
+                        });
                         if let Some(stage) = artifact.retry_ladder_stage_reached {
                             accepted_retry_stage =
                                 Some(accepted_retry_stage.map(|s| s.max(stage)).unwrap_or(stage));
+                        }
+                        if let Some(ref report) = artifact.post_geometry_report {
+                            let _ = on_event.send(MultiPartEvent::PostGeometryValidationReport {
+                                report: report.clone(),
+                            });
                         }
                         if let Some(ref warning) = artifact.post_check_warning {
                             let _ = on_event.send(MultiPartEvent::PostGeometryValidationWarning {
@@ -1652,6 +1780,20 @@ async fn run_generation_pipeline(
                         accepted_parts.push((name, artifact.code, pos));
                     }
                     Err(e) => {
+                        let semantic_findings = if e.contains("semantic validation failed: ") {
+                            e.trim_start_matches("semantic validation failed: ")
+                                .split(';')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect::<Vec<_>>()
+                        } else {
+                            vec![e.clone()]
+                        };
+                        let _ = on_event.send(MultiPartEvent::SemanticValidationReport {
+                            part_name: name.clone(),
+                            passed: false,
+                            findings: semantic_findings,
+                        });
                         part_failure_signatures.push(e.clone());
                         *part_entry = None;
                         let _ = on_event.send(MultiPartEvent::PartStlFailed {
@@ -1727,8 +1869,14 @@ async fn run_generation_pipeline(
                     message: "Reviewing assembled code...".to_string(),
                 });
                 let review_provider = create_provider(config)?;
-                match review::review_code(review_provider, user_request, &code, Some(plan_text))
-                    .await
+                match review::review_code(
+                    review_provider,
+                    user_request,
+                    &code,
+                    Some(plan_text),
+                    &config.reviewer_mode,
+                )
+                .await
                 {
                     Ok((result, review_usage)) => {
                         if let Some(ref u) = review_usage {
@@ -2055,7 +2203,15 @@ pub async fn generate_parallel(
                 });
 
                 let review_provider = create_provider(&config)?;
-                match review::review_code(review_provider, &user_request, code, None).await {
+                match review::review_code(
+                    review_provider,
+                    &user_request,
+                    code,
+                    None,
+                    &config.reviewer_mode,
+                )
+                .await
+                {
                     Ok((result, review_usage)) => {
                         if let Some(ref u) = review_usage {
                             total_usage.add(u);
@@ -2496,7 +2652,9 @@ fn extract_code_from_response(response: &str) -> Option<String> {
 struct PartAcceptanceArtifact {
     code: String,
     stl_base64: Option<String>,
+    post_geometry_report: Option<executor::PostGeometryValidationReport>,
     post_check_warning: Option<String>,
+    semantic_findings: Vec<String>,
     retry_ladder_stage_reached: Option<u32>,
 }
 
@@ -2505,6 +2663,8 @@ async fn evaluate_part_acceptance(
     ctx: &executor::ExecutionContext,
     system_prompt: &str,
     part_request: &str,
+    part_name: &str,
+    semantic_contract: Option<&semantic_validate::SemanticPartContract>,
 ) -> Result<PartAcceptanceArtifact, String> {
     let no_event = |_evt: executor::ValidationEvent| {};
     let validation = executor::validate_and_retry(
@@ -2523,10 +2683,31 @@ async fn evaluate_part_acceptance(
             .unwrap_or_else(|| "part validation failed".to_string()));
     }
 
+    let mut semantic_findings = Vec::new();
+    if ctx.config.semantic_contract_strict {
+        let report = validation.post_geometry_report.as_ref().ok_or_else(|| {
+            "semantic validation unavailable: post-geometry report missing".to_string()
+        })?;
+        let contract = semantic_contract
+            .cloned()
+            .unwrap_or_else(|| semantic_validate::build_default_contract(part_name, part_request));
+        let semantic =
+            semantic_validate::validate_part_semantics(&contract, report, &validation.code);
+        semantic_findings = semantic.findings.clone();
+        if !semantic.passed {
+            return Err(format!(
+                "semantic validation failed: {}",
+                semantic.findings.join("; ")
+            ));
+        }
+    }
+
     Ok(PartAcceptanceArtifact {
         code: validation.code,
         stl_base64: validation.stl_base64,
+        post_geometry_report: validation.post_geometry_report,
         post_check_warning: validation.post_check_warning,
+        semantic_findings,
         retry_ladder_stage_reached: validation.retry_ladder_stage_reached,
     })
 }
@@ -2536,8 +2717,19 @@ async fn build_part_preview_stl_with_repair(
     ctx: &executor::ExecutionContext,
     system_prompt: &str,
     part_request: &str,
+    part_name: &str,
+    semantic_contract: Option<&semantic_validate::SemanticPartContract>,
 ) -> Result<String, String> {
-    match evaluate_part_acceptance(part_code, ctx, system_prompt, part_request).await {
+    match evaluate_part_acceptance(
+        part_code,
+        ctx,
+        system_prompt,
+        part_request,
+        part_name,
+        semantic_contract,
+    )
+    .await
+    {
         Ok(artifact) => artifact
             .stl_base64
             .ok_or_else(|| "validated part preview is missing STL output".to_string()),
@@ -2891,11 +3083,17 @@ pub async fn retry_part(
                         runner_script,
                         config: config.clone(),
                     };
+                    let semantic_contract = semantic_validate::build_default_contract(
+                        &part_name,
+                        &part_spec.description,
+                    );
                     match build_part_preview_stl_with_repair(
                         &part_code,
                         &preview_ctx,
                         &system_prompt,
                         &part_spec.description,
+                        &part_name,
+                        Some(&semantic_contract),
                     )
                     .await
                     {

@@ -37,6 +37,10 @@ export interface AppConfig {
   generation_reliability_profile: 'reliability_first' | 'balanced' | 'fidelity_first';
   preview_on_partial_failure: boolean;
   max_generation_runtime_seconds: number;
+  semantic_contract_strict: boolean;
+  reviewer_mode: 'advisory_only' | 'rewrite_allowed';
+  deterministic_fallback_enabled: boolean;
+  fallback_after_plan_failures: number;
   mechanisms_enabled: boolean;
   mechanism_import_enabled: boolean;
   mechanism_cache_max_mb: number;
@@ -144,7 +148,16 @@ export interface PendingAssemblyPart {
 
 export type MultiPartEvent =
   | { kind: 'DesignPlan'; plan_text: string }
-  | { kind: 'PlanValidation'; risk_score: number; warnings: string[]; is_valid: boolean; rejected_reason: string | null }
+  | {
+      kind: 'PlanValidation';
+      risk_score: number;
+      warnings: string[];
+      is_valid: boolean;
+      rejected_reason: string | null;
+      fatal_combo: boolean;
+      negation_conflict: boolean;
+      repair_sensitive_ops: string[];
+    }
   | { kind: 'ConfidenceAssessment'; level: 'high' | 'medium' | 'low'; score: number; cookbook_matches: string[]; warnings: string[]; message: string }
   | { kind: 'PlanStatus'; message: string }
   | { kind: 'PlanResult'; plan: GenerationPlan }
@@ -163,8 +176,25 @@ export type MultiPartEvent =
   | { kind: 'StaticValidationReport'; passed: boolean; findings: string[] }
   | { kind: 'ValidationSuccess'; attempt: number; message: string }
   | { kind: 'ValidationFailed'; attempt: number; error_category: string; error_message: string; will_retry: boolean }
-  | { kind: 'PostGeometryValidationReport'; report: { watertight: boolean; manifold: boolean; degenerate_faces: number; euler_number: number; triangle_count: number; bbox_ok: boolean; warnings: string[] } }
+  | {
+      kind: 'PostGeometryValidationReport';
+      report: {
+        watertight: boolean;
+        manifold: boolean;
+        degenerate_faces: number;
+        euler_number: number;
+        triangle_count: number;
+        component_count: number;
+        bounds_min: [number, number, number];
+        bounds_max: [number, number, number];
+        volume: number;
+        bbox_ok: boolean;
+        warnings: string[];
+      };
+    }
   | { kind: 'PostGeometryValidationWarning'; message: string }
+  | { kind: 'SemanticValidationReport'; part_name: string; passed: boolean; findings: string[] }
+  | { kind: 'FallbackActivated'; reason: string; template_id: string }
   | { kind: 'RetrievalStatus'; message: string; items: { source: string; id: string; title: string; score: number }[]; used_embeddings: boolean; lexical_fallback: boolean }
   | { kind: 'IterativeStart'; total_steps: number; steps: { index: number; name: string; description: string; operations: string[] }[] }
   | { kind: 'IterativeStepStarted'; step_index: number; step_name: string; description: string }

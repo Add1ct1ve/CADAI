@@ -847,7 +847,7 @@
           case 'ValidationSuccess':
             {
               const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-              chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+              chatStore.updateLastMessage(`${lastContent6}\nExecution validation passed.`);
               updateConfidence({ validationSuccess: true, validationAttempt: event.attempt });
             }
             break;
@@ -869,7 +869,7 @@
             {
               const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
               const summary = event.report.manifold && event.report.bbox_ok
-                ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
+                ? `Geometry checks passed (components: ${event.report.component_count}, triangles: ${event.report.triangle_count}).`
                 : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
               chatStore.updateLastMessage(`${last}\n${summary}`);
             }
@@ -879,6 +879,26 @@
             {
               const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
               chatStore.updateLastMessage(`${last}\n${event.message}`);
+            }
+            break;
+
+          case 'SemanticValidationReport':
+            {
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              const details = event.findings.length > 0 ? `: ${event.findings.join('; ')}` : '';
+              const msg = event.passed
+                ? `Semantic validation passed for ${event.part_name}${details}`
+                : `Semantic validation failed for ${event.part_name}${details}`;
+              chatStore.updateLastMessage(`${last}\n${msg}`);
+            }
+            break;
+
+          case 'FallbackActivated':
+            {
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(
+                `${last}\nDeterministic fallback activated (${event.template_id}): ${event.reason}`
+              );
             }
             break;
 
@@ -1293,8 +1313,12 @@
             case 'PlanValidation':
               if (!event.is_valid) {
                 const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const extras = [
+                  event.fatal_combo ? 'fatal combo' : null,
+                  event.negation_conflict ? 'negation conflict' : null,
+                ].filter(Boolean).join(', ');
                 chatStore.updateLastMessage(
-                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
+                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}${extras ? ` [${extras}]` : ''}`
                 );
               }
               break;
@@ -1459,7 +1483,7 @@
             case 'ValidationSuccess':
               {
                 const lastContent6 = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-                chatStore.updateLastMessage(`${lastContent6}\nCode validated successfully.`);
+                chatStore.updateLastMessage(`${lastContent6}\nExecution validation passed.`);
                 updateConfidence({ validationSuccess: true, validationAttempt: event.attempt });
               }
               break;
@@ -1481,7 +1505,7 @@
               {
                 const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
                 const summary = event.report.manifold && event.report.bbox_ok
-                  ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
+                  ? `Geometry checks passed (components: ${event.report.component_count}, triangles: ${event.report.triangle_count}).`
                   : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
                 chatStore.updateLastMessage(`${last}\n${summary}`);
               }
@@ -1491,6 +1515,26 @@
               {
                 const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
                 chatStore.updateLastMessage(`${last}\n${event.message}`);
+              }
+              break;
+
+            case 'SemanticValidationReport':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const details = event.findings.length > 0 ? `: ${event.findings.join('; ')}` : '';
+                const msg = event.passed
+                  ? `Semantic validation passed for ${event.part_name}${details}`
+                  : `Semantic validation failed for ${event.part_name}${details}`;
+                chatStore.updateLastMessage(`${last}\n${msg}`);
+              }
+              break;
+
+            case 'FallbackActivated':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(
+                  `${last}\nDeterministic fallback activated (${event.template_id}): ${event.reason}`
+                );
               }
               break;
 
@@ -1729,8 +1773,12 @@
             case 'PlanValidation':
               if (!event.is_valid) {
                 const lastContent = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                const extras = [
+                  event.fatal_combo ? 'fatal combo' : null,
+                  event.negation_conflict ? 'negation conflict' : null,
+                ].filter(Boolean).join(', ');
                 chatStore.updateLastMessage(
-                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}`
+                  `${lastContent}\n\u26A0 Plan risk score: ${event.risk_score}/10 — ${event.rejected_reason ?? 'Re-planning...'}${extras ? ` [${extras}]` : ''}`
                 );
               }
               break;
