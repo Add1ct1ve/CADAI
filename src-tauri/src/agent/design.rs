@@ -28,6 +28,8 @@ const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your jo
 You must think carefully about what the object actually looks like and how to build it with CadQuery primitives. Do NOT write any code — describe the geometry.
 Do not include hidden reasoning, self-critique, or internal deliberation in the output.
 Output only the final plan sections listed below.
+The first line of your response MUST be exactly: `### Object Analysis`
+Do not output any preamble text (e.g., "Load template...", "Let me think...", "Key requirements:").
 
 ## Your Output Format
 
@@ -453,7 +455,7 @@ fn sanitize_plan_text(plan_text: &str) -> String {
 fn normalize_section_labels(plan_text: &str) -> Option<String> {
     fn parse_section_label_line(line: &str) -> Option<(&'static str, String)> {
         let re = Regex::new(
-            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|cadquery approach|build plan(?: structure)?|approximation notes)[*_`#\s]*:?\s*(.*)$",
+            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|housing analysis|cadquery approach|modeling approach|cad approach|build plan(?: structure)?|build steps|implementation steps|approximation notes)[*_`#\s]*:?\s*(.*)$",
         )
         .unwrap();
         let caps = re.captures(line)?;
@@ -463,11 +465,18 @@ fn normalize_section_labels(plan_text: &str) -> Option<String> {
             .map(|m| m.as_str().trim().to_string())
             .unwrap_or_default();
 
-        let label = if raw_label == "object analysis" {
+        let label = if raw_label == "object analysis" || raw_label == "housing analysis" {
             "Object Analysis"
-        } else if raw_label == "cadquery approach" {
+        } else if raw_label == "cadquery approach"
+            || raw_label == "modeling approach"
+            || raw_label == "cad approach"
+        {
             "CadQuery Approach"
-        } else if raw_label == "build plan" || raw_label == "build plan structure" {
+        } else if raw_label == "build plan"
+            || raw_label == "build plan structure"
+            || raw_label == "build steps"
+            || raw_label == "implementation steps"
+        {
             "Build Plan"
         } else if raw_label == "approximation notes" {
             "Approximation Notes"
@@ -560,12 +569,27 @@ fn count_boolean_mentions_in_build_plan(plan_text: &str) -> usize {
 fn has_section(plan_text: &str, heading: &str) -> bool {
     let lower = plan_text.to_lowercase();
     let heading_lower = heading.to_lowercase();
-    // Match "### Build Plan", "## Build Plan", or just "Build Plan" on its own line
-    lower.contains(&format!("### {}", heading_lower))
-        || lower.contains(&format!("## {}", heading_lower))
-        || lower
-            .lines()
-            .any(|line| line.trim().to_lowercase() == heading_lower)
+    let aliases: Vec<String> = match heading_lower.as_str() {
+        "object analysis" => vec!["object analysis".to_string(), "housing analysis".to_string()],
+        "cadquery approach" => vec![
+            "cadquery approach".to_string(),
+            "modeling approach".to_string(),
+            "cad approach".to_string(),
+        ],
+        "build plan" => vec![
+            "build plan".to_string(),
+            "build plan structure".to_string(),
+            "build steps".to_string(),
+            "implementation steps".to_string(),
+        ],
+        _ => vec![heading_lower.clone()],
+    };
+
+    aliases.iter().any(|alias| {
+        lower.contains(&format!("### {}", alias))
+            || lower.contains(&format!("## {}", alias))
+            || lower.lines().any(|line| line.trim().to_lowercase() == *alias)
+    })
 }
 
 /// Public wrapper for `extract_operations` — used by `iterative.rs` to detect risky ops.
@@ -587,17 +611,31 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
 
     // Scope operation/risk extraction to numbered Build Plan steps only.
     let build_plan_steps_text = extract_build_plan_steps_text(plan_text);
-    let operations = build_plan_steps_text
+    let step_operations = build_plan_steps_text
         .as_ref()
         .map(|s| extract_operations(s))
         .unwrap_or_default();
 
     // Scope dimensional risk checks to numbered Build Plan steps only.
     // This avoids false negatives/positives from prose or leaked "thinking" text.
-    let dimensions = build_plan_steps_text
+    let step_dimensions = build_plan_steps_text
         .as_ref()
         .map(|s| extract_dimensions(s))
         .unwrap_or_default();
+    // Presence checks may fallback to full text when numbered steps are missing.
+    let full_operations = extract_operations(plan_text);
+    let full_dimensions = extract_dimensions(plan_text);
+    let operations_for_presence = if step_operations.is_empty() {
+        full_operations.clone()
+    } else {
+        step_operations.clone()
+    };
+    let dimensions_for_presence = if step_dimensions.is_empty() {
+        full_dimensions.clone()
+    } else {
+        step_dimensions.clone()
+    };
+
     let fillet_radii = extract_fillet_radii(plan_text);
     let chamfer_sizes = extract_chamfer_sizes(plan_text);
     // Scope boolean counting to numbered Build Plan steps only
@@ -606,13 +644,13 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         .map(|s| count_boolean_mentions(s))
         .unwrap_or(0);
 
-    let has_shell = operations.contains(&"shell".to_string());
-    let has_loft = operations.contains(&"loft".to_string());
-    let has_sweep = operations.contains(&"sweep".to_string());
-    let has_revolve = operations.contains(&"revolve".to_string());
-    let has_chamfer = operations.contains(&"chamfer".to_string());
+    let has_shell = step_operations.contains(&"shell".to_string());
+    let has_loft = step_operations.contains(&"loft".to_string());
+    let has_sweep = step_operations.contains(&"sweep".to_string());
+    let has_revolve = step_operations.contains(&"revolve".to_string());
+    let has_chamfer = step_operations.contains(&"chamfer".to_string());
 
-    let min_positive_dimension = dimensions
+    let min_positive_dimension = dimensions_for_presence
         .iter()
         .copied()
         .filter(|&d| d > 0.0)
@@ -677,7 +715,7 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     }
 
     // Rule 7: negative dimensions
-    for &d in &dimensions {
+    for &d in &step_dimensions {
         if d < 0.0 {
             risk += 4;
             warnings.push(format!(
@@ -689,7 +727,7 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     }
 
     // Rule 8: huge dimensions
-    for &d in &dimensions {
+    for &d in &step_dimensions {
         if d > 10000.0 {
             risk += 3;
             warnings.push(format!(
@@ -701,7 +739,7 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     }
 
     // Rule 9: tiny dimensions
-    for &d in &dimensions {
+    for &d in &step_dimensions {
         if d > 0.0 && d < 0.01 {
             risk += 3;
             warnings.push(format!(
@@ -724,20 +762,20 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     }
 
     // Rule 11: no dimensions
-    if dimensions.is_empty() {
+    if dimensions_for_presence.is_empty() {
         risk += 2;
         warnings.push("no concrete dimensions found in plan".to_string());
     }
 
     // Rule 12: no operations
-    if operations.is_empty() {
+    if operations_for_presence.is_empty() {
         risk += 1;
         warnings.push("no CadQuery operations mentioned in plan".to_string());
     }
 
     // Rule 13: shell with thin walls (skip dimensions that are fillet radii or chamfer sizes)
     if has_shell {
-        for &d in &dimensions {
+        for &d in &step_dimensions {
             if d > 0.0 && d < 2.0 {
                 let is_fillet = fillet_radii.iter().any(|&r| (r - d).abs() < 0.001);
                 let is_chamfer = chamfer_sizes.iter().any(|&c| (c - d).abs() < 0.001);
@@ -777,7 +815,11 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Clamp to 10
     risk = risk.min(10);
 
-    let is_valid = risk <= 7;
+    let has_required_structure = has_section(plan_text, "Object Analysis")
+        && has_section(plan_text, "CadQuery Approach")
+        && has_section(plan_text, "Build Plan")
+        && build_plan_steps_text.is_some();
+    let is_valid = risk <= 7 && has_required_structure;
     let rejected_reason = if !is_valid {
         warnings.first().cloned()
     } else {
@@ -789,8 +831,8 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         risk_score: risk,
         warnings,
         rejected_reason,
-        extracted_operations: operations,
-        extracted_dimensions: dimensions,
+        extracted_operations: step_operations,
+        extracted_dimensions: step_dimensions,
         plan_text: plan_text.to_string(),
     }
 }
@@ -823,7 +865,9 @@ pub fn build_rejection_feedback(validation: &PlanValidation) -> String {
          - Use simpler operations where possible (prefer box+cylinder+booleans over complex lofts)\n\
          - Use realistic, achievable dimensions\n\
          - Apply fillets and chamfers as the LAST operations\n\
-         - Include a '### Build Plan' section with numbered steps\n"
+         - Output EXACTLY these headings: `### Object Analysis`, `### CadQuery Approach`, `### Build Plan`, `### Approximation Notes`\n\
+         - Include numbered steps in Build Plan (`1.`, `2.`, `3.`)\n\
+         - Do NOT include any preamble text before `### Object Analysis`\n"
     );
 
     feedback
