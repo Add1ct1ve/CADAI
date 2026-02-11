@@ -44,11 +44,11 @@ fn default_units() -> String {
 }
 
 fn default_grid_size() -> f64 {
-    100.0
+    500.0
 }
 
 fn default_grid_spacing() -> f64 {
-    1.0
+    2.0
 }
 
 fn default_snap_translate() -> Option<f64> {
@@ -76,8 +76,8 @@ impl Default for AppConfig {
             agent_rules_preset: None,
             enable_code_review: true,
             display_units: "mm".to_string(),
-            grid_size: 100.0,
-            grid_spacing: 1.0,
+            grid_size: 500.0,
+            grid_spacing: 2.0,
             snap_translate: Some(1.0),
             snap_rotation: Some(15.0),
             snap_sketch: Some(0.5),
