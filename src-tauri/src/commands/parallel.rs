@@ -1535,48 +1535,43 @@ async fn run_generation_pipeline(
         emit_usage(on_event, "generate", total_usage, provider_id, model_id);
     }
 
-    // Run per-part STL tasks and await completion so preview events arrive before command ends.
+    // Run per-part STL generation before assembly so preview can still work if final assembly fails.
     if let Some(ctx) = execution_ctx {
-        let mut stl_tasks = Vec::new();
         for (part_idx, part_entry) in part_codes.iter().enumerate() {
             if let Some((name, code, _pos)) = part_entry {
                 let part_name = name.clone();
                 let part_code = code.clone();
-                let venv_dir = ctx.venv_dir.clone();
-                let runner_script = ctx.runner_script.clone();
-                let evt_channel = on_event.clone();
+                let part_request = plan.parts[part_idx].description.clone();
+                let preview_ctx = executor::ExecutionContext {
+                    venv_dir: ctx.venv_dir.clone(),
+                    runner_script: ctx.runner_script.clone(),
+                    config: config.clone(),
+                };
 
-                stl_tasks.push(tokio::spawn(async move {
-                    match executor::execute_with_timeout_isolated(
-                        &part_code,
-                        &venv_dir,
-                        &runner_script,
-                    )
-                    .await
-                    {
-                        Ok(exec_result) => {
-                            let stl_base64 = base64::engine::general_purpose::STANDARD
-                                .encode(&exec_result.stl_data);
-                            let _ = evt_channel.send(MultiPartEvent::PartStlReady {
-                                part_index: part_idx,
-                                part_name,
-                                stl_base64,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = evt_channel.send(MultiPartEvent::PartStlFailed {
-                                part_index: part_idx,
-                                part_name: part_name.clone(),
-                                error: e,
-                            });
-                        }
+                match build_part_preview_stl_with_repair(
+                    &part_code,
+                    &preview_ctx,
+                    system_prompt,
+                    &part_request,
+                )
+                .await
+                {
+                    Ok(stl_base64) => {
+                        let _ = on_event.send(MultiPartEvent::PartStlReady {
+                            part_index: part_idx,
+                            part_name,
+                            stl_base64,
+                        });
                     }
-                }));
+                    Err(e) => {
+                        let _ = on_event.send(MultiPartEvent::PartStlFailed {
+                            part_index: part_idx,
+                            part_name,
+                            error: e,
+                        });
+                    }
+                }
             }
-        }
-
-        for task in stl_tasks {
-            let _ = task.await;
         }
     }
 
@@ -2273,6 +2268,39 @@ fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
 }
 
+async fn build_part_preview_stl_with_repair(
+    part_code: &str,
+    ctx: &executor::ExecutionContext,
+    system_prompt: &str,
+    part_request: &str,
+) -> Result<String, String> {
+    match executor::execute_with_timeout_isolated(part_code, &ctx.venv_dir, &ctx.runner_script)
+        .await
+    {
+        Ok(exec_result) => {
+            Ok(base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data))
+        }
+        Err(first_err) => {
+            let no_event = |_evt: executor::ValidationEvent| {};
+            match executor::validate_and_retry(
+                part_code.to_string(),
+                ctx,
+                system_prompt,
+                Some(part_request),
+                &no_event,
+            )
+            .await
+            {
+                Ok(validation) if validation.success => validation
+                    .stl_base64
+                    .ok_or_else(|| "validated part preview is missing STL output".to_string()),
+                Ok(validation) => Err(validation.error.unwrap_or(first_err)),
+                Err(e) => Err(format!("part preview validation error: {}", e)),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_plan, request_requires_multipart_contract};
@@ -2614,17 +2642,20 @@ pub async fn retry_part(
                     let part_name = part_spec.name.clone();
                     let evt_channel = on_event.clone();
                     let pi = part_index;
-
-                    match executor::execute_with_timeout_isolated(
+                    let preview_ctx = executor::ExecutionContext {
+                        venv_dir,
+                        runner_script,
+                        config: config.clone(),
+                    };
+                    match build_part_preview_stl_with_repair(
                         &part_code,
-                        &venv_dir,
-                        &runner_script,
+                        &preview_ctx,
+                        &system_prompt,
+                        &part_spec.description,
                     )
                     .await
                     {
-                        Ok(exec_result) => {
-                            let stl_base64 = base64::engine::general_purpose::STANDARD
-                                .encode(&exec_result.stl_data);
+                        Ok(stl_base64) => {
                             let _ = evt_channel.send(MultiPartEvent::PartStlReady {
                                 part_index: pi,
                                 part_name,
