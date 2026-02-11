@@ -139,7 +139,7 @@ fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<Strin
         }
     }
 
-    if combined.contains("slot") {
+    if !is_plate_name && combined.contains("slot") {
         hints.push("slot".to_string());
     }
 
@@ -366,6 +366,25 @@ mod tests {
             !hints.contains(&"lip".to_string()) && !hints.contains(&"ridge".to_string()),
             "word 'solid' must not trigger lid/cover plate hints"
         );
+    }
+
+    #[test]
+    fn back_plate_with_slot_reference_does_not_require_slot() {
+        // A back_plate description that references housing slot parameters
+        // (e.g. "band_slot_depth") must NOT require "slot" as a feature hint.
+        let hints = infer_required_feature_hints(
+            "back_plate",
+            "Single editable back plate solid. Base 30x24mm, thickness 1.5mm. \
+             Match band_slot_depth 5mm clearance. Add insertion lip and O-ring ridge.",
+        );
+        assert!(
+            !hints.contains(&"slot".to_string()),
+            "back_plate should not require 'slot' hint even when description mentions slot params, got: {:?}",
+            hints
+        );
+        // But it should still get lip and ridge hints
+        assert!(hints.contains(&"lip".to_string()), "back_plate should require 'lip'");
+        assert!(hints.contains(&"ridge".to_string()), "back_plate should require 'ridge'");
     }
 
     #[test]
