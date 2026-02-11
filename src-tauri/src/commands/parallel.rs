@@ -2001,11 +2001,17 @@ async fn run_generation_pipeline(
                 let on_validation_event =
                     |evt: executor::ValidationEvent| forward_validation_event(on_event, evt);
 
+                // Skip the crude bbox sanity check for the assembled code.
+                // Individual parts were already validated by their semantic
+                // contracts.  Passing the raw user request here causes false
+                // positives because parse_dimensions_from_text picks up feature
+                // dimensions like "wall=1.8mm" instead of overall part size,
+                // leading to "max extent 28mm vs requested 1.80mm" rejections.
                 let validation_result = executor::validate_and_retry(
                     final_code.clone(),
                     ctx,
                     system_prompt,
-                    Some(user_request),
+                    None,
                     &on_validation_event,
                 )
                 .await?;
@@ -2952,11 +2958,22 @@ async fn evaluate_part_acceptance(
     semantic_contract: Option<&semantic_validate::SemanticPartContract>,
 ) -> Result<PartAcceptanceArtifact, String> {
     let no_event = |_evt: executor::ValidationEvent| {};
+    // When a semantic contract is provided, skip the crude bbox sanity check in
+    // post-geometry validation.  The semantic contract has its own, smarter bbox
+    // check that uses parse_dimension_triple (LxWxH) instead of matching every
+    // number-followed-by-mm in the description.  Passing the raw part description
+    // to the crude check causes false rejections when it picks up feature
+    // dimensions (e.g. "thickness 1.5mm") rather than overall part size.
+    let bbox_hint = if semantic_contract.is_some() {
+        None
+    } else {
+        Some(part_request)
+    };
     let validation = executor::validate_and_retry(
         part_code.to_string(),
         ctx,
         system_prompt,
-        Some(part_request),
+        bbox_hint,
         &no_event,
     )
     .await

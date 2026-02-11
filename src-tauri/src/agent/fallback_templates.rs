@@ -197,16 +197,38 @@ pub fn maybe_template_for_part(part_name: &str, description: &str) -> Option<Fal
     let lower_desc = description.to_lowercase();
     let combined = format!("{} {}", lower_name, lower_desc);
 
-    // Check for explicit back-plate/cover/lid keywords.
+    // Priority 1: Match on part NAME for housing/enclosure.
+    // This must come first because a housing description may reference other
+    // parts (e.g. "internal ledge for back plate"), which would otherwise
+    // trigger a false plate-template match.
+    let is_housing_name = lower_name.contains("housing")
+        || lower_name.contains("enclosure")
+        || lower_name == "case"
+        || lower_name.contains("body")
+        || lower_name.contains("main_body");
+    if is_housing_name {
+        return Some(simple_housing_with_slots_template(part_name, description));
+    }
+
+    // Priority 2: Match on part NAME for explicit back-plate/cover/lid.
     // Use word-boundary matching for short words ("lid", "cover") to avoid false
     // positives from substrings (e.g. "solid" contains "lid").
-    let is_plate_part = combined.contains("back_plate")
-        || combined.contains("back plate")
-        || combined.contains("backplate")
-        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&combined)
-        || regex::Regex::new(r"\blid\b").unwrap().is_match(&combined);
+    let is_plate_name = lower_name.contains("back_plate")
+        || lower_name.contains("backplate")
+        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&lower_name)
+        || regex::Regex::new(r"\blid\b").unwrap().is_match(&lower_name);
+    if is_plate_name {
+        return Some(plate_with_lip_ridge_template(part_name, description));
+    }
 
-    if is_plate_part {
+    // Priority 3: Fall back to description-based matching for parts whose
+    // names don't directly indicate their type.
+    let is_plate_desc = lower_desc.contains("back_plate")
+        || lower_desc.contains("back plate")
+        || lower_desc.contains("backplate")
+        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&lower_desc)
+        || regex::Regex::new(r"\blid\b").unwrap().is_match(&lower_desc);
+    if is_plate_desc {
         return Some(plate_with_lip_ridge_template(part_name, description));
     }
     if combined.contains("snap") && combined.contains("box") {
@@ -332,5 +354,28 @@ mod tests {
         let plan = maybe_fallback_plan(whoop_request)
             .expect("Whoop-style request should trigger enclosure fallback plan");
         assert_eq!(plan.template_id, "enclosure_with_back_plate");
+    }
+
+    #[test]
+    fn housing_with_back_plate_in_description_matches_housing_template() {
+        // Real-world case: the planner generates a housing description that
+        // references "back plate" as a cross-part constraint.  The template
+        // selector must NOT misclassify this as a plate part.
+        let tpl = maybe_template_for_part(
+            "housing",
+            "Main body: Extrude a rounded rectangle. Shell from bottom. Create internal ledge for back plate. Add O-ring groove. Cut band slots.",
+        )
+        .expect("housing with 'back plate' reference in description should still match housing template");
+        assert_eq!(tpl.template_id, "simple_housing_with_slots");
+    }
+
+    #[test]
+    fn body_part_name_matches_housing_template() {
+        let tpl = maybe_template_for_part(
+            "main_body",
+            "Primary enclosure body with internal cavity",
+        )
+        .expect("main_body should match housing template");
+        assert_eq!(tpl.template_id, "simple_housing_with_slots");
     }
 }
