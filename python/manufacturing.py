@@ -182,6 +182,28 @@ def count_degenerate_faces(mesh):
     return 0
 
 
+def count_connected_components(mesh):
+    """Count connected components across trimesh versions."""
+    body_attr = getattr(mesh, "body_count", None)
+    if body_attr is not None:
+        try:
+            count = int(body_attr() if callable(body_attr) else body_attr)
+            if count > 0:
+                return count
+        except Exception:
+            pass
+
+    try:
+        parts = mesh.split(only_watertight=False)
+        count = int(len(parts))
+        if count > 0:
+            return count
+    except Exception:
+        pass
+
+    return 1
+
+
 def cmd_export_3mf(args):
     """Export model as 3MF with optional per-object colors."""
     if len(args) < 2:
@@ -269,9 +291,14 @@ def cmd_mesh_check(args):
     if degen > 0:
         issues.append(f"{degen} degenerate (zero-area) faces found")
 
+    component_count = count_connected_components(mesh)
+    expected_euler = 2 * component_count
+
     euler = int(mesh.euler_number)
-    if euler != 2:
-        issues.append(f"Euler number is {euler} (expected 2 for a closed solid)")
+    if watertight and euler != expected_euler:
+        issues.append(
+            f"Euler number is {euler} (expected {expected_euler} for {component_count} closed component(s))"
+        )
 
     volume = float(mesh.volume) if mesh.is_watertight else 0.0
     if mesh.is_watertight and volume < 0:
@@ -286,6 +313,8 @@ def cmd_mesh_check(args):
         "winding_consistent": winding,
         "degenerate_faces": degen,
         "euler_number": euler,
+        "component_count": component_count,
+        "expected_euler": expected_euler,
         "volume": round(volume, 4),
         "triangle_count": tri_count,
         "bounds": bounds,

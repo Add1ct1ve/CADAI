@@ -784,7 +784,6 @@
 
           case 'PartStlFailed':
             if (partProgress[event.part_index]) {
-              partProgress[event.part_index].status = 'failed';
               partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
             }
             break;
@@ -1150,7 +1149,6 @@
               break;
             case 'PartStlFailed':
               if (partProgress[event.part_index]) {
-                partProgress[event.part_index].status = 'failed';
                 partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
               }
               break;
@@ -1361,7 +1359,6 @@
 
             case 'PartStlFailed':
               if (partProgress[event.part_index]) {
-                partProgress[event.part_index].status = 'failed';
                 partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
               }
               break;
