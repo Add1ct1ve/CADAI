@@ -26,6 +26,8 @@ pub struct PlanValidation {
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.
 
 You must think carefully about what the object actually looks like and how to build it with CadQuery primitives. Do NOT write any code — describe the geometry.
+Do not include hidden reasoning, self-critique, or internal deliberation in the output.
+Output only the final plan sections listed below.
 
 ## Your Output Format
 
@@ -403,6 +405,36 @@ fn extract_section(plan_text: &str, heading: &str) -> Option<String> {
     }
 }
 
+/// Extract only numbered build-step lines from the Build Plan section.
+/// Returns None if there is no Build Plan section or no numbered steps.
+fn extract_build_plan_steps_text(plan_text: &str) -> Option<String> {
+    let section = extract_section(plan_text, "Build Plan")?;
+    let step_re = Regex::new(r"^\s*\d+\.\s+.+").unwrap();
+    let steps: Vec<String> = section
+        .lines()
+        .filter(|line| step_re.is_match(line))
+        .map(|line| line.trim().to_string())
+        .collect();
+    if steps.is_empty() {
+        None
+    } else {
+        Some(steps.join("\n"))
+    }
+}
+
+/// Remove any preamble text before the first expected section heading.
+/// This prevents leaked internal reasoning from polluting validators and UI.
+fn sanitize_plan_text(plan_text: &str) -> String {
+    let heading_re =
+        Regex::new(r"(?im)^#{2,3}\s+(object analysis|cadquery approach|build plan|approximation notes)\s*$")
+            .unwrap();
+    if let Some(m) = heading_re.find(plan_text) {
+        plan_text[m.start()..].trim().to_string()
+    } else {
+        plan_text.trim().to_string()
+    }
+}
+
 /// Count total mentions of boolean operations (not unique — repeated mentions count).
 fn count_boolean_mentions(plan_text: &str) -> usize {
     let lower = plan_text.to_lowercase();
@@ -418,6 +450,7 @@ fn count_boolean_mentions(plan_text: &str) -> usize {
 
 /// Count boolean mentions scoped to the Build Plan section only.
 /// Falls back to the full text if no Build Plan section is found.
+#[cfg(test)]
 fn count_boolean_mentions_in_build_plan(plan_text: &str) -> usize {
     let section_text =
         extract_section(plan_text, "Build Plan").unwrap_or_else(|| plan_text.to_string());
@@ -450,16 +483,21 @@ pub fn extract_operations_from_text(text: &str) -> Vec<String> {
 /// Extracts operations and dimensions, calculates a risk score (0-10),
 /// and rejects plans with a score > 7.
 pub fn validate_plan(plan_text: &str) -> PlanValidation {
-    // Scope operations to the Build Plan section (fall back to full text)
-    let build_plan_text =
-        extract_section(plan_text, "Build Plan").unwrap_or_else(|| plan_text.to_string());
-    let operations = extract_operations(&build_plan_text);
+    // Scope operation/risk extraction to numbered Build Plan steps only.
+    let build_plan_steps_text = extract_build_plan_steps_text(plan_text);
+    let operations = build_plan_steps_text
+        .as_ref()
+        .map(|s| extract_operations(s))
+        .unwrap_or_default();
 
     let dimensions = extract_dimensions(plan_text);
     let fillet_radii = extract_fillet_radii(plan_text);
     let chamfer_sizes = extract_chamfer_sizes(plan_text);
-    // Scope boolean counting to Build Plan section
-    let boolean_count = count_boolean_mentions_in_build_plan(plan_text);
+    // Scope boolean counting to numbered Build Plan steps only
+    let boolean_count = build_plan_steps_text
+        .as_ref()
+        .map(|s| count_boolean_mentions(s))
+        .unwrap_or(0);
 
     let has_shell = operations.contains(&"shell".to_string());
     let has_loft = operations.contains(&"loft".to_string());
@@ -571,6 +609,11 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     if !has_section(plan_text, "Build Plan") {
         risk += 2;
         warnings.push("plan is missing a 'Build Plan' section with numbered steps".to_string());
+    }
+    // Rule 10b: Build Plan exists but no numbered steps
+    if has_section(plan_text, "Build Plan") && build_plan_steps_text.is_none() {
+        risk += 2;
+        warnings.push("Build Plan section must include numbered steps (1., 2., 3., ...)".to_string());
     }
 
     // Rule 11: no dimensions
@@ -715,7 +758,12 @@ pub async fn plan_geometry_with_feedback(
     ];
 
     let (plan_text, usage) = provider.complete(&messages, Some(2048)).await?;
-    Ok((DesignPlan { text: plan_text }, usage))
+    Ok((
+        DesignPlan {
+            text: sanitize_plan_text(&plan_text),
+        },
+        usage,
+    ))
 }
 
 /// Call the AI to produce a geometry design plan for the user's request.
@@ -749,7 +797,12 @@ pub async fn plan_geometry(
     // and we want the full text before proceeding to code generation.
     let (plan_text, usage) = provider.complete(&messages, Some(2048)).await?;
 
-    Ok((DesignPlan { text: plan_text }, usage))
+    Ok((
+        DesignPlan {
+            text: sanitize_plan_text(&plan_text),
+        },
+        usage,
+    ))
 }
 
 #[cfg(test)]
@@ -1218,6 +1271,49 @@ overhangs:
         let count = count_boolean_mentions_in_build_plan(text);
         // Build Plan has no boolean ops
         assert_eq!(count, 0, "prose 'cut' and 'fuse' should not be counted");
+    }
+
+    #[test]
+    fn test_extract_build_plan_steps_text_numbered_only() {
+        let text = "### Build Plan\nOverview line.\n1. Extrude base.\n2. Cut slot.\nNotes.";
+        let steps = extract_build_plan_steps_text(text).unwrap();
+        assert!(steps.contains("1. Extrude base."));
+        assert!(steps.contains("2. Cut slot."));
+        assert!(!steps.contains("Overview line."));
+        assert!(!steps.contains("Notes."));
+    }
+
+    #[test]
+    fn test_validate_ignores_reasoning_outside_numbered_steps() {
+        let text = "### Object Analysis\nbooleans booleans booleans cut union fuse intersect.\n\n\
+            ### CadQuery Approach\nThis paragraph repeats cut/union/fuse many times cut cut cut.\n\n\
+            ### Build Plan\n1. Extrude a 42x28x5mm rounded rectangle.";
+        let v = validate_plan(text);
+        assert!(
+            !v.warnings.iter().any(|w| w.contains("boolean operations")),
+            "should not warn on booleans outside numbered build steps: {:?}",
+            v.warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_requires_numbered_steps_when_build_plan_exists() {
+        let text = "### Object Analysis\nA box.\n\n\
+            ### CadQuery Approach\nUse extrude.\n\n\
+            ### Build Plan\nCreate a 50x30x20mm box without numbering.";
+        let v = validate_plan(text);
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("must include numbered steps")));
+    }
+
+    #[test]
+    fn test_sanitize_plan_text_strips_preamble() {
+        let text = "Thinking aloud...\nMore analysis...\n\n### Object Analysis\nA part.";
+        let sanitized = sanitize_plan_text(text);
+        assert!(sanitized.starts_with("### Object Analysis"));
+        assert!(!sanitized.contains("Thinking aloud"));
     }
 
     #[test]
