@@ -130,9 +130,9 @@
 
       // Apply persisted grid and theme settings
       const cfg = settingsStore.config;
-      if (cfg.grid_size !== 100 || cfg.grid_spacing !== 1) {
-        engine.rebuildGrid(cfg.grid_size, cfg.grid_spacing);
-      }
+      const effectiveGridSize = Math.max(cfg.grid_size, 500);
+      const effectiveGridSpacing = Math.max(cfg.grid_spacing, 2);
+      engine.rebuildGrid(effectiveGridSize, effectiveGridSpacing);
       if (cfg.theme === 'light') {
         engine.setThemeColors('light');
       }

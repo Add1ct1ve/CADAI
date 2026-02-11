@@ -31,6 +31,7 @@ export class ViewportEngine {
   private grid: THREE.GridHelper;
   private axes: THREE.AxesHelper;
   private viewHelper: ConfigurableViewHelper;
+  private viewHelperHealthy = true;
   private clock: THREE.Clock;
   private _isAnimatingView = false;
 
@@ -54,8 +55,8 @@ export class ViewportEngine {
   private sectionPlaneHelper: THREE.PlaneHelper | null = null;
 
   // Grid config for snapping and rebuild
-  private gridCellSize = 1;
-  private gridSize = 100;
+  private gridCellSize = 2;
+  private gridSize = 500;
 
   // Hemisphere light reference for theme changes
   private hemisphereLight: THREE.HemisphereLight;
@@ -157,17 +158,29 @@ export class ViewportEngine {
     });
 
     // Grid
-    this.grid = new THREE.GridHelper(200, 200, 0x404060, 0x2a2a40);
+    this.grid = new THREE.GridHelper(
+      this.gridSize,
+      Math.round(this.gridSize / this.gridCellSize),
+      0x404060,
+      0x2a2a40,
+    );
     this.scene.add(this.grid);
 
     // Axes
-    this.axes = new THREE.AxesHelper(12);
+    this.axes = new THREE.AxesHelper(10);
+    this.axes.renderOrder = 50;
+    const axisMaterials = Array.isArray(this.axes.material) ? this.axes.material : [this.axes.material];
+    for (const material of axisMaterials) {
+      material.depthTest = false;
+      material.depthWrite = false;
+      material.transparent = true;
+    }
     this.scene.add(this.axes);
 
     // ViewHelper (interactive axis gizmo in bottom-right corner)
     this.viewHelper = new ConfigurableViewHelper(this.camera, this.renderer.domElement, {
-      dimension: 176,
-      axisScale: 1.25,
+      dimension: 148,
+      axisScale: 1.12,
     });
     this.viewHelper.center = this.controls.target;
 
@@ -208,25 +221,40 @@ export class ViewportEngine {
 
   private animate = (): void => {
     this.animationId = requestAnimationFrame(this.animate);
-    const delta = this.clock.getDelta();
+    try {
+      const delta = this.clock.getDelta();
 
-    if (this.viewHelper.animating) {
-      this.viewHelper.update(delta);
+      if (this.viewHelperHealthy && this.viewHelper.animating) {
+        this.viewHelper.update(delta);
+      }
+
+      this.controls.update();
+      this.updateAxesScale();
+      this.recenterGridToTarget();
+      this.sketchRenderer.updatePlaneVisuals(this.camera, this.controls.target);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.autoClear = false;
+
+      if (this.viewHelperHealthy) {
+        try {
+          this.viewHelper.render(this.renderer);
+        } catch (err) {
+          this.viewHelperHealthy = false;
+          console.error('View helper render failed, disabling helper:', err);
+        }
+      }
+
+      this.renderer.autoClear = true;
+    } catch (err) {
+      this.renderer.autoClear = true;
+      console.error('Viewport frame failed:', err);
     }
-
-    this.controls.update();
-    this.updateAxesScale();
-    this.recenterGridToTarget();
-    this.sketchRenderer.updatePlaneVisuals(this.camera, this.controls.target);
-    this.renderer.render(this.scene, this.camera);
-    this.renderer.autoClear = false;
-    this.viewHelper.render(this.renderer);
-    this.renderer.autoClear = true;
   };
 
   // ─── Public API: ViewHelper ─────────────────────────
 
   handleViewHelperClick(event: PointerEvent): boolean {
+    if (!this.viewHelperHealthy) return false;
     return this.viewHelper.handleClick(event);
   }
 

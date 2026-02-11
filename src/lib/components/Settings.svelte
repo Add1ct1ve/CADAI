@@ -38,8 +38,8 @@
   // New settings
   let theme = $state<ThemeId>('dark');
   let displayUnits = $state<'mm' | 'inch'>('mm');
-  let gridSize = $state(100);
-  let gridSpacing = $state(1);
+  let gridSize = $state(500);
+  let gridSpacing = $state(2);
   let snapTranslateEnabled = $state(true);
   let snapTranslateValue = $state(1);
   let snapRotationEnabled = $state(true);
@@ -72,8 +72,8 @@
       autoApprovePlan = settings.config.auto_approve_plan ?? false;
       theme = (settings.config.theme as ThemeId) || 'dark';
       displayUnits = settings.config.display_units || 'mm';
-      gridSize = settings.config.grid_size ?? 100;
-      gridSpacing = settings.config.grid_spacing ?? 1;
+      gridSize = settings.config.grid_size ?? 500;
+      gridSpacing = settings.config.grid_spacing ?? 2;
       snapTranslateEnabled = settings.config.snap_translate != null;
       snapTranslateValue = settings.config.snap_translate ?? 1;
       snapRotationEnabled = settings.config.snap_rotation != null;
@@ -222,10 +222,10 @@
           <div class="form-group half">
             <label class="form-label" for="grid-size-select">Grid Size</label>
             <select id="grid-size-select" class="form-select" bind:value={gridSize}>
-              <option value={50}>50</option>
               <option value={100}>100</option>
               <option value={200}>200</option>
               <option value={500}>500</option>
+              <option value={1000}>1000</option>
             </select>
           </div>
 
