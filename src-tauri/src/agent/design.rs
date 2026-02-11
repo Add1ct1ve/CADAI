@@ -20,8 +20,17 @@ pub struct PlanValidation {
     pub warnings: Vec<String>,
     pub rejected_reason: Option<String>,
     pub extracted_operations: Vec<String>,
+    pub negated_operations: Vec<String>,
     pub extracted_dimensions: Vec<f64>,
+    pub risk_signals: PlanRiskSignals,
     pub plan_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PlanRiskSignals {
+    pub fatal_combo: bool,
+    pub negation_conflict: bool,
+    pub repair_sensitive_ops: Vec<String>,
 }
 
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.
@@ -40,11 +49,10 @@ Describe what this object looks like in the real world. What are its key visual 
 
 ### CadQuery Approach
 Which CadQuery primitives and operations best approximate each feature? Be specific:
-- For axially symmetric shapes → revolve() with a spline/polyline profile
-- For shapes that vary along a height → loft() between profiles at different heights
-- For shapes with a constant cross-section along a path → sweep()
-- For mechanical parts → boxes, cylinders, and boolean operations
-- For organic curves → spline profiles with revolve/loft, generous fillets
+- Prefer robust primary path first: extrude + cut/union with explicit intermediate solids
+- Use loft()/sweep()/revolve() only when clearly necessary for geometry
+- For enclosure-like objects, avoid `shell()` on lofted bodies in first pass
+- For optional fidelity upgrade, describe a fallback path separately
 
 ### Build Plan
 Number each step. Be specific about dimensions and positions:
@@ -219,6 +227,19 @@ const KNOWN_OPERATIONS: &[&str] = &[
 ];
 
 const BOOLEAN_OPS: &[&str] = &["cut", "union", "fuse", "intersect", "combine"];
+const NEGATION_PREFIXES: &[&str] = &[
+    "avoid",
+    "without",
+    "do not",
+    "don't",
+    "not use",
+    "never use",
+    "forbid",
+    "forbidden",
+    "exclude",
+    "no ",
+];
+const REPAIR_SENSITIVE_OPS: &[&str] = &["shell", "loft", "sweep", "fillet", "chamfer"];
 
 /// Check if "shell" appears as a CadQuery operation (verb) rather than an English noun.
 /// Matches: "shell(", "shell it", "shell the body", "apply shell", "use shell", "then shell"
@@ -254,6 +275,48 @@ fn has_shell_operation(text: &str) -> bool {
     false
 }
 
+fn has_negated_operation(text: &str, op: &str) -> bool {
+    let lower = text.to_lowercase();
+    for prefix in NEGATION_PREFIXES {
+        let p = regex::escape(prefix);
+        let o = regex::escape(op);
+        let pat = format!(r"(?i)\b{}\s+{}\b", p, o);
+        if Regex::new(&pat).unwrap().is_match(&lower) {
+            return true;
+        }
+    }
+
+    // Handle compact forms like "no shell", "no loft", and explicit "without using loft".
+    let alt = format!(
+        r"(?i)\b(?:no|without)\s+(?:using\s+)?{}\b",
+        regex::escape(op)
+    );
+    Regex::new(&alt).unwrap().is_match(&lower)
+}
+
+fn has_positive_operation(text: &str, op: &str) -> bool {
+    if op == "shell" {
+        return has_shell_operation(text);
+    }
+
+    let lower = text.to_lowercase();
+    let escaped = regex::escape(op);
+    let mention_re = Regex::new(&format!(r"(?i)(?:\.{}\s*\(|\b{}\b)", escaped, escaped)).unwrap();
+    let trailing_neg_re = Regex::new(
+        r"(?i)(?:avoid|without(?:\s+using)?|do\s+not|don't|not\s+use|never\s+use|forbid|forbidden|exclude|no)\s*$",
+    )
+    .unwrap();
+
+    for m in mention_re.find_iter(&lower) {
+        let prefix_start = m.start().saturating_sub(48);
+        let prefix = lower[prefix_start..m.start()].trim_end();
+        if !trailing_neg_re.is_match(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Extract known CadQuery operation names from the plan text (unique, case-insensitive).
 fn extract_operations(plan_text: &str) -> Vec<String> {
     let lower = plan_text.to_lowercase();
@@ -271,6 +334,26 @@ fn extract_operations(plan_text: &str) -> Vec<String> {
                     ops.push(op.to_string());
                 }
             }
+        }
+    }
+    ops
+}
+
+fn extract_positive_operations(plan_text: &str) -> Vec<String> {
+    let mut ops = Vec::new();
+    for &op in KNOWN_OPERATIONS {
+        if has_positive_operation(plan_text, op) {
+            ops.push(op.to_string());
+        }
+    }
+    ops
+}
+
+fn extract_negated_operations(plan_text: &str) -> Vec<String> {
+    let mut ops = Vec::new();
+    for &op in KNOWN_OPERATIONS {
+        if has_negated_operation(plan_text, op) {
+            ops.push(op.to_string());
         }
     }
     ops
@@ -757,7 +840,7 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
 
 /// Public wrapper for `extract_operations` — used by `iterative.rs` to detect risky ops.
 pub fn extract_operations_from_text(text: &str) -> Vec<String> {
-    extract_operations(text)
+    extract_positive_operations(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -777,9 +860,13 @@ pub fn validate_plan_with_profile(
 
     // Scope operation/risk extraction to numbered Build Plan steps only.
     let build_plan_steps_text = extract_build_plan_steps_text(plan_text);
-    let step_operations = build_plan_steps_text
+    let step_positive_operations = build_plan_steps_text
         .as_ref()
-        .map(|s| extract_operations(s))
+        .map(|s| extract_positive_operations(s))
+        .unwrap_or_default();
+    let step_negated_operations = build_plan_steps_text
+        .as_ref()
+        .map(|s| extract_negated_operations(s))
         .unwrap_or_default();
 
     // Scope dimensional risk checks to numbered Build Plan steps only.
@@ -790,12 +877,19 @@ pub fn validate_plan_with_profile(
         .unwrap_or_default();
     // Presence checks aggregate Build Plan + full-plan mentions to avoid
     // underestimating risk when operations are described outside numbered steps.
-    let full_operations = extract_operations(plan_text);
+    let full_positive_operations = extract_positive_operations(plan_text);
+    let full_negated_operations = extract_negated_operations(plan_text);
     let full_dimensions = extract_dimensions(plan_text);
-    let mut operations_for_presence = step_operations.clone();
-    for op in &full_operations {
+    let mut operations_for_presence = step_positive_operations.clone();
+    for op in &full_positive_operations {
         if !operations_for_presence.contains(op) {
             operations_for_presence.push(op.clone());
+        }
+    }
+    let mut negated_operations = step_negated_operations.clone();
+    for op in &full_negated_operations {
+        if !negated_operations.contains(op) {
+            negated_operations.push(op.clone());
         }
     }
     let mut dimensions_for_presence = step_dimensions.clone();
@@ -821,6 +915,15 @@ pub fn validate_plan_with_profile(
     let has_sweep = operations_for_presence.contains(&"sweep".to_string());
     let has_revolve = operations_for_presence.contains(&"revolve".to_string());
     let has_chamfer = operations_for_presence.contains(&"chamfer".to_string());
+    let has_fillet = operations_for_presence.contains(&"fillet".to_string());
+
+    let mut negation_conflicts = Vec::new();
+    for op in &operations_for_presence {
+        if negated_operations.contains(op) {
+            negation_conflicts.push(op.clone());
+        }
+    }
+    let negation_conflict = !negation_conflicts.is_empty();
 
     let min_positive_dimension = dimensions_for_presence
         .iter()
@@ -830,6 +933,14 @@ pub fn validate_plan_with_profile(
 
     let mut risk: u32 = 0;
     let mut warnings: Vec<String> = Vec::new();
+
+    if negation_conflict {
+        risk += 1;
+        warnings.push(format!(
+            "ambiguous operation intent: both positive and negated mentions for {}",
+            negation_conflicts.join(", ")
+        ));
+    }
 
     // Rule 1: shell after many booleans
     if has_shell && boolean_count > 3 {
@@ -981,7 +1092,6 @@ pub fn validate_plan_with_profile(
     }
 
     // Rule 14b: shell + fillet is fragile for enclosure flows.
-    let has_fillet = operations_for_presence.contains(&"fillet".to_string());
     let fatal_shell_internal_fillet = has_shell && has_fillet;
     if fatal_shell_internal_fillet {
         risk += 2;
@@ -1016,6 +1126,21 @@ pub fn validate_plan_with_profile(
     let has_fatal_reliability_combo =
         matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
             && (fatal_loft_shell || fatal_shell_internal_fillet);
+    let repair_sensitive_ops = REPAIR_SENSITIVE_OPS
+        .iter()
+        .filter_map(|op| {
+            if operations_for_presence.iter().any(|o| o == op) {
+                Some((*op).to_string())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let risk_signals = PlanRiskSignals {
+        fatal_combo: has_fatal_reliability_combo,
+        negation_conflict,
+        repair_sensitive_ops,
+    };
 
     let is_valid = risk <= risk_threshold && has_required_structure && !has_fatal_reliability_combo;
     let rejected_reason = if !is_valid {
@@ -1034,7 +1159,9 @@ pub fn validate_plan_with_profile(
         warnings,
         rejected_reason,
         extracted_operations: operations_for_presence,
+        negated_operations,
         extracted_dimensions: dimensions_for_presence,
+        risk_signals,
         plan_text: plan_text.to_string(),
     }
 }
@@ -1459,7 +1586,9 @@ mod tests {
                 "shell() after 5 boolean operations is very likely to fail".to_string(),
             ),
             extracted_operations: vec!["shell".to_string()],
+            negated_operations: vec![],
             extracted_dimensions: vec![100.0],
+            risk_signals: PlanRiskSignals::default(),
             plan_text: String::new(),
         };
         let fb = build_rejection_feedback(&v);
@@ -1480,7 +1609,9 @@ mod tests {
             ],
             rejected_reason: Some("warning one".to_string()),
             extracted_operations: vec![],
+            negated_operations: vec![],
             extracted_dimensions: vec![],
+            risk_signals: PlanRiskSignals::default(),
             plan_text: String::new(),
         };
         let fb = build_rejection_feedback(&v);
@@ -1828,6 +1959,59 @@ overhangs:
             v.extracted_operations.contains(&"loft".to_string())
                 && v.extracted_operations.contains(&"shell".to_string())
         );
+    }
+
+    #[test]
+    fn test_negated_operations_do_not_count_as_positive() {
+        let text = r#"### Object Analysis
+- Enclosure.
+### CadQuery Approach
+- Avoid shell and avoid loft for first pass.
+### Build Plan
+1. Extrude a 42x28x5mm base.
+2. Cut a 20x2.5mm slot.
+### Approximation Notes
+- None."#;
+        let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::ReliabilityFirst);
+        assert!(!v.extracted_operations.contains(&"shell".to_string()));
+        assert!(!v.extracted_operations.contains(&"loft".to_string()));
+        assert!(v.negated_operations.contains(&"shell".to_string()));
+        assert!(v.negated_operations.contains(&"loft".to_string()));
+        assert!(!v.risk_signals.fatal_combo);
+    }
+
+    #[test]
+    fn test_positive_shell_still_detected() {
+        let text = r#"### Object Analysis
+- Enclosure.
+### CadQuery Approach
+- Robust enclosure path.
+### Build Plan
+1. Extrude a 42x28x5mm base.
+2. Shell from bottom face with 1.8mm wall.
+### Approximation Notes
+- None."#;
+        let v = validate_plan(text);
+        assert!(v.extracted_operations.contains(&"shell".to_string()));
+    }
+
+    #[test]
+    fn test_negation_conflict_emits_warning_and_signal() {
+        let text = r#"### Object Analysis
+- Enclosure.
+### CadQuery Approach
+- Avoid shell for first pass.
+### Build Plan
+1. Loft rounded outer body.
+2. Shell from bottom face.
+### Approximation Notes
+- None."#;
+        let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::ReliabilityFirst);
+        assert!(v.risk_signals.negation_conflict);
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("ambiguous operation intent")));
     }
 
     #[test]

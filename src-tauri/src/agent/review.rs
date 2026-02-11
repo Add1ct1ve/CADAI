@@ -1,5 +1,6 @@
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, TokenUsage};
+use crate::config::ReviewerMode;
 use crate::error::AppError;
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are a CadQuery code reviewer. Your job is to verify that generated CadQuery code correctly implements what the user requested.
@@ -92,6 +93,7 @@ pub async fn review_code(
     user_request: &str,
     generated_code: &str,
     design_plan: Option<&str>,
+    reviewer_mode: &ReviewerMode,
 ) -> Result<(ReviewResult, Option<TokenUsage>), AppError> {
     let messages = vec![
         ChatMessage {
@@ -106,7 +108,19 @@ pub async fn review_code(
 
     let (response, usage) = provider.complete(&messages, Some(2048)).await?;
 
-    Ok((parse_review_response(&response, generated_code), usage))
+    let mut parsed = parse_review_response(&response, generated_code);
+    if matches!(reviewer_mode, ReviewerMode::AdvisoryOnly) && parsed.was_modified {
+        parsed = ReviewResult {
+            was_modified: false,
+            code: generated_code.to_string(),
+            explanation: format!(
+                "Reviewer findings (advisory only; code unchanged): {}",
+                parsed.explanation
+            ),
+        };
+    }
+
+    Ok((parsed, usage))
 }
 
 /// Parse the reviewer's response into a ReviewResult.

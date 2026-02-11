@@ -34,6 +34,10 @@ pub struct PostGeometryValidationReport {
     pub degenerate_faces: u64,
     pub euler_number: i64,
     pub triangle_count: u64,
+    pub component_count: u64,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub volume: f64,
     pub bbox_ok: bool,
     pub warnings: Vec<String>,
 }
@@ -780,6 +784,7 @@ fn run_post_geometry_checks(
     let euler_number = parsed["euler_number"].as_i64().unwrap_or(0);
     let component_count = parsed["component_count"].as_u64().unwrap_or(1).max(1);
     let triangle_count = parsed["triangle_count"].as_u64().unwrap_or(0);
+    let volume = parsed["volume"].as_f64().unwrap_or(0.0);
 
     let mut warnings: Vec<String> = parsed["issues"]
         .as_array()
@@ -791,31 +796,46 @@ fn run_post_geometry_checks(
         .unwrap_or_default();
 
     let mut bbox_ok = true;
+    let mut bounds_min = [0.0_f64; 3];
+    let mut bounds_max = [0.0_f64; 3];
 
-    if let (Some(req), Some(bounds_arr)) = (user_request, parsed["bounds"].as_array()) {
+    if let Some(bounds_arr) = parsed["bounds"].as_array() {
         if bounds_arr.len() == 2 {
             let min = bounds_arr[0].as_array();
             let max = bounds_arr[1].as_array();
             if let (Some(min), Some(max)) = (min, max) {
                 if min.len() >= 3 && max.len() >= 3 {
-                    let dx = max[0].as_f64().unwrap_or(0.0) - min[0].as_f64().unwrap_or(0.0);
-                    let dy = max[1].as_f64().unwrap_or(0.0) - min[1].as_f64().unwrap_or(0.0);
-                    let dz = max[2].as_f64().unwrap_or(0.0) - min[2].as_f64().unwrap_or(0.0);
-                    let bbox_max = dx.max(dy).max(dz).abs();
+                    bounds_min = [
+                        min[0].as_f64().unwrap_or(0.0),
+                        min[1].as_f64().unwrap_or(0.0),
+                        min[2].as_f64().unwrap_or(0.0),
+                    ];
+                    bounds_max = [
+                        max[0].as_f64().unwrap_or(0.0),
+                        max[1].as_f64().unwrap_or(0.0),
+                        max[2].as_f64().unwrap_or(0.0),
+                    ];
 
-                    let expected = parse_dimensions_from_text(req);
-                    if let Some(expected_max) = expected
-                        .iter()
-                        .copied()
-                        .filter(|v| *v > 0.0)
-                        .reduce(f64::max)
-                    {
-                        if bbox_max > expected_max * 8.0 || bbox_max < expected_max * 0.05 {
-                            bbox_ok = false;
-                            warnings.push(format!(
-                                "Bounding box sanity check failed: max extent {:.2}mm is inconsistent with requested size {:.2}mm",
-                                bbox_max, expected_max
-                            ));
+                    if let Some(req) = user_request {
+                        let dx = bounds_max[0] - bounds_min[0];
+                        let dy = bounds_max[1] - bounds_min[1];
+                        let dz = bounds_max[2] - bounds_min[2];
+                        let bbox_max = dx.max(dy).max(dz).abs();
+
+                        let expected = parse_dimensions_from_text(req);
+                        if let Some(expected_max) = expected
+                            .iter()
+                            .copied()
+                            .filter(|v| *v > 0.0)
+                            .reduce(f64::max)
+                        {
+                            if bbox_max > expected_max * 8.0 || bbox_max < expected_max * 0.05 {
+                                bbox_ok = false;
+                                warnings.push(format!(
+                                    "Bounding box sanity check failed: max extent {:.2}mm is inconsistent with requested size {:.2}mm",
+                                    bbox_max, expected_max
+                                ));
+                            }
                         }
                     }
                 }
@@ -833,6 +853,10 @@ fn run_post_geometry_checks(
         degenerate_faces,
         euler_number,
         triangle_count,
+        component_count,
+        bounds_min,
+        bounds_max,
+        volume,
         bbox_ok,
         warnings,
     })
@@ -1136,6 +1160,10 @@ mod tests {
                 degenerate_faces: 0,
                 euler_number: 2,
                 triangle_count: 128,
+                component_count: 1,
+                bounds_min: [0.0, 0.0, 0.0],
+                bounds_max: [10.0, 10.0, 10.0],
+                volume: 1000.0,
                 bbox_ok: true,
                 warnings: vec![],
             }),
@@ -1199,6 +1227,10 @@ mod tests {
             degenerate_faces: 0,
             euler_number: 2,
             triangle_count: 100,
+            component_count: 1,
+            bounds_min: [0.0, 0.0, 0.0],
+            bounds_max: [10.0, 10.0, 10.0],
+            volume: 1000.0,
             bbox_ok: true,
             warnings: vec![],
         };

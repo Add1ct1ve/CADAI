@@ -16,6 +16,19 @@ impl Default for GenerationReliabilityProfile {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerMode {
+    AdvisoryOnly,
+    RewriteAllowed,
+}
+
+impl Default for ReviewerMode {
+    fn default() -> Self {
+        Self::AdvisoryOnly
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub ai_provider: String,
@@ -61,6 +74,14 @@ pub struct AppConfig {
     pub preview_on_partial_failure: bool,
     #[serde(default = "default_max_generation_runtime_seconds")]
     pub max_generation_runtime_seconds: u32,
+    #[serde(default = "default_true")]
+    pub semantic_contract_strict: bool,
+    #[serde(default)]
+    pub reviewer_mode: ReviewerMode,
+    #[serde(default = "default_true")]
+    pub deterministic_fallback_enabled: bool,
+    #[serde(default = "default_fallback_after_plan_failures")]
+    pub fallback_after_plan_failures: u32,
     #[serde(default = "default_true")]
     pub mechanisms_enabled: bool,
     #[serde(default)]
@@ -111,6 +132,10 @@ fn default_max_generation_runtime_seconds() -> u32 {
     300
 }
 
+fn default_fallback_after_plan_failures() -> u32 {
+    2
+}
+
 fn default_mechanism_cache_max_mb() -> u32 {
     512
 }
@@ -152,6 +177,10 @@ impl Default for AppConfig {
             generation_reliability_profile: GenerationReliabilityProfile::default(),
             preview_on_partial_failure: true,
             max_generation_runtime_seconds: default_max_generation_runtime_seconds(),
+            semantic_contract_strict: true,
+            reviewer_mode: ReviewerMode::default(),
+            deterministic_fallback_enabled: true,
+            fallback_after_plan_failures: default_fallback_after_plan_failures(),
             mechanisms_enabled: true,
             mechanism_import_enabled: false,
             mechanism_cache_max_mb: default_mechanism_cache_max_mb(),

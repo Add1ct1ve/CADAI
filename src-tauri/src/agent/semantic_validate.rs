@@ -1,0 +1,248 @@
+use regex::Regex;
+use serde::Serialize;
+
+use crate::agent::executor::PostGeometryValidationReport;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrientationPolicy {
+    BaseNearZ0,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExpectedBboxMm {
+    pub sorted_extents_mm: [f64; 3],
+    pub tolerance_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SemanticPartContract {
+    pub expected_components: u64,
+    pub must_be_editable_single_solid: bool,
+    pub expected_bbox_mm: Option<ExpectedBboxMm>,
+    pub orientation_policy: OrientationPolicy,
+    pub required_feature_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SemanticValidationResult {
+    pub passed: bool,
+    pub findings: Vec<String>,
+}
+
+fn parse_dimension_triple(description: &str) -> Option<[f64; 3]> {
+    let compact = Regex::new(
+        r"(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?",
+    )
+    .unwrap();
+    if let Some(c) = compact.captures(description) {
+        let mut vals = [0.0_f64; 3];
+        for (i, slot) in vals.iter_mut().enumerate() {
+            *slot = c
+                .get(i + 1)
+                .and_then(|m| m.as_str().parse::<f64>().ok())
+                .unwrap_or(0.0);
+        }
+        if vals.iter().all(|v| *v > 0.0) {
+            return Some(vals);
+        }
+    }
+
+    let find_named = |label: &str| -> Option<f64> {
+        let pat = format!(
+            r"(?i)\b{}\b[^0-9-]*(-?\d+(?:\.\d+)?)\s*mm",
+            regex::escape(label)
+        );
+        Regex::new(&pat)
+            .ok()?
+            .captures(description)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+    };
+
+    let length = find_named("length");
+    let width = find_named("width");
+    let height = find_named("height")
+        .or_else(|| find_named("thickness"))
+        .or_else(|| find_named("depth"));
+
+    match (length, width, height) {
+        (Some(a), Some(b), Some(c)) => Some([a, b, c]),
+        _ => None,
+    }
+}
+
+fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<String> {
+    let mut hints = Vec::new();
+    let lower_name = part_name.to_lowercase();
+    let lower_desc = description.to_lowercase();
+    let combined = format!("{} {}", lower_name, lower_desc);
+
+    if combined.contains("back_plate")
+        || combined.contains("back plate")
+        || combined.contains("backplate")
+        || combined.contains("lid")
+        || combined.contains("cover")
+    {
+        if combined.contains("lip") {
+            hints.push("lip".to_string());
+        }
+        if combined.contains("ridge") || combined.contains("o-ring") || combined.contains("oring") {
+            hints.push("ridge".to_string());
+        }
+    }
+
+    if combined.contains("slot") {
+        hints.push("slot".to_string());
+    }
+
+    hints.sort();
+    hints.dedup();
+    hints
+}
+
+pub fn build_default_contract(part_name: &str, description: &str) -> SemanticPartContract {
+    let expected_bbox_mm = parse_dimension_triple(description).map(|mut dims| {
+        dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        ExpectedBboxMm {
+            sorted_extents_mm: dims,
+            tolerance_ratio: 0.70,
+        }
+    });
+
+    SemanticPartContract {
+        expected_components: 1,
+        must_be_editable_single_solid: true,
+        expected_bbox_mm,
+        orientation_policy: OrientationPolicy::BaseNearZ0,
+        required_feature_hints: infer_required_feature_hints(part_name, description),
+    }
+}
+
+pub fn validate_part_semantics(
+    contract: &SemanticPartContract,
+    report: &PostGeometryValidationReport,
+    code: &str,
+) -> SemanticValidationResult {
+    let mut findings = Vec::new();
+
+    if contract.must_be_editable_single_solid
+        && report.component_count != contract.expected_components
+    {
+        findings.push(format!(
+            "component count {} violates contract (expected {}).",
+            report.component_count, contract.expected_components
+        ));
+    }
+
+    if let Some(ref expected_bbox) = contract.expected_bbox_mm {
+        let mut actual = [
+            (report.bounds_max[0] - report.bounds_min[0]).abs(),
+            (report.bounds_max[1] - report.bounds_min[1]).abs(),
+            (report.bounds_max[2] - report.bounds_min[2]).abs(),
+        ];
+        actual.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (idx, expected) in expected_bbox.sorted_extents_mm.iter().enumerate() {
+            let min_allowed = expected * (1.0 - expected_bbox.tolerance_ratio);
+            let max_allowed = expected * (1.0 + expected_bbox.tolerance_ratio);
+            let got = actual[idx];
+            if got < min_allowed || got > max_allowed {
+                findings.push(format!(
+                    "bbox extent {} out of contract: got {:.2}mm, expected {:.2}mm ±{}%",
+                    idx + 1,
+                    got,
+                    expected,
+                    (expected_bbox.tolerance_ratio * 100.0).round()
+                ));
+                break;
+            }
+        }
+    }
+
+    if matches!(contract.orientation_policy, OrientationPolicy::BaseNearZ0) {
+        let z_min = report.bounds_min[2];
+        let z_height = (report.bounds_max[2] - report.bounds_min[2]).abs();
+        let allowed = 2.0_f64.max(z_height * 0.25);
+        if z_min.abs() > allowed {
+            findings.push(format!(
+                "orientation policy violated: base expected near Z=0, but z_min is {:.2}mm",
+                z_min
+            ));
+        }
+    }
+
+    let code_lower = code.to_lowercase();
+    for hint in &contract.required_feature_hints {
+        if !code_lower.contains(hint) {
+            findings.push(format!(
+                "required feature hint '{}' not reflected in generated code.",
+                hint
+            ));
+        }
+    }
+
+    SemanticValidationResult {
+        passed: findings.is_empty(),
+        findings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_report() -> PostGeometryValidationReport {
+        PostGeometryValidationReport {
+            watertight: true,
+            manifold: true,
+            degenerate_faces: 0,
+            euler_number: 2,
+            triangle_count: 100,
+            component_count: 1,
+            bounds_min: [0.0, 0.0, 0.0],
+            bounds_max: [40.0, 20.0, 10.0],
+            volume: 1000.0,
+            bbox_ok: true,
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn rejects_split_part_component_count() {
+        let mut report = base_report();
+        report.component_count = 2;
+        let contract = build_default_contract("back_plate", "size 40x20x10mm with lip and ridge");
+        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        assert!(!result.passed);
+        assert!(result
+            .findings
+            .iter()
+            .any(|f| f.contains("component count")));
+    }
+
+    #[test]
+    fn rejects_bbox_out_of_contract() {
+        let mut report = base_report();
+        report.bounds_max = [200.0, 120.0, 80.0];
+        let contract = build_default_contract("housing", "outer dimensions 40x20x10mm");
+        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        assert!(!result.passed);
+        assert!(result.findings.iter().any(|f| f.contains("bbox extent")));
+    }
+
+    #[test]
+    fn rejects_orientation_policy_violation() {
+        let mut report = base_report();
+        report.bounds_min = [0.0, 0.0, -25.0];
+        report.bounds_max = [40.0, 20.0, -5.0];
+        let contract = build_default_contract("housing", "40x20x10mm");
+        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        assert!(!result.passed);
+        assert!(result
+            .findings
+            .iter()
+            .any(|f| f.contains("orientation policy")));
+    }
+}

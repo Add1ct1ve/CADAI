@@ -46,7 +46,7 @@ pub fn assess_confidence_with_profile(
     validation: &PlanValidation,
     cookbook: Option<&[CookbookEntry]>,
     patterns: Option<&[DesignPatternEntry]>,
-    profile: &GenerationReliabilityProfile,
+    _profile: &GenerationReliabilityProfile,
 ) -> ConfidenceAssessment {
     // Base score from risk (risk 0 -> 100, risk 10 -> 0)
     let base_score = 100_i32 - (validation.risk_score as i32 * 10);
@@ -94,24 +94,26 @@ pub fn assess_confidence_with_profile(
         .extracted_operations
         .iter()
         .any(|op| op == "shell");
-    let reliability_combo_penalty =
-        if matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
-            && has_loft
-            && has_shell
-        {
-            20
-        } else {
-            0
-        };
+    let reliability_combo_penalty = if validation.risk_signals.fatal_combo {
+        20
+    } else {
+        0
+    };
+    let negation_conflict_penalty = if validation.risk_signals.negation_conflict {
+        10
+    } else {
+        0
+    };
 
-    let mut final_score = (base_score + cookbook_bonus + pattern_bonus - reliability_combo_penalty)
+    let mut final_score = (base_score + cookbook_bonus + pattern_bonus
+        - reliability_combo_penalty
+        - negation_conflict_penalty)
         .clamp(0, 100) as u32;
-    if matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
-        && has_loft
-        && has_shell
-        && final_score > 65
-    {
-        final_score = 65;
+    if validation.risk_signals.fatal_combo && final_score > 60 {
+        final_score = 60;
+    }
+    if validation.risk_signals.negation_conflict && final_score > 70 {
+        final_score = 70;
     }
 
     let level = if final_score >= 70 {
@@ -125,8 +127,13 @@ pub fn assess_confidence_with_profile(
     // Build warnings for yellow/red
     let mut warnings = Vec::new();
 
-    if has_loft && has_shell {
+    if validation.risk_signals.fatal_combo || (has_loft && has_shell) {
         warnings.push("This design uses loft + shell — may need retries".to_string());
+    }
+    if validation.risk_signals.negation_conflict {
+        warnings.push(
+            "Plan has contradictory operation intent (negated + positive usage).".to_string(),
+        );
     }
 
     if cookbook_matches.is_empty() && distinct_ops >= 3 {
@@ -310,7 +317,9 @@ mod tests {
             warnings: vec![],
             rejected_reason: None,
             extracted_operations: operations.into_iter().map(|s| s.to_string()).collect(),
+            negated_operations: vec![],
             extracted_dimensions: vec![],
+            risk_signals: design::PlanRiskSignals::default(),
             plan_text: String::new(),
         }
     }
