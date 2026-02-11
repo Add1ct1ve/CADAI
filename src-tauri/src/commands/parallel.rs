@@ -611,7 +611,7 @@ async fn run_design_plan_phase(
         ));
     }
 
-    let validation = design::validate_plan(&design_plan.text);
+    let mut validation = design::validate_plan(&design_plan.text);
 
     let _ = on_event.send(MultiPartEvent::PlanValidation {
         risk_score: validation.risk_score,
@@ -620,15 +620,17 @@ async fn run_design_plan_phase(
         rejected_reason: validation.rejected_reason.clone(),
     });
 
-    let mut final_risk_score = validation.risk_score;
-    let mut final_warnings = validation.warnings.clone();
-    let mut final_is_valid = validation.is_valid;
-
-    if !validation.is_valid {
+    // Give the planner multiple chances to return a valid structured plan.
+    // This significantly reduces failures from malformed first responses.
+    const MAX_PLAN_ATTEMPTS: usize = 3;
+    let mut attempts = 1usize;
+    while !validation.is_valid && attempts < MAX_PLAN_ATTEMPTS {
         let _ = on_event.send(MultiPartEvent::PlanStatus {
             message: format!(
-                "Design plan too risky (score {}/10), re-planning...",
-                validation.risk_score
+                "Design plan too risky (score {}/10), re-planning (attempt {}/{})...",
+                validation.risk_score,
+                attempts + 1,
+                MAX_PLAN_ATTEMPTS
             ),
         });
 
@@ -647,17 +649,20 @@ async fn run_design_plan_phase(
             emit_usage(on_event, "design", u, provider_id, model_id);
         }
 
-        let retry_validation = design::validate_plan(&design_plan.text);
-        final_risk_score = retry_validation.risk_score;
-        final_warnings = retry_validation.warnings.clone();
-        final_is_valid = retry_validation.is_valid;
+        validation = design::validate_plan(&design_plan.text);
         let _ = on_event.send(MultiPartEvent::PlanValidation {
-            risk_score: retry_validation.risk_score,
-            warnings: retry_validation.warnings.clone(),
-            is_valid: retry_validation.is_valid,
-            rejected_reason: retry_validation.rejected_reason.clone(),
+            risk_score: validation.risk_score,
+            warnings: validation.warnings.clone(),
+            is_valid: validation.is_valid,
+            rejected_reason: validation.rejected_reason.clone(),
         });
+
+        attempts += 1;
     }
+
+    let final_risk_score = validation.risk_score;
+    let final_warnings = validation.warnings.clone();
+    let final_is_valid = validation.is_valid;
 
     let _ = on_event.send(MultiPartEvent::DesignPlan {
         plan_text: design_plan.text.clone(),
