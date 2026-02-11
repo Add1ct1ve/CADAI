@@ -393,6 +393,58 @@ fn build_part_prompt(system_prompt: &str, part: &PartSpec, design_context: &str)
     )
 }
 
+async fn request_code_only_part_retry(
+    config: &crate::config::AppConfig,
+    system_prompt: &str,
+    part: &PartSpec,
+    design_context: &str,
+    previous_response: &str,
+) -> Result<(Option<String>, Option<TokenUsage>), AppError> {
+    let provider = create_provider(config)?;
+    let strict_prompt = format!(
+        "{}\n\n\
+        STRICT OUTPUT RULES (MANDATORY):\n\
+        - Return ONLY executable Python CadQuery code.\n\
+        - Wrap code in <CODE>...</CODE> tags.\n\
+        - No prose, no markdown explanation, no bullets.\n\
+        - Must assign final geometry to variable named result.\n\
+        - Generate ONLY the '{}' part.",
+        build_part_prompt(system_prompt, part, design_context),
+        part.name
+    );
+
+    let retry_user = format!(
+        "Previous response was non-code and could not be executed.\n\
+        Return the CadQuery code now.\n\n\
+        Part: {}\n\
+        Description: {}\n\
+        Constraints:\n{}\n\n\
+        Previous invalid response (for context):\n{}",
+        part.name,
+        part.description,
+        part.constraints
+            .iter()
+            .map(|c| format!("- {}", c))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        previous_response.chars().take(2000).collect::<String>()
+    );
+
+    let messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: strict_prompt,
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: retry_user,
+        },
+    ];
+
+    let (response, usage) = provider.complete(&messages, None).await?;
+    Ok((extract_code_from_response(&response), usage))
+}
+
 // ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
@@ -1392,13 +1444,47 @@ async fn run_generation_pipeline(
 
     for (idx, name, handle) in handles {
         let position = plan.parts[idx].position;
+        let part_spec = plan.parts[idx].clone();
 
         match handle.await {
             Ok((_, Ok((response, part_usage)))) => {
                 if let Some(ref u) = part_usage {
                     total_usage.add(u);
                 }
-                let code = extract_code_from_response(&response);
+                let mut code = extract_code_from_response(&response);
+                if code.is_none() {
+                    let _ = on_event.send(MultiPartEvent::PlanStatus {
+                        message: format!(
+                            "Part '{}' returned non-code output. Requesting strict code-only retry...",
+                            part_spec.name
+                        ),
+                    });
+                    match request_code_only_part_retry(
+                        config,
+                        &system_prompt,
+                        &part_spec,
+                        plan_text,
+                        &response,
+                    )
+                    .await
+                    {
+                        Ok((retried, usage)) => {
+                            if let Some(ref u) = usage {
+                                total_usage.add(u);
+                            }
+                            code = retried;
+                        }
+                        Err(e) => {
+                            let _ = on_event.send(MultiPartEvent::PartComplete {
+                                part_index: idx,
+                                part_name: name,
+                                success: false,
+                                error: Some(format!("Code-only retry failed: {}", e)),
+                            });
+                            continue;
+                        }
+                    }
+                }
                 match code {
                     Some(c) => {
                         // Emit PartCodeExtracted before PartComplete
@@ -2477,7 +2563,34 @@ pub async fn retry_part(
     }
 
     // Extract code
-    let code = extract_code_from_response(&full_response);
+    let mut code = extract_code_from_response(&full_response);
+    if code.is_none() {
+        let _ = on_event.send(MultiPartEvent::PlanStatus {
+            message: format!(
+                "Part '{}' returned non-code output. Requesting strict code-only retry...",
+                part_spec.name
+            ),
+        });
+        let (retried, usage) = request_code_only_part_retry(
+            &config,
+            &system_prompt,
+            &part_spec,
+            &design_plan_text,
+            &full_response,
+        )
+        .await?;
+        if let Some(ref u) = usage {
+            total_usage.add(u);
+            emit_usage(
+                &on_event,
+                "retry_part_code_recovery",
+                u,
+                &provider_id,
+                &model_id,
+            );
+        }
+        code = retried;
+    }
     match code {
         Some(c) => {
             let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
