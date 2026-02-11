@@ -189,6 +189,19 @@ pub fn validate_code_with_profile(
         );
     }
 
+    let ambiguous_faces_workplane_re =
+        Regex::new(r"\.faces\s*\([^\n\)]*\)\s*\.workplane\s*\(").unwrap();
+    if ambiguous_faces_workplane_re.is_match(code)
+        && !lower.contains(".first().workplane(")
+        && !lower.contains(".last().workplane(")
+    {
+        push_warning(
+            &mut findings,
+            "ambiguous_faces_workplane",
+            "`.faces(...).workplane(...)` can fail if multiple faces are selected. Prefer `.faces(...).first().workplane(...)` or a tighter selector.",
+        );
+    }
+
     let fillet_chain_re = Regex::new(
         r"(?s)\.(?:cut|union|intersect|fuse)\s*\(.*?\)\s*\.(?:edges\s*\(.*?\)\s*\.)?fillet\s*\(",
     )
@@ -329,5 +342,20 @@ result = body.shell(1)
             .findings
             .iter()
             .any(|f| matches!(f.level, FindingLevel::Warning)));
+    }
+
+    #[test]
+    fn test_warns_on_ambiguous_faces_workplane_chain() {
+        let code = r#"
+import cadquery as cq
+body = cq.Workplane("XY").box(10, 10, 10)
+wp = body.faces(">Z").workplane(offset=1.0)
+result = body
+"#;
+        let result = validate_code(code);
+        assert!(result
+            .findings
+            .iter()
+            .any(|f| f.code == "ambiguous_faces_workplane"));
     }
 }

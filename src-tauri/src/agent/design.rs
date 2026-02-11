@@ -243,6 +243,14 @@ fn has_shell_operation(text: &str) -> bool {
     {
         return true;
     }
+    // Common CAD phrasing: "shell from bottom face", "shell with thickness 2mm", "shelling"
+    if Regex::new(r"\bshell\s+(?:from|with)\b")
+        .unwrap()
+        .is_match(&lower)
+        || Regex::new(r"\bshelling\b").unwrap().is_match(&lower)
+    {
+        return true;
+    }
     false
 }
 
@@ -780,19 +788,25 @@ pub fn validate_plan_with_profile(
         .as_ref()
         .map(|s| extract_dimensions(s))
         .unwrap_or_default();
-    // Presence checks may fallback to full text when numbered steps are missing.
+    // Presence checks aggregate Build Plan + full-plan mentions to avoid
+    // underestimating risk when operations are described outside numbered steps.
     let full_operations = extract_operations(plan_text);
     let full_dimensions = extract_dimensions(plan_text);
-    let operations_for_presence = if step_operations.is_empty() {
-        full_operations.clone()
-    } else {
-        step_operations.clone()
-    };
-    let dimensions_for_presence = if step_dimensions.is_empty() {
-        full_dimensions.clone()
-    } else {
-        step_dimensions.clone()
-    };
+    let mut operations_for_presence = step_operations.clone();
+    for op in &full_operations {
+        if !operations_for_presence.contains(op) {
+            operations_for_presence.push(op.clone());
+        }
+    }
+    let mut dimensions_for_presence = step_dimensions.clone();
+    for d in &full_dimensions {
+        if !dimensions_for_presence
+            .iter()
+            .any(|v| (v - d).abs() < 0.0001)
+        {
+            dimensions_for_presence.push(*d);
+        }
+    }
 
     let fillet_radii = extract_fillet_radii(plan_text);
     let chamfer_sizes = extract_chamfer_sizes(plan_text);
@@ -802,11 +816,11 @@ pub fn validate_plan_with_profile(
         .map(|s| count_boolean_mentions(s))
         .unwrap_or(0);
 
-    let has_shell = step_operations.contains(&"shell".to_string());
-    let has_loft = step_operations.contains(&"loft".to_string());
-    let has_sweep = step_operations.contains(&"sweep".to_string());
-    let has_revolve = step_operations.contains(&"revolve".to_string());
-    let has_chamfer = step_operations.contains(&"chamfer".to_string());
+    let has_shell = operations_for_presence.contains(&"shell".to_string());
+    let has_loft = operations_for_presence.contains(&"loft".to_string());
+    let has_sweep = operations_for_presence.contains(&"sweep".to_string());
+    let has_revolve = operations_for_presence.contains(&"revolve".to_string());
+    let has_chamfer = operations_for_presence.contains(&"chamfer".to_string());
 
     let min_positive_dimension = dimensions_for_presence
         .iter()
@@ -880,7 +894,7 @@ pub fn validate_plan_with_profile(
     }
 
     // Rule 7: negative dimensions
-    for &d in &step_dimensions {
+    for &d in &dimensions_for_presence {
         if d < 0.0 {
             risk += 4;
             warnings.push(format!(
@@ -892,7 +906,7 @@ pub fn validate_plan_with_profile(
     }
 
     // Rule 8: huge dimensions
-    for &d in &step_dimensions {
+    for &d in &dimensions_for_presence {
         if d > 10000.0 {
             risk += 3;
             warnings.push(format!(
@@ -904,7 +918,7 @@ pub fn validate_plan_with_profile(
     }
 
     // Rule 9: tiny dimensions
-    for &d in &step_dimensions {
+    for &d in &dimensions_for_presence {
         if d > 0.0 && d < 0.01 {
             risk += 3;
             warnings.push(format!(
@@ -941,7 +955,7 @@ pub fn validate_plan_with_profile(
 
     // Rule 13: shell with thin walls (skip dimensions that are fillet radii or chamfer sizes)
     if has_shell {
-        for &d in &step_dimensions {
+        for &d in &dimensions_for_presence {
             if d > 0.0 && d < 2.0 {
                 let is_fillet = fillet_radii.iter().any(|&r| (r - d).abs() < 0.001);
                 let is_chamfer = chamfer_sizes.iter().any(|&c| (c - d).abs() < 0.001);
@@ -967,7 +981,7 @@ pub fn validate_plan_with_profile(
     }
 
     // Rule 14b: shell + fillet is fragile for enclosure flows.
-    let has_fillet = step_operations.contains(&"fillet".to_string());
+    let has_fillet = operations_for_presence.contains(&"fillet".to_string());
     let fatal_shell_internal_fillet = has_shell && has_fillet;
     if fatal_shell_internal_fillet {
         risk += 2;
@@ -1019,8 +1033,8 @@ pub fn validate_plan_with_profile(
         risk_score: risk,
         warnings,
         rejected_reason,
-        extracted_operations: step_operations,
-        extracted_dimensions: step_dimensions,
+        extracted_operations: operations_for_presence,
+        extracted_dimensions: dimensions_for_presence,
         plan_text: plan_text.to_string(),
     }
 }
@@ -1317,6 +1331,23 @@ mod tests {
         assert!(
             ops2.contains(&"shell".to_string()),
             "'then shell' should be detected"
+        );
+    }
+
+    #[test]
+    fn test_extract_operations_shell_from_with_detected() {
+        let text = "Shell from the bottom face to open the cavity.";
+        let ops = extract_operations(text);
+        assert!(
+            ops.contains(&"shell".to_string()),
+            "'shell from' should be detected"
+        );
+
+        let text2 = "Use shell with 1.8mm wall thickness.";
+        let ops2 = extract_operations(text2);
+        assert!(
+            ops2.contains(&"shell".to_string()),
+            "'shell with' should be detected"
         );
     }
 
@@ -1732,20 +1763,21 @@ overhangs:
     }
 
     #[test]
-    fn test_operations_scoped_to_build_plan() {
-        // "loft" and "sweep" only appear in CadQuery Approach (advisory), not Build Plan
+    fn test_operations_include_presence_from_full_plan() {
+        // "loft" and "sweep" appear in CadQuery Approach and are now retained
+        // for reliability gating even if Build Plan uses simpler wording.
         let text = "### Object Analysis\nA simple bracket.\n\n\
             ### CadQuery Approach\nCould use loft or sweep for organic shapes.\n\n\
             ### Build Plan\n1. Extrude a 50x30x10mm box.\n\
             2. Cut a 20mm hole through the center.";
         let v = validate_plan(text);
         assert!(
-            !v.extracted_operations.contains(&"loft".to_string()),
-            "loft from CadQuery Approach should not be extracted"
+            v.extracted_operations.contains(&"loft".to_string()),
+            "loft from CadQuery Approach should be retained for reliability scoring"
         );
         assert!(
-            !v.extracted_operations.contains(&"sweep".to_string()),
-            "sweep from CadQuery Approach should not be extracted"
+            v.extracted_operations.contains(&"sweep".to_string()),
+            "sweep from CadQuery Approach should be retained for reliability scoring"
         );
         assert!(v.extracted_operations.contains(&"extrude".to_string()));
         assert!(v.extracted_operations.contains(&"cut".to_string()));
@@ -1775,10 +1807,27 @@ overhangs:
         let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::ReliabilityFirst);
         assert!(!v.is_valid);
         assert!(v.risk_score >= 5);
-        assert!(v
-            .warnings
-            .iter()
-            .any(|w| w.contains("loft() + shell()")));
+        assert!(v.warnings.iter().any(|w| w.contains("loft() + shell()")));
+    }
+
+    #[test]
+    fn test_reliability_first_rejects_when_combo_only_in_approach() {
+        let text = r#"### Object Analysis
+- Enclosure.
+### CadQuery Approach
+- Use loft() for dome and shell from the bottom face for cavity.
+### Build Plan
+1. Extrude base.
+2. Cut openings.
+### Approximation Notes
+- None."#;
+
+        let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::ReliabilityFirst);
+        assert!(!v.is_valid);
+        assert!(
+            v.extracted_operations.contains(&"loft".to_string())
+                && v.extracted_operations.contains(&"shell".to_string())
+        );
     }
 
     #[test]
