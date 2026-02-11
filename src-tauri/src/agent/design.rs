@@ -30,6 +30,7 @@ Do not include hidden reasoning, self-critique, or internal deliberation in the 
 Output only the final plan sections listed below.
 The first line of your response MUST be exactly: `### Object Analysis`
 Do not output any preamble text (e.g., "Load template...", "Let me think...", "Key requirements:").
+Wrap the entire response in `<PLAN>...</PLAN>` tags.
 
 ## Your Output Format
 
@@ -427,19 +428,159 @@ fn extract_build_plan_steps_text(plan_text: &str) -> Option<String> {
 /// Remove any preamble text before the first expected section heading.
 /// This prevents leaked internal reasoning from polluting validators and UI.
 fn sanitize_plan_text(plan_text: &str) -> String {
+    let plan_text = extract_plan_block(plan_text).unwrap_or(plan_text);
+
     // First try to normalize loosely formatted section labels (e.g. "*Object Analysis*:")
     // into canonical markdown headings.
-    if let Some(normalized) = normalize_section_labels(plan_text) {
-        return normalized;
+    let normalized = if let Some(n) = normalize_section_labels(plan_text) {
+        n
+    } else {
+        let heading_re = Regex::new(
+            r"(?im)^#{2,3}\s+(object analysis|housing analysis|cadquery approach|modeling approach|cad approach|build plan|build plan structure|build steps|implementation steps|approximation notes)\s*$",
+        )
+        .unwrap();
+        if let Some(m) = heading_re.find(plan_text) {
+            plan_text[m.start()..].trim().to_string()
+        } else {
+            plan_text.trim().to_string()
+        }
+    };
+
+    // Canonicalize output to stable sections and concise numbered build steps.
+    canonicalize_plan_sections(&normalized)
+}
+
+/// Extract `<PLAN>...</PLAN>` block if present.
+fn extract_plan_block(plan_text: &str) -> Option<&str> {
+    let re = Regex::new(r"(?is)<plan>\s*(.*?)\s*</plan>").unwrap();
+    re.captures(plan_text)
+        .and_then(|caps| caps.get(1).map(|m| m.as_str()))
+}
+
+/// Keep section bodies concise and remove common planning chatter.
+fn clean_section_lines(body: &str) -> Vec<String> {
+    let meta_re = Regex::new(
+        r"(?i)^\s*(load template|the user wants|let me|key requirements|detailed planning|this is tricky|actually|wait[, ]|analysis[: ]|details[: ]?)",
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    for raw in body.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || meta_re.is_match(trimmed) {
+            continue;
+        }
+        let normalized = trimmed
+            .trim_start_matches("* ")
+            .trim_start_matches("- ")
+            .trim()
+            .to_string();
+        if normalized.is_empty() {
+            continue;
+        }
+        out.push(format!("- {}", normalized));
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out
+}
+
+/// Extract numbered steps and compress overly verbose step text.
+fn extract_numbered_steps(text: &str) -> Vec<String> {
+    let re = Regex::new(r"(?m)^\s*\d+[\.\)]\s+(.+)$").unwrap();
+    let mut steps = Vec::new();
+    for cap in re.captures_iter(text) {
+        let mut step = cap
+            .get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
+        if step.is_empty() {
+            continue;
+        }
+        step = Regex::new(r"(?i)^details:\s*")
+            .unwrap()
+            .replace(&step, "")
+            .to_string();
+        // Collapse repeated whitespace to keep plans readable.
+        step = Regex::new(r"\s+").unwrap().replace_all(&step, " ").to_string();
+        if step.len() > 260 {
+            let clipped = &step[..260];
+            if let Some(idx) = clipped.rfind(". ") {
+                step = clipped[..idx + 1].to_string();
+            } else if let Some(idx) = clipped.rfind("; ") {
+                step = clipped[..idx + 1].to_string();
+            } else {
+                step = clipped.to_string();
+            }
+        }
+        let step = step.trim().trim_end_matches(':').trim().to_string();
+        if !step.is_empty() {
+            steps.push(step);
+        }
+        if steps.len() >= 20 {
+            break;
+        }
+    }
+    steps
+}
+
+/// Build a canonical markdown plan with stable section ordering.
+fn canonicalize_plan_sections(plan_text: &str) -> String {
+    let object_analysis = extract_section(plan_text, "Object Analysis")
+        .map(|s| clean_section_lines(&s))
+        .unwrap_or_default();
+    let cadquery_approach = extract_section(plan_text, "CadQuery Approach")
+        .map(|s| clean_section_lines(&s))
+        .unwrap_or_default();
+    let approximation_notes = extract_section(plan_text, "Approximation Notes")
+        .map(|s| clean_section_lines(&s))
+        .unwrap_or_default();
+
+    let build_plan_body = extract_section(plan_text, "Build Plan").unwrap_or_default();
+    let has_build_plan_section = has_section(plan_text, "Build Plan");
+    let mut build_steps = extract_numbered_steps(&build_plan_body);
+    if build_steps.is_empty() {
+        build_steps = extract_numbered_steps(plan_text);
     }
 
-    let heading_re =
-        Regex::new(r"(?im)^#{2,3}\s+(object analysis|cadquery approach|build plan|approximation notes)\s*$")
-            .unwrap();
-    if let Some(m) = heading_re.find(plan_text) {
-        plan_text[m.start()..].trim().to_string()
-    } else {
+    let mut out = String::new();
+    if !object_analysis.is_empty() {
+        out.push_str("### Object Analysis\n");
+        out.push_str(&object_analysis.join("\n"));
+        out.push_str("\n\n");
+    }
+
+    if !cadquery_approach.is_empty() {
+        out.push_str("### CadQuery Approach\n");
+        out.push_str(&cadquery_approach.join("\n"));
+        out.push_str("\n\n");
+    }
+
+    if !build_steps.is_empty() {
+        out.push_str("### Build Plan\n");
+        for (i, step) in build_steps.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", i + 1, step));
+        }
+        out.push('\n');
+    } else if has_build_plan_section {
+        let fallback_lines = clean_section_lines(&build_plan_body);
+        out.push_str("### Build Plan\n");
+        if !fallback_lines.is_empty() {
+            out.push_str(&fallback_lines.join("\n"));
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    if !approximation_notes.is_empty() {
+        out.push_str("### Approximation Notes\n");
+        out.push_str(&approximation_notes.join("\n"));
+    }
+
+    if out.trim().is_empty() {
         plan_text.trim().to_string()
+    } else {
+        out.trim().to_string()
     }
 }
 
