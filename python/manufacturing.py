@@ -79,7 +79,7 @@ def exec_cadquery_code(code_file):
 def tessellate_result(result, tolerance=0.1):
     """Tessellate a CadQuery result into vertices and faces."""
     try:
-        shape = result.val()
+        shape = shape_from_result(result)
         vertices, faces = shape.tessellate(tolerance)
         # Convert CadQuery Vector objects to tuples
         verts = [(v.x, v.y, v.z) for v in vertices]
@@ -89,6 +89,35 @@ def tessellate_result(result, tolerance=0.1):
     except Exception:
         traceback.print_exc()
         sys.exit(4)
+
+
+def shape_from_result(result):
+    """Normalize CadQuery output into a tessellatable shape.
+
+    Supports common result forms across generation paths:
+    - Workplane-like objects exposing .val()
+    - Shape/Compound objects directly
+    - Assembly-like objects exposing .toCompound()
+    """
+    # Workplane / selector result
+    val_fn = getattr(result, "val", None)
+    if callable(val_fn):
+        shape = val_fn()
+        if shape is not None:
+            return shape
+
+    # Assembly-like result
+    to_compound = getattr(result, "toCompound", None)
+    if callable(to_compound):
+        shape = to_compound()
+        if shape is not None:
+            return shape
+
+    # Already a shape-like object
+    if hasattr(result, "tessellate") and hasattr(result, "wrapped"):
+        return result
+
+    raise TypeError(f"Unsupported CadQuery result type for tessellation: {type(result).__name__}")
 
 
 def _count_face_selector(values):
@@ -383,7 +412,7 @@ def cmd_unfold(args):
     try:
         import cadquery as cq
 
-        shape = result.val()
+        shape = shape_from_result(result)
         faces = shape.Faces()
         edges = shape.Edges()
 
