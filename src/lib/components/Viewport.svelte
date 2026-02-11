@@ -26,6 +26,7 @@
   import { computeMassProperties } from '$lib/services/mass-properties';
   import { nanoid } from 'nanoid';
   import type { PrimitiveType, ObjectId, CadTransform, PrimitiveParams, SketchConstraint, SketchToolId, MeasurePoint } from '$lib/types/cad';
+  import type { PendingAssemblyPart } from '$lib/types';
   import * as THREE from 'three';
   import { onMount } from 'svelte';
 
@@ -44,7 +45,16 @@
   const mateStore = getMateStore();
 
   // Tracking for diff-based preview mesh sync
-  type ObjectFingerprint = { params: string; transform: string; color: string; visible: boolean; metalness: number; roughness: number; opacity: number };
+  type ObjectFingerprint = {
+    params: string;
+    transform: string;
+    color: string;
+    visible: boolean;
+    metalness: number;
+    roughness: number;
+    opacity: number;
+    meshBase64: string;
+  };
   let prevObjectMap = new Map<ObjectId, ObjectFingerprint>();
 
   // Track which object is being dragged by gizmo to prevent feedback loop
@@ -68,6 +78,37 @@
   let constraintStatusMessage = $state('');
 
   // ── Full snapshot helpers (scene + sketch + datum + mate) ──
+  function normalizePartKey(name: string): string {
+    const key = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return key || `part_${nanoid(6)}`;
+  }
+
+  function ensureAssemblyComponentForObject(part: PendingAssemblyPart, objectId: string) {
+    const existingForFeature = componentStore.getComponentForFeature(objectId);
+    if (existingForFeature) {
+      if (existingForFeature.sourceFile !== 'ai-generated') {
+        componentStore.updateComponent(existingForFeature.id, { sourceFile: 'ai-generated' });
+      }
+      return;
+    }
+
+    const existingByName = componentStore.components.find(
+      (c) => c.name === part.name && c.sourceFile === 'ai-generated',
+    );
+    if (existingByName) {
+      if (!existingByName.featureIds.includes(objectId)) {
+        componentStore.updateComponent(existingByName.id, {
+          featureIds: [...existingByName.featureIds, objectId],
+        });
+      }
+      return;
+    }
+
+    const comp = componentStore.createComponent([objectId], part.name);
+    componentStore.updateComponent(comp.id, { sourceFile: 'ai-generated' });
+    featureTree.registerComponent(comp.id);
+  }
+
   function captureFullSnapshot() {
     const sceneSnap = scene.snapshot();
     const sketchSnap = sketchStore.snapshot();
@@ -176,7 +217,10 @@
       const cadRot = threeToCadRot(group.rotation);
       const transform: CadTransform = { position: cadPos, rotation: cadRot };
       scene.updateTransform(id, transform);
-      triggerPipeline(100);
+      const obj = scene.getObjectById(id);
+      if (!obj?.importedMeshBase64) {
+        triggerPipeline(100);
+      }
     });
 
     engine.onScaleEnd((id, scale) => {
@@ -199,6 +243,7 @@
 
       const obj = scene.getObjectById(id);
       if (!obj) return;
+      if (obj.importedMeshBase64) return;
 
       const newParams = applyScaleToParams(obj.params, scale);
       scene.updateParams(id, newParams);
@@ -251,6 +296,28 @@
       }
     }
   }
+
+  // ── Watch for pending STL data — works in both manual and parametric modes ──
+  $effect(() => {
+    const parts = viewportStore.pendingAssemblyParts;
+    if (!parts || !engine) return;
+
+    if (scene.codeMode !== 'parametric') {
+      scene.setCodeMode('parametric');
+    }
+    engine.clearModel();
+    viewportStore.setPendingStl(null);
+
+    for (const part of parts) {
+      const key = part.part_key || normalizePartKey(part.name);
+      const obj = scene.upsertImportedMeshObject(key, part.name, part.stl_base64, part.position);
+      ensureAssemblyComponentForObject(part, obj.id);
+    }
+
+    featureTree.syncFromStores();
+    viewportStore.setHasModel(true);
+    viewportStore.setPendingAssemblyParts(null);
+  });
 
   // ── Watch for pending STL data — works in both manual and parametric modes ──
   $effect(() => {
@@ -331,6 +398,7 @@
       const curMetalness = obj.metalness ?? 0.3;
       const curRoughness = obj.roughness ?? 0.7;
       const curOpacity = obj.opacity ?? 1.0;
+      const meshBase64 = obj.importedMeshBase64 ?? '';
       const prev = prevObjectMap.get(obj.id);
 
       const fingerprint: ObjectFingerprint = {
@@ -341,15 +409,24 @@
         metalness: curMetalness,
         roughness: curRoughness,
         opacity: curOpacity,
+        meshBase64,
       };
 
       if (!prev) {
         // New object — full add
-        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        if (obj.importedMeshBase64) {
+          engine.addImportedMesh(obj.id, obj.importedMeshBase64, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        } else {
+          engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        }
         prevObjectMap.set(obj.id, fingerprint);
-      } else if (prev.params !== paramsStr) {
+      } else if (prev.params !== paramsStr || prev.meshBase64 !== meshBase64) {
         // Params changed — full rebuild
-        engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        if (obj.importedMeshBase64) {
+          engine.addImportedMesh(obj.id, obj.importedMeshBase64, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        } else {
+          engine.addPreviewMesh(obj.id, obj.params, obj.transform, obj.color, obj.metalness, obj.roughness, obj.opacity);
+        }
         prevObjectMap.set(obj.id, fingerprint);
       } else if (prev.color !== obj.color || prev.metalness !== curMetalness || prev.roughness !== curRoughness || prev.opacity !== curOpacity) {
         // Material/color changed — lightweight material update (no geometry rebuild)

@@ -437,6 +437,66 @@ export class ViewportEngine {
   }
 
   /**
+   * Add or update an STL-backed object mesh from base64 data.
+   * Used for AI multipart assembly parts so they can be selected/transformed/exploded.
+   */
+  addImportedMesh(
+    id: ObjectId,
+    stlBase64: string,
+    transform: CadTransform,
+    color: string,
+    metalness?: number,
+    roughness?: number,
+    opacity?: number,
+  ): void {
+    // Remove existing if updating
+    this.removeObject(id);
+
+    const buffer = this.decodeBase64ToArrayBuffer(stlBase64);
+    const loader = new STLLoader();
+    const geometry = loader.parse(buffer);
+    geometry.rotateX(-Math.PI / 2); // CadQuery Z-up -> Three.js Y-up
+    geometry.computeVertexNormals();
+
+    const resolvedMetalness = metalness ?? 0.3;
+    const resolvedRoughness = roughness ?? 0.7;
+    const resolvedOpacity = opacity ?? 1.0;
+
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color),
+      metalness: resolvedMetalness,
+      roughness: resolvedRoughness,
+      transparent: resolvedOpacity < 1,
+      opacity: resolvedOpacity,
+      depthWrite: resolvedOpacity >= 1,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.baseOpacity = resolvedOpacity;
+
+    const group = new THREE.Group();
+    group.add(mesh);
+    group.userData.objectId = id;
+    group.userData.importedMesh = true;
+
+    const pos = cadToThreePos(transform.position);
+    group.position.copy(pos);
+    const rot = cadToThreeRot(transform.rotation);
+    group.rotation.copy(rot);
+
+    this.objectMeshes.set(id, group);
+    this.scene.add(group);
+
+    if (this.currentDisplayMode !== 'shaded') {
+      this.applyDisplayModeToMesh(mesh);
+    }
+
+    this.updateMeshVisuals(id);
+  }
+
+  /**
    * Remove an object mesh from the scene.
    */
   removeObject(id: ObjectId): void {
@@ -1906,12 +1966,16 @@ export class ViewportEngine {
    * Load an STL model from a base64-encoded string.
    */
   loadSTLFromBase64(base64: string): void {
+    this.loadSTL(this.decodeBase64ToArrayBuffer(base64));
+  }
+
+  private decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    this.loadSTL(bytes.buffer as ArrayBuffer);
+    return bytes.buffer as ArrayBuffer;
   }
 
   /**

@@ -49,6 +49,7 @@ pub struct ValidationResult {
     pub retry_usage: TokenUsage,
     pub static_findings: Vec<String>,
     pub post_geometry_report: Option<PostGeometryValidationReport>,
+    pub post_check_warning: Option<String>,
 }
 
 /// Progress events emitted during the validation loop.
@@ -75,6 +76,9 @@ pub enum ValidationEvent {
     },
     PostGeometryValidation {
         report: PostGeometryValidationReport,
+    },
+    PostGeometryWarning {
+        message: String,
     },
 }
 
@@ -168,6 +172,144 @@ fn parse_dimensions_from_text(text: &str) -> Vec<f64> {
 
     out.retain(|v| *v > 0.0 && *v <= 10000.0);
     out
+}
+
+fn should_retry_from_post_geometry(report: &PostGeometryValidationReport) -> bool {
+    !report.manifold || !report.bbox_ok
+}
+
+fn format_post_check_warning(reason: &str) -> String {
+    format!(
+        "Geometry post-check unavailable (tooling error). Model generated; validate manually if critical. {}",
+        reason
+    )
+}
+
+fn format_decimal(value: f64) -> String {
+    let mut s = format!("{:.4}", value);
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.push('0');
+    }
+    s
+}
+
+fn reduce_fillet_radii_in_line(line: &str) -> String {
+    let re = Regex::new(r"\.(fillet|chamfer)\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)")
+        .expect("valid fillet regex");
+    re.replace_all(line, |caps: &regex::Captures<'_>| {
+        let op = &caps[1];
+        let raw = caps[2].parse::<f64>().unwrap_or(1.0);
+        let reduced = (raw * 0.5).max(0.2);
+        format!(".{}({})", op, format_decimal(reduced))
+    })
+    .to_string()
+}
+
+fn wrap_line_with_fillet_guard(line: &str) -> String {
+    let indent: String = line
+        .chars()
+        .take_while(|c| c.is_ascii_whitespace())
+        .collect();
+    let trimmed = line.trim_start();
+    let safer = reduce_fillet_radii_in_line(trimmed);
+    format!(
+        "{i}# auto-fillet-guard\n{i}try:\n{i}    {s}\n{i}except Exception:\n{i}    pass",
+        i = indent,
+        s = safer
+    )
+}
+
+fn apply_line_targeted_fillet_guard(code: &str, source_line: &str) -> Option<String> {
+    let target = source_line.trim();
+    if target.is_empty() || !target.contains(".fillet(") {
+        return None;
+    }
+
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        if !changed && !line.contains("auto-fillet-guard") && line.trim() == target {
+            out.push(wrap_line_with_fillet_guard(line));
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn apply_last_fillet_guard_fallback(code: &str) -> Option<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.contains(".fillet(") && !t.contains("auto-fillet-guard") {
+            idx = Some(i);
+        }
+    }
+    let i = idx?;
+    let mut out = Vec::new();
+    for (j, line) in lines.iter().enumerate() {
+        if j == i {
+            out.push(wrap_line_with_fillet_guard(line));
+        } else {
+            out.push((*line).to_string());
+        }
+    }
+    Some(out.join("\n"))
+}
+
+fn is_fillet_failure_candidate(
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+) -> bool {
+    let category_hit = matches!(
+        structured_error.category,
+        validate::ErrorCategory::Topology(validate::TopologySubKind::FilletFailure)
+    );
+    if category_hit {
+        return true;
+    }
+
+    let msg = runtime_error.to_lowercase();
+    let source = structured_error
+        .context
+        .as_ref()
+        .and_then(|c| c.source_line.as_ref())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    (msg.contains("stdfail_notdone") || msg.contains("brep_api: command not done"))
+        && (msg.contains("fillet") || source.contains(".fillet("))
+}
+
+fn maybe_apply_fillet_auto_repair(
+    current_code: &str,
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+) -> Option<String> {
+    if !is_fillet_failure_candidate(structured_error, runtime_error) {
+        return None;
+    }
+
+    if let Some(source_line) = structured_error
+        .context
+        .as_ref()
+        .and_then(|c| c.source_line.as_ref())
+    {
+        if let Some(repaired) = apply_line_targeted_fillet_guard(current_code, source_line) {
+            return Some(repaired);
+        }
+    }
+
+    apply_last_fillet_guard_fallback(current_code)
 }
 
 fn build_retry_prompt_with_findings(
@@ -363,60 +505,95 @@ pub async fn validate_and_retry(
 
         match execution_result {
             Ok(exec_result) => {
-                let post_report = run_post_geometry_checks(&current_code, ctx, user_request)
-                    .map_err(AppError::CadQueryError)?;
+                match run_post_geometry_checks(&current_code, ctx, user_request) {
+                    Ok(post_report) => {
+                        on_event(ValidationEvent::PostGeometryValidation {
+                            report: post_report.clone(),
+                        });
 
-                on_event(ValidationEvent::PostGeometryValidation {
-                    report: post_report.clone(),
-                });
+                        if should_retry_from_post_geometry(&post_report) {
+                            let err = if post_report.warnings.is_empty() {
+                                "Post-geometry validation failed".to_string()
+                            } else {
+                                format!(
+                                    "Post-geometry validation failed:\n{}",
+                                    post_report.warnings.join("\n")
+                                )
+                            };
 
-                if !post_report.manifold || !post_report.bbox_ok {
-                    let err = if post_report.warnings.is_empty() {
-                        "Post-geometry validation failed".to_string()
-                    } else {
-                        format!(
-                            "Post-geometry validation failed:\n{}",
-                            post_report.warnings.join("\n")
-                        )
-                    };
+                            let will_retry = attempt < max_attempts;
+                            on_event(ValidationEvent::Failed {
+                                attempt,
+                                error_category: "PostGeometry".to_string(),
+                                error_message: err.clone(),
+                                will_retry,
+                            });
 
-                    let will_retry = attempt < max_attempts;
-                    on_event(ValidationEvent::Failed {
-                        attempt,
-                        error_category: "PostGeometry".to_string(),
-                        error_message: err.clone(),
-                        will_retry,
-                    });
+                            if !will_retry {
+                                return Ok(ValidationResult {
+                                    code: current_code,
+                                    stl_base64: None,
+                                    success: false,
+                                    attempts: attempt,
+                                    error: Some(err),
+                                    retry_usage,
+                                    static_findings: static_findings_accum,
+                                    post_geometry_report: Some(post_report),
+                                    post_check_warning: None,
+                                });
+                            }
+                        } else {
+                            let stl_base64 = base64::engine::general_purpose::STANDARD
+                                .encode(&exec_result.stl_data);
+                            on_event(ValidationEvent::Success {
+                                attempt,
+                                message: format!(
+                                    "Code validated successfully on attempt {}.",
+                                    attempt
+                                ),
+                            });
+                            return Ok(ValidationResult {
+                                code: current_code,
+                                stl_base64: Some(stl_base64),
+                                success: true,
+                                attempts: attempt,
+                                error: None,
+                                retry_usage,
+                                static_findings: static_findings_accum,
+                                post_geometry_report: Some(post_report),
+                                post_check_warning: None,
+                            });
+                        }
+                    }
+                    Err(reason) => {
+                        // Soft-fail policy for post-check infrastructure errors.
+                        let warning = format_post_check_warning(&reason);
+                        on_event(ValidationEvent::PostGeometryWarning {
+                            message: warning.clone(),
+                        });
 
-                    if !will_retry {
+                        let stl_base64 =
+                            base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
+                        on_event(ValidationEvent::Success {
+                            attempt,
+                            message: format!(
+                                "Code validated successfully on attempt {} (post-check soft-fail).",
+                                attempt
+                            ),
+                        });
+
                         return Ok(ValidationResult {
                             code: current_code,
-                            stl_base64: None,
-                            success: false,
+                            stl_base64: Some(stl_base64),
+                            success: true,
                             attempts: attempt,
-                            error: Some(err),
+                            error: None,
                             retry_usage,
                             static_findings: static_findings_accum,
-                            post_geometry_report: Some(post_report),
+                            post_geometry_report: None,
+                            post_check_warning: Some(warning),
                         });
                     }
-                } else {
-                    let stl_base64 =
-                        base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
-                    on_event(ValidationEvent::Success {
-                        attempt,
-                        message: format!("Code validated successfully on attempt {}.", attempt),
-                    });
-                    return Ok(ValidationResult {
-                        code: current_code,
-                        stl_base64: Some(stl_base64),
-                        success: true,
-                        attempts: attempt,
-                        error: None,
-                        retry_usage,
-                        static_findings: static_findings_accum,
-                        post_geometry_report: Some(post_report),
-                    });
                 }
             }
             Err(error_msg) => {
@@ -444,7 +621,15 @@ pub async fn validate_and_retry(
                         retry_usage,
                         static_findings: static_findings_accum,
                         post_geometry_report: None,
+                        post_check_warning: None,
                     });
+                }
+
+                if let Some(auto_fixed_code) =
+                    maybe_apply_fillet_auto_repair(&current_code, &structured_error, &error_msg)
+                {
+                    current_code = auto_fixed_code;
+                    continue;
                 }
 
                 let rules = AgentRules::from_preset(ctx.config.agent_rules_preset.as_deref()).ok();
@@ -498,6 +683,7 @@ pub async fn validate_and_retry(
                             retry_usage,
                             static_findings: static_findings_accum,
                             post_geometry_report: None,
+                            post_check_warning: None,
                         });
                     }
                 }
@@ -514,6 +700,7 @@ pub async fn validate_and_retry(
         retry_usage,
         static_findings: static_findings_accum,
         post_geometry_report: None,
+        post_check_warning: None,
     })
 }
 
@@ -540,6 +727,7 @@ mod tests {
                 bbox_ok: true,
                 warnings: vec![],
             }),
+            post_check_warning: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":true"));
@@ -561,6 +749,7 @@ mod tests {
             },
             static_findings: vec!["Error: missing result".to_string()],
             post_geometry_report: None,
+            post_check_warning: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":false"));
@@ -586,5 +775,107 @@ mod tests {
         assert!(dims.contains(&28.0));
         assert!(dims.contains(&7.5));
         assert!(dims.contains(&1.8));
+    }
+
+    #[test]
+    fn test_should_retry_from_post_geometry_behavior() {
+        let good = PostGeometryValidationReport {
+            watertight: true,
+            manifold: true,
+            degenerate_faces: 0,
+            euler_number: 2,
+            triangle_count: 100,
+            bbox_ok: true,
+            warnings: vec![],
+        };
+        assert!(!should_retry_from_post_geometry(&good));
+
+        let bad = PostGeometryValidationReport {
+            manifold: false,
+            warnings: vec!["bad".to_string()],
+            ..good
+        };
+        assert!(should_retry_from_post_geometry(&bad));
+    }
+
+    #[test]
+    fn test_post_check_warning_message() {
+        let msg = format_post_check_warning("post-check returned exit code 1");
+        assert!(msg.contains("Geometry post-check unavailable"));
+        assert!(msg.contains("post-check returned exit code 1"));
+    }
+
+    #[test]
+    fn test_soft_fail_validation_result_shape() {
+        let exec_result = runner::ExecutionResult {
+            stl_data: vec![1, 2, 3],
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        let stl_base64 = base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
+        let result = ValidationResult {
+            code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+            stl_base64: Some(stl_base64),
+            success: true,
+            attempts: 1,
+            error: None,
+            retry_usage: TokenUsage::default(),
+            static_findings: vec![],
+            post_geometry_report: None,
+            post_check_warning: Some(format_post_check_warning("trimesh API mismatch")),
+        };
+
+        assert!(result.success);
+        assert!(result.error.is_none());
+        assert!(result.stl_base64.is_some());
+        assert!(result.post_check_warning.is_some());
+    }
+
+    #[test]
+    fn test_maybe_apply_fillet_auto_repair_targets_source_line() {
+        let code = r#"import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+result = result.edges("|Z").fillet(4.0)"#;
+
+        let err = validate::StructuredError {
+            error_type: "OCP.StdFail_NotDone".to_string(),
+            message: "BRep_API: command not done".to_string(),
+            line_number: Some(3),
+            suggestion: None,
+            category: validate::ErrorCategory::Topology(validate::TopologySubKind::FilletFailure),
+            failing_operation: Some("fillet".to_string()),
+            context: Some(validate::ErrorContext {
+                source_line: Some(r#"result = result.edges("|Z").fillet(4.0)"#.to_string()),
+                failing_parameters: None,
+            }),
+        };
+
+        let repaired = maybe_apply_fillet_auto_repair(code, &err, "StdFail_NotDone").unwrap();
+        assert!(repaired.contains("auto-fillet-guard"));
+        assert!(repaired.contains("try:"));
+        assert!(repaired.contains(".fillet(2.0)"));
+    }
+
+    #[test]
+    fn test_maybe_apply_fillet_auto_repair_fallback_last_fillet() {
+        let code = r#"import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+body = result.edges("|Z").fillet(3.0)
+result = body"#;
+
+        let err = validate::StructuredError {
+            error_type: "UnknownError".to_string(),
+            message: "BRep_API: command not done".to_string(),
+            line_number: None,
+            suggestion: None,
+            category: validate::ErrorCategory::ApiMisuse,
+            failing_operation: None,
+            context: None,
+        };
+
+        let repaired = maybe_apply_fillet_auto_repair(code, &err, "StdFail_NotDone in fillet")
+            .expect("fallback should wrap last fillet");
+        assert!(repaired.contains("auto-fillet-guard"));
+        assert!(repaired.contains(".fillet(1.5)"));
     }
 }

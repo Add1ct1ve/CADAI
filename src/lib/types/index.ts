@@ -132,6 +132,13 @@ export interface PartSpec {
   constraints: string[];
 }
 
+export interface PendingAssemblyPart {
+  part_key: string;
+  name: string;
+  stl_base64: string;
+  position: [number, number, number];
+}
+
 export type MultiPartEvent =
   | { kind: 'DesignPlan'; plan_text: string }
   | { kind: 'PlanValidation'; risk_score: number; warnings: string[]; is_valid: boolean; rejected_reason: string | null }
@@ -153,6 +160,7 @@ export type MultiPartEvent =
   | { kind: 'ValidationSuccess'; attempt: number; message: string }
   | { kind: 'ValidationFailed'; attempt: number; error_category: string; error_message: string; will_retry: boolean }
   | { kind: 'PostGeometryValidationReport'; report: { watertight: boolean; manifold: boolean; degenerate_faces: number; euler_number: number; triangle_count: number; bbox_ok: boolean; warnings: string[] } }
+  | { kind: 'PostGeometryValidationWarning'; message: string }
   | { kind: 'RetrievalStatus'; message: string; items: { source: string; id: string; title: string; score: number }[]; used_embeddings: boolean; lexical_fallback: boolean }
   | { kind: 'IterativeStart'; total_steps: number; steps: { index: number; name: string; description: string; operations: string[] }[] }
   | { kind: 'IterativeStepStarted'; step_index: number; step_name: string; description: string }

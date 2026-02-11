@@ -1,4 +1,4 @@
-import type { ViewportState } from '$lib/types';
+import type { PendingAssemblyPart, ViewportState } from '$lib/types';
 import type { ViewportEngine } from '$lib/services/viewport-engine';
 import type { CameraState, DisplayMode, SectionPlaneConfig } from '$lib/types/cad';
 
@@ -6,6 +6,7 @@ let isLoading = $state(false);
 let hasModel = $state(false);
 let error = $state<string | null>(null);
 let pendingStl = $state<string | null>(null);
+let pendingAssemblyParts = $state<PendingAssemblyPart[] | null>(null);
 let pendingClear = $state(false);
 let engineRef = $state<ViewportEngine | null>(null);
 let gridVisible = $state(true);
@@ -42,6 +43,12 @@ export function getViewportStore() {
     },
     setPendingStl(base64: string | null) {
       pendingStl = base64;
+    },
+    get pendingAssemblyParts() {
+      return pendingAssemblyParts;
+    },
+    setPendingAssemblyParts(parts: PendingAssemblyPart[] | null) {
+      pendingAssemblyParts = parts;
     },
     get pendingClear() {
       return pendingClear;

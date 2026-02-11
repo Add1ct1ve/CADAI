@@ -282,6 +282,10 @@ export interface SceneObject {
   splitOp?: SplitOp;
   patternOp?: PatternOp;
   suppressed?: boolean;
+  /** STL-backed mesh preview object (AI multipart import). */
+  importedMeshBase64?: string;
+  /** Stable key used to upsert/update imported mesh parts across generations. */
+  importedPartKey?: string;
 }
 
 // ─── Component types ────────────────────────────

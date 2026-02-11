@@ -19,6 +19,7 @@ let rollbackIndex = $state<number | null>(null);
 
 // ─── Icon helpers ───────────────────────────────
 function primitiveIcon(obj: SceneObject): string {
+  if (obj.importedMeshBase64) return '\u29C9'; // ⧉ imported mesh part
   if (obj.booleanOp) {
     switch (obj.booleanOp.type) {
       case 'union':     return '\u228C'; // ⊌
@@ -52,6 +53,9 @@ function sketchIcon(op?: SketchOperation): string {
 }
 
 function primitiveDetail(obj: SceneObject): string {
+  if (obj.importedMeshBase64) {
+    return 'Imported mesh part';
+  }
   if (obj.booleanOp) {
     const target = getSceneStore().getObjectById(obj.booleanOp.targetId);
     return `${obj.booleanOp.type} \u2192 ${target?.name ?? '?'}`;

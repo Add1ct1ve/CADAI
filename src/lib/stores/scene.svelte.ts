@@ -89,6 +89,58 @@ export function getSceneStore() {
       }
     },
 
+    /**
+     * Upsert an imported STL-backed object used for AI multipart assemblies.
+     * Reuses existing object by `importedPartKey` when present.
+     */
+    upsertImportedMeshObject(
+      importedPartKey: string,
+      name: string,
+      stlBase64: string,
+      position: [number, number, number],
+    ): SceneObject {
+      const existing = objects.find(
+        (o) => o.importedPartKey === importedPartKey && !!o.importedMeshBase64,
+      );
+
+      if (existing) {
+        const updated: SceneObject = {
+          ...existing,
+          name,
+          transform: {
+            ...existing.transform,
+            position,
+          },
+          visible: true,
+          importedMeshBase64: stlBase64,
+          importedPartKey,
+        };
+        objects = objects.map((o) => (o.id === existing.id ? updated : o));
+        return updated;
+      }
+
+      const id = nanoid(10);
+      const obj: SceneObject = {
+        id,
+        name,
+        // Keep params for compatibility with existing UI/code paths.
+        // Geometry rendering is driven by importedMeshBase64 when set.
+        params: getDefaultParams('box'),
+        transform: {
+          ...getDefaultTransform(),
+          position,
+        },
+        color: '#89b4fa',
+        visible: true,
+        locked: false,
+        importedMeshBase64: stlBase64,
+        importedPartKey,
+      };
+      objects = [...objects, obj];
+      getFeatureTreeStore().registerFeature(id);
+      return obj;
+    },
+
     removeObject(id: ObjectId) {
       // Orphan any boolean tools that reference this target
       objects = objects.map((o) =>

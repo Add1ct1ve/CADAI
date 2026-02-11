@@ -154,6 +154,9 @@ pub enum MultiPartEvent {
     PostGeometryValidationReport {
         report: executor::PostGeometryValidationReport,
     },
+    PostGeometryValidationWarning {
+        message: String,
+    },
     IterativeStart {
         total_steps: usize,
         steps: Vec<iterative::BuildStep>,
@@ -231,6 +234,8 @@ struct PipelineOutcome {
     error: Option<String>,
     validation_attempts: Option<u32>,
     static_findings: Vec<String>,
+    post_check_soft_failed: bool,
+    post_check_soft_fail_reason: Option<String>,
 }
 
 /// Record a generation attempt into the session memory.
@@ -291,6 +296,8 @@ fn record_generation_trace(
         execution_success: outcome.success,
         retry_attempts: outcome.validation_attempts,
         final_error: outcome.error.clone(),
+        post_check_soft_failed: outcome.post_check_soft_failed,
+        post_check_soft_fail_reason: outcome.post_check_soft_fail_reason.clone(),
         mechanism_candidates: retrieval_result
             .items
             .iter()
@@ -491,6 +498,9 @@ fn forward_validation_event(on_event: &Channel<MultiPartEvent>, evt: executor::V
         }
         executor::ValidationEvent::PostGeometryValidation { report } => {
             let _ = on_event.send(MultiPartEvent::PostGeometryValidationReport { report });
+        }
+        executor::ValidationEvent::PostGeometryWarning { message } => {
+            let _ = on_event.send(MultiPartEvent::PostGeometryValidationWarning { message });
         }
     }
 }
@@ -775,9 +785,52 @@ async fn run_generation_pipeline(
         emit_usage(on_event, "plan", u, provider_id, model_id);
     }
 
-    let plan: GenerationPlan = parse_plan(&plan_json);
+    let requires_multipart_contract = request_requires_multipart_contract(user_request, plan_text);
+    let plan: GenerationPlan = match parse_plan(&plan_json) {
+        Ok(plan) => plan,
+        Err(parse_err) => {
+            if requires_multipart_contract {
+                let msg = format!(
+                    "Planner failed to return valid multipart JSON: {}",
+                    parse_err
+                );
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: msg.clone(),
+                });
+                let _ = on_event.send(MultiPartEvent::Done {
+                    success: false,
+                    error: Some(msg.clone()),
+                    validated: false,
+                });
+                return Err(AppError::AiProviderError(msg));
+            }
+
+            let _ = on_event.send(MultiPartEvent::PlanStatus {
+                message: "Planner returned invalid JSON; falling back to single-part generation."
+                    .to_string(),
+            });
+            GenerationPlan {
+                mode: "single".to_string(),
+                description: None,
+                parts: vec![],
+            }
+        }
+    };
 
     let _ = on_event.send(MultiPartEvent::PlanResult { plan: plan.clone() });
+
+    if requires_multipart_contract && (plan.mode != "multi" || plan.parts.len() < 2) {
+        let msg = "Strict multipart contract not satisfied: planner did not return at least 2 separable parts.".to_string();
+        let _ = on_event.send(MultiPartEvent::PlanStatus {
+            message: msg.clone(),
+        });
+        let _ = on_event.send(MultiPartEvent::Done {
+            success: false,
+            error: Some(msg.clone()),
+            validated: false,
+        });
+        return Err(AppError::AiProviderError(msg));
+    }
 
     // -----------------------------------------------------------------------
     // Single mode: fall through to normal streaming
@@ -898,6 +951,8 @@ async fn run_generation_pipeline(
                     error: iter_error,
                     validation_attempts: None,
                     static_findings: vec![],
+                    post_check_soft_failed: false,
+                    post_check_soft_fail_reason: None,
                 });
             }
             // No Python execution context → fall through to single-shot
@@ -1065,6 +1120,8 @@ async fn run_generation_pipeline(
                         error: None,
                         validation_attempts: None,
                         static_findings: vec![],
+                        post_check_soft_failed: false,
+                        post_check_soft_fail_reason: None,
                     });
                 }
 
@@ -1212,6 +1269,8 @@ async fn run_generation_pipeline(
                 error: validation_result.error,
                 validation_attempts: Some(validation_result.attempts),
                 static_findings: validation_result.static_findings,
+                post_check_soft_failed: validation_result.post_check_warning.is_some(),
+                post_check_soft_fail_reason: validation_result.post_check_warning,
             });
         }
 
@@ -1240,6 +1299,8 @@ async fn run_generation_pipeline(
             error: None,
             validation_attempts: None,
             static_findings: vec![],
+            post_check_soft_failed: false,
+            post_check_soft_fail_reason: None,
         });
     }
 
@@ -1501,6 +1562,8 @@ async fn run_generation_pipeline(
                     error: validation_result.error,
                     validation_attempts: Some(validation_result.attempts),
                     static_findings: validation_result.static_findings,
+                    post_check_soft_failed: validation_result.post_check_warning.is_some(),
+                    post_check_soft_fail_reason: validation_result.post_check_warning,
                 });
             }
 
@@ -1525,6 +1588,8 @@ async fn run_generation_pipeline(
                 error: None,
                 validation_attempts: None,
                 static_findings: vec![],
+                post_check_soft_failed: false,
+                post_check_soft_fail_reason: None,
             })
         }
         Err(e) => {
@@ -1750,6 +1815,8 @@ pub async fn generate_parallel(
                 error: validation_result.error.clone(),
                 validation_attempts: Some(validation_result.attempts),
                 static_findings: validation_result.static_findings.clone(),
+                post_check_soft_failed: validation_result.post_check_warning.is_some(),
+                post_check_soft_fail_reason: validation_result.post_check_warning.clone(),
             };
 
             record_generation_attempt(
@@ -1813,6 +1880,8 @@ pub async fn generate_parallel(
             error: None,
             validation_attempts: None,
             static_findings: vec![],
+            post_check_soft_failed: false,
+            post_check_soft_fail_reason: None,
         };
         record_generation_trace(&config, &user_request, &retrieval_result, None, &outcome);
 
@@ -1977,8 +2046,40 @@ pub async fn generate_from_plan(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Parse the planner JSON response. Falls back to single mode on any parse failure.
-fn parse_plan(json_str: &str) -> GenerationPlan {
+/// Detect if the user request explicitly requires a strict multipart assembly outcome.
+fn request_requires_multipart_contract(user_request: &str, plan_text: &str) -> bool {
+    let text = format!("{}\n{}", user_request, plan_text).to_lowercase();
+
+    const EXPLICIT_MULTI_HINTS: [&str; 16] = [
+        "separate part",
+        "separate parts",
+        "separate component",
+        "separate components",
+        "separate body",
+        "separate bodies",
+        "separate piece",
+        "separate pieces",
+        "back plate",
+        "backplate",
+        "multi-part",
+        "multipart",
+        "exploded view",
+        "exploded",
+        "bakplate",
+        "eksplodert",
+    ];
+
+    if EXPLICIT_MULTI_HINTS.iter().any(|hint| text.contains(hint)) {
+        return true;
+    }
+
+    // Guard for prompts phrased as "separate X" without exact phrase matches.
+    text.contains("separate")
+        && (text.contains("part") || text.contains("component") || text.contains("piece"))
+}
+
+/// Parse the planner JSON response.
+fn parse_plan(json_str: &str) -> Result<GenerationPlan, String> {
     // Try to extract JSON from the response (the AI might wrap it in markdown fences)
     let cleaned = json_str
         .trim()
@@ -1987,16 +2088,75 @@ fn parse_plan(json_str: &str) -> GenerationPlan {
         .trim_end_matches("```")
         .trim();
 
-    serde_json::from_str::<GenerationPlan>(cleaned).unwrap_or_else(|_| GenerationPlan {
-        mode: "single".to_string(),
-        description: None,
-        parts: vec![],
-    })
+    match serde_json::from_str::<GenerationPlan>(cleaned) {
+        Ok(plan) => {
+            if plan.mode != "single" && plan.mode != "multi" {
+                return Err(format!("Invalid planner mode '{}'", plan.mode));
+            }
+            Ok(plan)
+        }
+        Err(first_err) => {
+            // Secondary attempt: extract first outer JSON object if the model wrapped text around it.
+            if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
+                if start < end {
+                    let candidate = &cleaned[start..=end];
+                    if let Ok(plan) = serde_json::from_str::<GenerationPlan>(candidate) {
+                        if plan.mode != "single" && plan.mode != "multi" {
+                            return Err(format!("Invalid planner mode '{}'", plan.mode));
+                        }
+                        return Ok(plan);
+                    }
+                }
+            }
+            Err(format!("Planner JSON parse failed: {}", first_err))
+        }
+    }
 }
 
 /// Extract a Python code block from an AI response.
 fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_plan, request_requires_multipart_contract};
+
+    #[test]
+    fn parse_plan_accepts_valid_json() {
+        let json = r#"{"mode":"multi","parts":[{"name":"body","description":"main","position":[0,0,0],"constraints":[]}],"description":"test"}"#;
+        let plan = parse_plan(json).expect("plan should parse");
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 1);
+        assert_eq!(plan.parts[0].name, "body");
+    }
+
+    #[test]
+    fn parse_plan_accepts_markdown_wrapped_json() {
+        let json = r#"```json
+{"mode":"single"}
+```"#;
+        let plan = parse_plan(json).expect("wrapped json should parse");
+        assert_eq!(plan.mode, "single");
+    }
+
+    #[test]
+    fn parse_plan_rejects_invalid_mode() {
+        let json = r#"{"mode":"unknown","parts":[]}"#;
+        assert!(parse_plan(json).is_err());
+    }
+
+    #[test]
+    fn multipart_contract_detects_explicit_separate_parts() {
+        let user = "Make a wearable housing with a separate back plate";
+        assert!(request_requires_multipart_contract(user, ""));
+    }
+
+    #[test]
+    fn multipart_contract_not_required_for_simple_single_object() {
+        let user = "Create a rounded enclosure with fillets";
+        assert!(!request_requires_multipart_contract(user, ""));
+    }
 }
 
 // ---------------------------------------------------------------------------
