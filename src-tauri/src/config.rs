@@ -29,6 +29,19 @@ impl Default for ReviewerMode {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticBboxMode {
+    SemanticAware,
+    Legacy,
+}
+
+impl Default for SemanticBboxMode {
+    fn default() -> Self {
+        Self::SemanticAware
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub ai_provider: String,
@@ -80,8 +93,17 @@ pub struct AppConfig {
     pub reviewer_mode: ReviewerMode,
     #[serde(default = "default_true")]
     pub deterministic_fallback_enabled: bool,
-    #[serde(default = "default_fallback_after_plan_failures")]
-    pub fallback_after_plan_failures: u32,
+    #[serde(
+        default = "default_fallback_after_part_failures",
+        alias = "fallback_after_plan_failures"
+    )]
+    pub fallback_after_part_failures: u32,
+    #[serde(default = "default_true")]
+    pub quality_gates_strict: bool,
+    #[serde(default = "default_false")]
+    pub allow_euler_override: bool,
+    #[serde(default)]
+    pub semantic_bbox_mode: SemanticBboxMode,
     #[serde(default = "default_true")]
     pub mechanisms_enabled: bool,
     #[serde(default)]
@@ -94,6 +116,10 @@ pub struct AppConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_units() -> String {
@@ -132,7 +158,7 @@ fn default_max_generation_runtime_seconds() -> u32 {
     300
 }
 
-fn default_fallback_after_plan_failures() -> u32 {
+fn default_fallback_after_part_failures() -> u32 {
     2
 }
 
@@ -180,7 +206,10 @@ impl Default for AppConfig {
             semantic_contract_strict: true,
             reviewer_mode: ReviewerMode::default(),
             deterministic_fallback_enabled: true,
-            fallback_after_plan_failures: default_fallback_after_plan_failures(),
+            fallback_after_part_failures: default_fallback_after_part_failures(),
+            quality_gates_strict: true,
+            allow_euler_override: false,
+            semantic_bbox_mode: SemanticBboxMode::default(),
             mechanisms_enabled: true,
             mechanism_import_enabled: false,
             mechanism_cache_max_mb: default_mechanism_cache_max_mb(),

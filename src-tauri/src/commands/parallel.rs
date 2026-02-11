@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -313,6 +314,16 @@ fn record_generation_trace(
             lower.contains("component count") || lower.contains("split_part")
         })
         .count() as u32;
+    let multipart_contract_failure_count = outcome
+        .failure_signatures
+        .iter()
+        .filter(|s| {
+            let lower = s.to_lowercase();
+            lower.contains("multipart contract")
+                || lower.contains("assembly contract")
+                || lower.contains("required multipart")
+        })
+        .count() as u32;
     let fallback_activation_count = outcome
         .failure_signatures
         .iter()
@@ -331,6 +342,17 @@ fn record_generation_trace(
         } else {
             0.0
         })
+    };
+    let false_success_count = if outcome.success
+        && (multipart_contract_failure_count > 0
+            || outcome
+                .part_acceptance_rate
+                .map(|r| r < 1.0)
+                .unwrap_or(false))
+    {
+        1
+    } else {
+        0
     };
 
     let trace = telemetry::GenerationTraceV1 {
@@ -361,6 +383,9 @@ fn record_generation_trace(
         part_acceptance_rate: outcome.part_acceptance_rate,
         assembly_success_rate: outcome.assembly_success_rate,
         semantic_acceptance_rate: outcome.part_acceptance_rate,
+        fallback_activation_count,
+        multipart_contract_failure_count,
+        false_success_count,
         false_fatal_plan_rejection_count: 0,
         fallback_activation_rate,
         split_part_rejection_count,
@@ -617,6 +642,74 @@ fn assembly_contract_issues(code: &str, parts: &[(String, String, [f64; 3])]) ->
     issues
 }
 
+fn format_bbox_hint_from_dims(dims: [f64; 3]) -> String {
+    format!(
+        "overall envelope {:.3}x{:.3}x{:.3}mm",
+        dims[0], dims[1], dims[2]
+    )
+}
+
+fn build_part_bbox_hint(
+    semantic_contract: Option<&semantic_validate::SemanticPartContract>,
+    part_request: &str,
+    mode: &crate::config::SemanticBboxMode,
+) -> Option<String> {
+    match mode {
+        crate::config::SemanticBboxMode::Legacy => Some(part_request.to_string()),
+        crate::config::SemanticBboxMode::SemanticAware => {
+            if let Some(contract) = semantic_contract {
+                if let Some(expected) = &contract.expected_bbox_mm {
+                    return Some(format_bbox_hint_from_dims(expected.sorted_extents_mm));
+                }
+            }
+            semantic_validate::infer_envelope_dimensions_mm(part_request)
+                .map(format_bbox_hint_from_dims)
+        }
+    }
+}
+
+fn build_assembly_bbox_hint(
+    plan: &GenerationPlan,
+    user_request: &str,
+    mode: &crate::config::SemanticBboxMode,
+) -> Option<String> {
+    match mode {
+        crate::config::SemanticBboxMode::Legacy => Some(user_request.to_string()),
+        crate::config::SemanticBboxMode::SemanticAware => {
+            let mut aggregate: Option<[f64; 3]> = None;
+            for part in &plan.parts {
+                let contract =
+                    semantic_validate::build_default_contract(&part.name, &part.description);
+                if let Some(expected) = contract.expected_bbox_mm {
+                    aggregate = Some(match aggregate {
+                        Some(current) => [
+                            current[0].max(expected.sorted_extents_mm[0]),
+                            current[1].max(expected.sorted_extents_mm[1]),
+                            current[2].max(expected.sorted_extents_mm[2]),
+                        ],
+                        None => expected.sorted_extents_mm,
+                    });
+                }
+            }
+
+            if let Some(dims) = aggregate {
+                Some(format_bbox_hint_from_dims(dims))
+            } else {
+                semantic_validate::infer_envelope_dimensions_mm(user_request)
+                    .map(format_bbox_hint_from_dims)
+            }
+        }
+    }
+}
+
+fn should_activate_part_fallback(
+    deterministic_fallback_enabled: bool,
+    part_failure_count: u32,
+    threshold: u32,
+) -> bool {
+    deterministic_fallback_enabled && part_failure_count >= threshold.max(1)
+}
+
 // ---------------------------------------------------------------------------
 // Token usage helper
 // ---------------------------------------------------------------------------
@@ -870,7 +963,7 @@ async fn run_design_plan_phase(
 
     if !validation.is_valid
         && config.deterministic_fallback_enabled
-        && attempts >= config.fallback_after_plan_failures as usize
+        && attempts >= config.fallback_after_part_failures as usize
     {
         if let Some(fallback_plan) = fallback_templates::maybe_fallback_plan(message) {
             let _ = on_event.send(MultiPartEvent::FallbackActivated {
@@ -978,6 +1071,7 @@ async fn run_generation_pipeline(
     let mut plan: Option<GenerationPlan> = None;
     let mut last_parse_err: Option<String> = None;
     let mut planner_response = String::new();
+    let mut planner_parse_failures: u32 = 0;
     const MAX_PLANNER_PARSE_ATTEMPTS: usize = 3;
     const PLANNER_MAX_TOKENS: u32 = 3072;
 
@@ -1033,6 +1127,7 @@ async fn run_generation_pipeline(
             }
             Err(parse_err) => {
                 last_parse_err = Some(parse_err.clone());
+                planner_parse_failures = planner_parse_failures.saturating_add(1);
                 if attempt < MAX_PLANNER_PARSE_ATTEMPTS {
                     let _ = on_event.send(MultiPartEvent::PlanStatus {
                         message: format!(
@@ -1052,26 +1147,38 @@ async fn run_generation_pipeline(
                 let parse_err = last_parse_err
                     .clone()
                     .unwrap_or_else(|| "unknown planner parse error".to_string());
-                let fallback_plan = deterministic_multipart_fallback_plan(user_request, plan_text)
-                    .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
-                let template_id = if fallback_plan
-                    .description
-                    .as_deref()
-                    .unwrap_or_default()
-                    .contains("Generic multipart fallback")
-                {
-                    "planner_generic_multipart_fallback"
+                let threshold = config.fallback_after_part_failures.max(1);
+                let should_use_fallback =
+                    config.deterministic_fallback_enabled && planner_parse_failures >= threshold;
+
+                if should_use_fallback {
+                    let fallback_plan =
+                        deterministic_multipart_fallback_plan(user_request, plan_text)
+                            .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
+                    let template_id = if fallback_plan
+                        .description
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("Generic multipart fallback")
+                    {
+                        "planner_generic_multipart_fallback"
+                    } else {
+                        "planner_multipart_fallback"
+                    };
+                    let _ = on_event.send(MultiPartEvent::FallbackActivated {
+                        reason: format!(
+                            "Planner JSON remained invalid ({} parse failures, threshold {}, last error: {}); using deterministic multipart fallback.",
+                            planner_parse_failures, threshold, parse_err
+                        ),
+                        template_id: template_id.to_string(),
+                    });
+                    fallback_plan
                 } else {
-                    "planner_multipart_fallback"
-                };
-                let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                    reason: format!(
-                        "Planner JSON remained invalid ({}); using deterministic multipart fallback.",
-                        parse_err
-                    ),
-                    template_id: template_id.to_string(),
-                });
-                fallback_plan
+                    return Err(AppError::AiProviderError(format!(
+                        "Planner failed to return valid multipart JSON after {} parse failure(s) (threshold {}): {}",
+                        planner_parse_failures, threshold, parse_err
+                    )));
+                }
             } else {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
                     message:
@@ -1780,6 +1887,7 @@ async fn run_generation_pipeline(
     let mut accepted_retry_stage: Option<u32> = None;
     let mut part_failure_signatures: Vec<String> = Vec::new();
     let mut partial_preview_available = false;
+    let mut part_acceptance_failures: HashMap<String, u32> = HashMap::new();
 
     if let Some(ctx) = execution_ctx {
         for (part_idx, part_entry) in part_codes.iter_mut().enumerate() {
@@ -1803,9 +1911,19 @@ async fn run_generation_pipeline(
                 )
                 .await;
 
-                let should_try_fallback = config.deterministic_fallback_enabled
-                    && config.fallback_after_plan_failures <= 2
-                    && artifact_result.is_err();
+                if artifact_result.is_err() {
+                    let entry = part_acceptance_failures.entry(name.clone()).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+
+                let failure_count = *part_acceptance_failures.get(&name).unwrap_or(&0);
+                let threshold = config.fallback_after_part_failures.max(1);
+                let should_try_fallback = artifact_result.is_err()
+                    && should_activate_part_fallback(
+                        config.deterministic_fallback_enabled,
+                        failure_count,
+                        threshold,
+                    );
                 if should_try_fallback {
                     if let Some(template) =
                         fallback_templates::maybe_template_for_part(&name, &part_request)
@@ -1813,7 +1931,10 @@ async fn run_generation_pipeline(
                         part_failure_signatures
                             .push(format!("fallback_activated:{}", template.template_id));
                         let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                            reason: template.reason.clone(),
+                            reason: format!(
+                                "{} (part='{}', acceptance_failures={}, threshold={})",
+                                template.reason, name, failure_count, threshold
+                            ),
                             template_id: template.template_id.to_string(),
                         });
                         artifact_result = evaluate_part_acceptance(
@@ -1910,6 +2031,7 @@ async fn run_generation_pipeline(
     }
 
     if accepted_parts.is_empty() {
+        part_failure_signatures.push("semantic_acceptance_all_rejected".to_string());
         let _ = on_event.send(MultiPartEvent::Done {
             success: false,
             error: Some("All generated parts were rejected by per-part acceptance".to_string()),
@@ -1941,7 +2063,8 @@ async fn run_generation_pipeline(
     });
 
     let successful_parts = accepted_parts;
-    let strict_multipart_required = request_requires_multipart_contract(user_request, plan_text);
+    let strict_multipart_required =
+        config.quality_gates_strict && request_requires_multipart_contract(user_request, plan_text);
     let required_parts_met =
         !strict_multipart_required || successful_parts.len() == plan.parts.len();
 
@@ -2001,17 +2124,13 @@ async fn run_generation_pipeline(
                 let on_validation_event =
                     |evt: executor::ValidationEvent| forward_validation_event(on_event, evt);
 
-                // Skip the crude bbox sanity check for the assembled code.
-                // Individual parts were already validated by their semantic
-                // contracts.  Passing the raw user request here causes false
-                // positives because parse_dimensions_from_text picks up feature
-                // dimensions like "wall=1.8mm" instead of overall part size,
-                // leading to "max extent 28mm vs requested 1.80mm" rejections.
+                let assembly_bbox_hint =
+                    build_assembly_bbox_hint(&plan, user_request, &config.semantic_bbox_mode);
                 let validation_result = executor::validate_and_retry(
                     final_code.clone(),
                     ctx,
                     system_prompt,
-                    None,
+                    assembly_bbox_hint.as_deref(),
                     &on_validation_event,
                 )
                 .await?;
@@ -2034,7 +2153,7 @@ async fn run_generation_pipeline(
 
                 let contract_issues =
                     assembly_contract_issues(&validation_result.code, &successful_parts);
-                if !contract_issues.is_empty() {
+                if config.quality_gates_strict && !contract_issues.is_empty() {
                     let msg = format!(
                         "Validation retry produced code that breaks multipart assembly contract: {}",
                         contract_issues.join(", ")
@@ -2044,6 +2163,9 @@ async fn run_generation_pipeline(
                         error: Some(msg.clone()),
                         validated: true,
                     });
+                    let mut failure_signatures = part_failure_signatures.clone();
+                    failure_signatures.push("multipart_contract_validation_failure".to_string());
+                    failure_signatures.push(msg.clone());
                     return Ok(PipelineOutcome {
                         response: validation_result.code.clone(),
                         final_code: Some(validation_result.code),
@@ -2062,7 +2184,14 @@ async fn run_generation_pipeline(
                         retry_ladder_stage_reached: validation_result
                             .retry_ladder_stage_reached
                             .or(accepted_retry_stage),
-                        failure_signatures: part_failure_signatures,
+                        failure_signatures,
+                    });
+                } else if !contract_issues.is_empty() {
+                    let _ = on_event.send(MultiPartEvent::ReviewStatus {
+                        message: format!(
+                            "Assembly contract issues detected (non-strict mode): {}",
+                            contract_issues.join(", ")
+                        ),
                     });
                 }
 
@@ -2126,6 +2255,7 @@ async fn run_generation_pipeline(
             let done_error = if required_parts_met {
                 None
             } else {
+                part_failure_signatures.push("multipart_contract_missing_parts".to_string());
                 Some(format!(
                     "Only {}/{} parts accepted; strict multipart contract requires all parts.",
                     successful_parts.len(),
@@ -2958,22 +3088,16 @@ async fn evaluate_part_acceptance(
     semantic_contract: Option<&semantic_validate::SemanticPartContract>,
 ) -> Result<PartAcceptanceArtifact, String> {
     let no_event = |_evt: executor::ValidationEvent| {};
-    // When a semantic contract is provided, skip the crude bbox sanity check in
-    // post-geometry validation.  The semantic contract has its own, smarter bbox
-    // check that uses parse_dimension_triple (LxWxH) instead of matching every
-    // number-followed-by-mm in the description.  Passing the raw part description
-    // to the crude check causes false rejections when it picks up feature
-    // dimensions (e.g. "thickness 1.5mm") rather than overall part size.
-    let bbox_hint = if semantic_contract.is_some() {
-        None
-    } else {
-        Some(part_request)
-    };
+    let bbox_hint_owned = build_part_bbox_hint(
+        semantic_contract,
+        part_request,
+        &ctx.config.semantic_bbox_mode,
+    );
     let validation = executor::validate_and_retry(
         part_code.to_string(),
         ctx,
         system_prompt,
-        bbox_hint,
+        bbox_hint_owned.as_deref(),
         &no_event,
     )
     .await
@@ -2986,7 +3110,7 @@ async fn evaluate_part_acceptance(
     }
 
     let mut semantic_findings = Vec::new();
-    if ctx.config.semantic_contract_strict {
+    if ctx.config.quality_gates_strict && ctx.config.semantic_contract_strict {
         let report = validation.post_geometry_report.as_ref().ok_or_else(|| {
             "semantic validation unavailable: post-geometry report missing".to_string()
         })?;
@@ -3042,8 +3166,9 @@ async fn build_part_preview_stl_with_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        deterministic_multipart_fallback_plan, generic_multipart_fallback_plan, parse_plan,
-        request_requires_multipart_contract,
+        build_assembly_bbox_hint, deterministic_multipart_fallback_plan,
+        generic_multipart_fallback_plan, parse_plan, request_requires_multipart_contract,
+        should_activate_part_fallback,
     };
 
     #[test]
@@ -3109,7 +3234,10 @@ mod tests {
         let plan = generic_multipart_fallback_plan(user);
         assert_eq!(plan.mode, "multi");
         assert_eq!(plan.parts.len(), 2);
-        assert!(plan.description.unwrap_or_default().contains("Generic multipart fallback"));
+        assert!(plan
+            .description
+            .unwrap_or_default()
+            .contains("Generic multipart fallback"));
         assert_eq!(plan.parts[0].name, "part_1");
         assert_eq!(plan.parts[1].name, "part_2");
     }
@@ -3227,9 +3355,8 @@ mod tests {
             .parts
             .iter()
             .map(|p| {
-                let code = format!(
-                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",
-                );
+                let code =
+                    format!("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",);
                 (p.name.clone(), code, p.position)
             })
             .collect();
@@ -3250,9 +3377,8 @@ mod tests {
             .parts
             .iter()
             .map(|p| {
-                let code = format!(
-                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",
-                );
+                let code =
+                    format!("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",);
                 (p.name.clone(), code, p.position)
             })
             .collect();
@@ -3295,14 +3421,43 @@ That should work."#;
     fn parse_plan_repairs_truncated_multi_part() {
         // Simulate truncation mid-way through the second part
         let truncated = r#"{"mode":"multi","description":"housing + plate","parts":[{"name":"housing","description":"main","position":[0,0,0],"constraints":[]},{"name":"back_plate","description":"cover","position":[0,0,0"#;
-        // Repair should close the array, the incomplete part object, and the root object
+        // Repair may or may not recover the structure depending on truncation depth,
+        // but the result must always be a meaningful parse outcome.
         let result = parse_plan(truncated);
-        // This may or may not repair depending on how the JSON completes;
-        // the key invariant is it never panics
-        assert!(
-            result.is_ok() || result.is_err(),
-            "parse_plan must never panic on truncated input"
-        );
+        match result {
+            Ok(plan) => {
+                assert_eq!(plan.mode, "multi");
+                assert!(!plan.parts.is_empty());
+            }
+            Err(err) => {
+                assert!(!err.trim().is_empty(), "parse error should be descriptive");
+            }
+        }
+    }
+
+    #[test]
+    fn part_fallback_activation_uses_runtime_failure_count() {
+        assert!(!should_activate_part_fallback(true, 1, 2));
+        assert!(should_activate_part_fallback(true, 2, 2));
+        assert!(!should_activate_part_fallback(false, 99, 2));
+    }
+
+    #[test]
+    fn semantic_bbox_hint_prefers_envelope_dimensions() {
+        let mut plan = generic_multipart_fallback_plan("two parts");
+        plan.parts[0].description =
+            "Primary shell with outer dimensions 42x28x7.5mm and wall thickness 1.8mm.".to_string();
+        plan.parts[1].description =
+            "Cover plate outer dimensions 30x24x1.5mm with lip height 1.2mm.".to_string();
+        let hint = build_assembly_bbox_hint(
+            &plan,
+            "wall 1.8mm and lip 1.2mm",
+            &crate::config::SemanticBboxMode::SemanticAware,
+        )
+        .expect("semantic bbox hint should be available");
+        assert!(hint.contains("42"));
+        assert!(hint.contains("28"));
+        assert!(hint.contains("7.5"));
     }
 
     #[test]

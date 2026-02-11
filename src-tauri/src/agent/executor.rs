@@ -183,6 +183,41 @@ fn should_retry_from_post_geometry(report: &PostGeometryValidationReport) -> boo
     !report.manifold || !report.bbox_ok
 }
 
+fn compute_manifold_status(
+    watertight: bool,
+    winding_consistent: bool,
+    degenerate_faces: u64,
+    euler_number: i64,
+    expected_euler: i64,
+    allow_euler_override: bool,
+    warnings: &mut Vec<String>,
+) -> bool {
+    let euler_ok = euler_number == expected_euler;
+    if !euler_ok && watertight && winding_consistent && degenerate_faces == 0 {
+        warnings.push(format!(
+            "Euler number {} differs from expected {}.",
+            euler_number, expected_euler
+        ));
+    }
+    let strict_manifold = watertight && winding_consistent && degenerate_faces == 0 && euler_ok;
+    if strict_manifold {
+        return true;
+    }
+    if allow_euler_override
+        && watertight
+        && winding_consistent
+        && degenerate_faces == 0
+        && !euler_ok
+    {
+        warnings.push(
+            "Euler mismatch override enabled by config (allow_euler_override=true); accepting mesh."
+                .to_string(),
+        );
+        return true;
+    }
+    false
+}
+
 fn format_post_check_warning(reason: &str) -> String {
     format!(
         "Geometry post-check unavailable (tooling error). Model generated; validate manually if critical. {}",
@@ -844,25 +879,21 @@ fn run_post_geometry_checks(
     }
 
     let expected_euler = (2_u64.saturating_mul(component_count)) as i64;
-    // Accept as manifold if the mesh is watertight with correct component count,
-    // even when the STL Euler number doesn't match exactly.  CadQuery's STL
-    // tessellation of solids with sharp internal corners (e.g. box-subtraction
-    // cavities) can produce meshes with Euler != 2 due to coincident vertices
-    // at edges, while the underlying B-Rep solid is perfectly valid.
-    let euler_ok = euler_number == expected_euler;
-    let manifold = if watertight && winding_consistent && component_count > 0 && !euler_ok {
-        // Watertight single-component solid with consistent winding — accept
-        // despite Euler mismatch, but log a warning.
-        if !warnings.iter().any(|w| w.contains("Euler")) {
-            warnings.push(format!(
-                "Euler number {} differs from expected {} but mesh is watertight with {} component(s); accepting",
-                euler_number, expected_euler, component_count
-            ));
-        }
-        true
-    } else {
-        watertight && winding_consistent && degenerate_faces == 0 && euler_ok
-    };
+    let manifold = compute_manifold_status(
+        watertight,
+        winding_consistent,
+        degenerate_faces,
+        euler_number,
+        expected_euler,
+        ctx.config.allow_euler_override,
+        &mut warnings,
+    );
+    if !manifold && euler_number != expected_euler && watertight && winding_consistent {
+        warnings.push(format!(
+            "Euler mismatch flagged for retry: got {}, expected {} for {} component(s).",
+            euler_number, expected_euler, component_count
+        ));
+    }
 
     Ok(PostGeometryValidationReport {
         watertight,
@@ -1259,6 +1290,29 @@ mod tests {
             ..good
         };
         assert!(should_retry_from_post_geometry(&bad));
+    }
+
+    #[test]
+    fn test_compute_manifold_rejects_degenerate_even_when_watertight() {
+        let mut warnings = Vec::new();
+        let manifold = compute_manifold_status(true, true, 4, 2, 2, false, &mut warnings);
+        assert!(!manifold);
+    }
+
+    #[test]
+    fn test_compute_manifold_rejects_euler_mismatch_by_default() {
+        let mut warnings = Vec::new();
+        let manifold = compute_manifold_status(true, true, 0, 4, 2, false, &mut warnings);
+        assert!(!manifold);
+        assert!(warnings.iter().any(|w| w.contains("Euler number")));
+    }
+
+    #[test]
+    fn test_compute_manifold_allows_euler_override_when_enabled() {
+        let mut warnings = Vec::new();
+        let manifold = compute_manifold_status(true, true, 0, 4, 2, true, &mut warnings);
+        assert!(manifold);
+        assert!(warnings.iter().any(|w| w.contains("allow_euler_override")));
     }
 
     #[test]

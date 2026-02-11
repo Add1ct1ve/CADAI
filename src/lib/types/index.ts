@@ -40,7 +40,10 @@ export interface AppConfig {
   semantic_contract_strict: boolean;
   reviewer_mode: 'advisory_only' | 'rewrite_allowed';
   deterministic_fallback_enabled: boolean;
-  fallback_after_plan_failures: number;
+  fallback_after_part_failures: number;
+  quality_gates_strict: boolean;
+  allow_euler_override: boolean;
+  semantic_bbox_mode: 'semantic_aware' | 'legacy';
   mechanisms_enabled: boolean;
   mechanism_import_enabled: boolean;
   mechanism_cache_max_mb: number;
