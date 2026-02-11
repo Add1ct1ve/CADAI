@@ -406,7 +406,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
   "parts": [
     {
       "name": "snake_case_name",
-      "description": "Detailed geometric description with ALL dimensions in mm. State a robust primary path (reliability-first) and an optional higher-fidelity fallback path. Reference the geometry design plan. This description must be fully self-contained.",
+      "description": "Compact geometric description (max ~280 chars) in mm. State robust primary path + optional high-fidelity fallback path. Keep it concise and self-contained.",
       "position": [x, y, z],
       "constraints": ["any constraints like 'inner diameter must match outer diameter of part X'"]
     }
@@ -428,6 +428,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 - Include geometric detail from the design plan: profiles, cross-sections, radii
 - Use reliability-first phrasing for the primary path (prefer extrude + cut/union + explicit intermediates)
 - Mention shell+loft only as optional fallback when absolutely required
+- Keep each part `description` short (single paragraph, <= 280 chars) to avoid truncation.
 - Each part description must be self-contained (another AI must be able to build it without other context)
 
 Rules:
@@ -972,53 +973,117 @@ async fn run_generation_pipeline(
         message: "Analyzing request...".to_string(),
     });
 
-    let planner = create_provider(config)?;
+    let requires_multipart_contract = request_requires_multipart_contract(user_request, plan_text);
+    let planner_system = PLANNER_SYSTEM_PROMPT.to_string();
+    let mut plan: Option<GenerationPlan> = None;
+    let mut last_parse_err: Option<String> = None;
+    let mut planner_response = String::new();
+    const MAX_PLANNER_PARSE_ATTEMPTS: usize = 3;
 
-    let planner_messages = vec![
-        ChatMessage {
-            role: "system".to_string(),
-            content: PLANNER_SYSTEM_PROMPT.to_string(),
-        },
-        ChatMessage {
-            role: "user".to_string(),
-            content: enhanced_message.clone(),
-        },
-    ];
+    for attempt in 1..=MAX_PLANNER_PARSE_ATTEMPTS {
+        let planner = create_provider(config)?;
+        let planner_messages = if attempt == 1 {
+            vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: planner_system.clone(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: enhanced_message.clone(),
+                },
+            ]
+        } else {
+            let retry_instruction = format!(
+                "Your previous response could not be parsed as JSON ({:?}). Return ONLY valid compact JSON now. \
+                 Keep each part description <= 280 chars. No markdown, no prose.\n\nPrevious response:\n{}",
+                last_parse_err,
+                planner_response.chars().take(2500).collect::<String>()
+            );
+            vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: planner_system.clone(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: enhanced_message.clone(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: retry_instruction,
+                },
+            ]
+        };
 
-    let (plan_json, plan_usage) = planner.complete(&planner_messages, Some(1024)).await?;
-    if let Some(ref u) = plan_usage {
-        total_usage.add(u);
-        emit_usage(on_event, "plan", u, provider_id, model_id);
+        let (plan_json, plan_usage) = planner.complete(&planner_messages, Some(2048)).await?;
+        planner_response = plan_json.clone();
+        if let Some(ref u) = plan_usage {
+            total_usage.add(u);
+            emit_usage(on_event, "plan", u, provider_id, model_id);
+        }
+
+        match parse_plan(&plan_json) {
+            Ok(parsed) => {
+                plan = Some(parsed);
+                break;
+            }
+            Err(parse_err) => {
+                last_parse_err = Some(parse_err.clone());
+                if attempt < MAX_PLANNER_PARSE_ATTEMPTS {
+                    let _ = on_event.send(MultiPartEvent::PlanStatus {
+                        message: format!(
+                            "Planner JSON parse failed (attempt {}/{}), retrying with strict compact JSON...",
+                            attempt, MAX_PLANNER_PARSE_ATTEMPTS
+                        ),
+                    });
+                }
+            }
+        }
     }
 
-    let requires_multipart_contract = request_requires_multipart_contract(user_request, plan_text);
-    let plan: GenerationPlan = match parse_plan(&plan_json) {
-        Ok(plan) => plan,
-        Err(parse_err) => {
+    let plan: GenerationPlan = match plan {
+        Some(p) => p,
+        None => {
             if requires_multipart_contract {
-                let msg = format!(
-                    "Planner failed to return valid multipart JSON: {}",
-                    parse_err
-                );
+                if let Some(fallback_plan) =
+                    deterministic_multipart_fallback_plan(user_request, plan_text)
+                {
+                    let _ = on_event.send(MultiPartEvent::FallbackActivated {
+                        reason:
+                            "Planner JSON remained invalid; using deterministic multipart fallback."
+                                .to_string(),
+                        template_id: "planner_multipart_fallback".to_string(),
+                    });
+                    fallback_plan
+                } else {
+                    let parse_err =
+                        last_parse_err.unwrap_or_else(|| "unknown planner parse error".to_string());
+                    let msg = format!(
+                        "Planner failed to return valid multipart JSON: {}",
+                        parse_err
+                    );
+                    let _ = on_event.send(MultiPartEvent::PlanStatus {
+                        message: msg.clone(),
+                    });
+                    let _ = on_event.send(MultiPartEvent::Done {
+                        success: false,
+                        error: Some(msg.clone()),
+                        validated: false,
+                    });
+                    return Err(AppError::AiProviderError(msg));
+                }
+            } else {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
-                    message: msg.clone(),
+                    message:
+                        "Planner returned invalid JSON; falling back to single-part generation."
+                            .to_string(),
                 });
-                let _ = on_event.send(MultiPartEvent::Done {
-                    success: false,
-                    error: Some(msg.clone()),
-                    validated: false,
-                });
-                return Err(AppError::AiProviderError(msg));
-            }
-
-            let _ = on_event.send(MultiPartEvent::PlanStatus {
-                message: "Planner returned invalid JSON; falling back to single-part generation."
-                    .to_string(),
-            });
-            GenerationPlan {
-                mode: "single".to_string(),
-                description: None,
-                parts: vec![],
+                GenerationPlan {
+                    mode: "single".to_string(),
+                    description: None,
+                    parts: vec![],
+                }
             }
         }
     };
@@ -2611,6 +2676,46 @@ fn request_requires_multipart_contract(user_request: &str, plan_text: &str) -> b
 
 /// Parse the planner JSON response.
 fn parse_plan(json_str: &str) -> Result<GenerationPlan, String> {
+    fn try_repair_json_fragment(input: &str) -> Option<String> {
+        let mut s = input.trim().to_string();
+        if s.is_empty() {
+            return None;
+        }
+
+        let mut quote_count = 0usize;
+        let mut escaped = false;
+        for ch in s.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                quote_count += 1;
+            }
+        }
+        if quote_count % 2 == 1 {
+            s.push('"');
+        }
+
+        let open_brackets = s.chars().filter(|c| *c == '[').count();
+        let close_brackets = s.chars().filter(|c| *c == ']').count();
+        if open_brackets > close_brackets {
+            s.push_str(&"]".repeat(open_brackets - close_brackets));
+        }
+
+        let open_braces = s.chars().filter(|c| *c == '{').count();
+        let close_braces = s.chars().filter(|c| *c == '}').count();
+        if open_braces > close_braces {
+            s.push_str(&"}".repeat(open_braces - close_braces));
+        }
+
+        Some(s)
+    }
+
     // Try to extract JSON from the response (the AI might wrap it in markdown fences)
     let cleaned = json_str
         .trim()
@@ -2627,6 +2732,16 @@ fn parse_plan(json_str: &str) -> Result<GenerationPlan, String> {
             Ok(plan)
         }
         Err(first_err) => {
+            // Tertiary attempt for truncated JSON fragments (common EOF parser failures).
+            if let Some(repaired) = try_repair_json_fragment(cleaned) {
+                if let Ok(plan) = serde_json::from_str::<GenerationPlan>(&repaired) {
+                    if plan.mode != "single" && plan.mode != "multi" {
+                        return Err(format!("Invalid planner mode '{}'", plan.mode));
+                    }
+                    return Ok(plan);
+                }
+            }
+
             // Secondary attempt: extract first outer JSON object if the model wrapped text around it.
             if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
                 if start < end {
@@ -2647,6 +2762,111 @@ fn parse_plan(json_str: &str) -> Result<GenerationPlan, String> {
 /// Extract a Python code block from an AI response.
 fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
+}
+
+fn extract_numeric_param(text: &str, name: &str, default_value: f64) -> f64 {
+    let pat = format!(
+        r"(?im)(?:^|[\*\-\s]){}\s*=\s*(-?\d+(?:\.\d+)?)",
+        regex::escape(name)
+    );
+    Regex::new(&pat)
+        .ok()
+        .and_then(|re| re.captures(text))
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .unwrap_or(default_value)
+}
+
+fn deterministic_multipart_fallback_plan(
+    user_request: &str,
+    plan_text: &str,
+) -> Option<GenerationPlan> {
+    let lower = format!("{} {}", user_request, plan_text).to_lowercase();
+    let has_housing = lower.contains("housing")
+        || lower.contains("enclosure")
+        || lower.contains("case")
+        || lower.contains("body");
+    let has_backplate = lower.contains("back plate")
+        || lower.contains("backplate")
+        || lower.contains("cover")
+        || lower.contains("lid");
+
+    if has_housing && has_backplate {
+        let housing_length = extract_numeric_param(plan_text, "housing_length", 42.0);
+        let housing_width = extract_numeric_param(plan_text, "housing_width", 28.0);
+        let height_center = extract_numeric_param(plan_text, "height_center", 7.5);
+        let height_ends = extract_numeric_param(plan_text, "height_ends", 5.0);
+        let wall = extract_numeric_param(plan_text, "wall", 1.8);
+        let top_thk = extract_numeric_param(plan_text, "top_thk", 1.5);
+        let back_lip = extract_numeric_param(plan_text, "back_lip", 1.5);
+        let oring_width = extract_numeric_param(plan_text, "oring_width", 1.2);
+        let oring_depth = extract_numeric_param(plan_text, "oring_depth", 0.8);
+        let band_slot_width = extract_numeric_param(plan_text, "band_slot_width", 20.0);
+        let band_slot_height = extract_numeric_param(plan_text, "band_slot_height", 2.5);
+        let band_slot_depth = extract_numeric_param(plan_text, "band_slot_depth", 5.0);
+        let button_length = extract_numeric_param(plan_text, "button_length", 12.0);
+        let button_width = extract_numeric_param(plan_text, "button_width", 4.0);
+        let button_offset = extract_numeric_param(plan_text, "button_offset", 6.0);
+        let snap_tolerance = extract_numeric_param(plan_text, "snap_tolerance", 0.15);
+        let back_plate_thk = extract_numeric_param(plan_text, "back_plate_thk", 1.5);
+        let bp_len =
+            (housing_length - 2.0 * band_slot_depth - 2.0 * wall - 2.0 * snap_tolerance).max(6.0);
+        let bp_wid = (housing_width - 2.0 * wall - 2.0 * snap_tolerance).max(6.0);
+
+        return Some(GenerationPlan {
+            mode: "multi".to_string(),
+            description: Some(
+                "Deterministic fallback multipart split: housing + back plate.".to_string(),
+            ),
+            parts: vec![
+                PartSpec {
+                    name: "housing".to_string(),
+                    description: format!(
+                        "Single editable housing solid. Footprint {:.2}x{:.2}mm, top {:.2}/{:.2}mm (center/ends), wall {:.2}mm, top {:.2}mm. Include ledge {:.2}mm, O-ring groove {:.2}x{:.2}mm, two end slots {:.2}x{:.2}x{:.2}mm, solid side button indicator {:.2}x{:.2}mm at +X offset {:.2}mm.",
+                        housing_length,
+                        housing_width,
+                        height_center,
+                        height_ends,
+                        wall,
+                        top_thk,
+                        back_lip,
+                        oring_width,
+                        oring_depth,
+                        band_slot_width,
+                        band_slot_height,
+                        band_slot_depth,
+                        button_length,
+                        button_width,
+                        button_offset
+                    ),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![
+                        "Keep as one editable solid; no split bodies.".to_string(),
+                        "Back-plate ledge and groove must mate with back_plate.".to_string(),
+                    ],
+                },
+                PartSpec {
+                    name: "back_plate".to_string(),
+                    description: format!(
+                        "Single editable back plate solid. Base {:.2}x{:.2}mm, thickness {:.2}mm. Add insertion lip (height {:.2}mm, thickness 1.5mm, inset 2mm) and O-ring ridge (width {:.2}mm, height 0.5mm) aligned to housing groove.",
+                        bp_len,
+                        bp_wid,
+                        back_plate_thk,
+                        (back_lip - 0.3).max(0.6),
+                        (oring_width - 0.2).max(0.6)
+                    ),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![
+                        "Must fit housing ledge with snap_tolerance clearance.".to_string(),
+                        "Keep as one editable solid; no split pieces.".to_string(),
+                    ],
+                },
+            ],
+        });
+    }
+
+    None
 }
 
 struct PartAcceptanceArtifact {
@@ -2739,7 +2959,9 @@ async fn build_part_preview_stl_with_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plan, request_requires_multipart_contract};
+    use super::{
+        deterministic_multipart_fallback_plan, parse_plan, request_requires_multipart_contract,
+    };
 
     #[test]
     fn parse_plan_accepts_valid_json() {
@@ -2766,6 +2988,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_plan_repairs_truncated_json() {
+        let truncated = r#"{"mode":"multi","description":"x","parts":[{"name":"housing","description":"main","position":[0,0,0],"constraints":[]}"#;
+        let parsed = parse_plan(truncated).expect("should repair truncated planner json");
+        assert_eq!(parsed.mode, "multi");
+        assert_eq!(parsed.parts.len(), 1);
+        assert_eq!(parsed.parts[0].name, "housing");
+    }
+
+    #[test]
     fn multipart_contract_detects_explicit_separate_parts() {
         let user = "Make a wearable housing with a separate back plate";
         assert!(request_requires_multipart_contract(user, ""));
@@ -2775,6 +3006,18 @@ mod tests {
     fn multipart_contract_not_required_for_simple_single_object() {
         let user = "Create a rounded enclosure with fillets";
         assert!(!request_requires_multipart_contract(user, ""));
+    }
+
+    #[test]
+    fn deterministic_fallback_builds_housing_and_backplate_parts() {
+        let user = "Whoop-style housing with a separate back plate";
+        let plan_text = "housing_length=42\nhousing_width=28\nback_lip=1.5\n";
+        let plan = deterministic_multipart_fallback_plan(user, plan_text)
+            .expect("deterministic multipart fallback should be available");
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 2);
+        assert_eq!(plan.parts[0].name, "housing");
+        assert_eq!(plan.parts[1].name, "back_plate");
     }
 }
 
