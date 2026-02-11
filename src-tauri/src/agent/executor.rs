@@ -208,6 +208,11 @@ fn reduce_fillet_radii_in_line(line: &str) -> String {
     .to_string()
 }
 
+fn extract_assignment_lhs(line: &str) -> Option<String> {
+    let re = Regex::new(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=").expect("valid assignment regex");
+    re.captures(line).map(|caps| caps[1].to_string())
+}
+
 fn wrap_line_with_fillet_guard(line: &str) -> String {
     let indent: String = line
         .chars()
@@ -222,9 +227,33 @@ fn wrap_line_with_fillet_guard(line: &str) -> String {
     )
 }
 
+fn wrap_line_with_sweep_guard(line: &str) -> String {
+    let indent: String = line
+        .chars()
+        .take_while(|c| c.is_ascii_whitespace())
+        .collect();
+    let trimmed = line.trim_start();
+    let fallback = if let Some(lhs) = extract_assignment_lhs(trimmed) {
+        format!(
+            "{i}    try:\n{i}        {lhs} = result\n{i}    except Exception:\n{i}        pass",
+            i = indent,
+            lhs = lhs
+        )
+    } else {
+        format!("{i}    pass", i = indent)
+    };
+
+    format!(
+        "{i}# auto-sweep-guard\n{i}try:\n{i}    {s}\n{i}except Exception:\n{fallback}",
+        i = indent,
+        s = trimmed,
+        fallback = fallback
+    )
+}
+
 fn apply_line_targeted_fillet_guard(code: &str, source_line: &str) -> Option<String> {
     let target = source_line.trim();
-    if target.is_empty() || !target.contains(".fillet(") {
+    if target.is_empty() || !(target.contains(".fillet(") || target.contains(".chamfer(")) {
         return None;
     }
 
@@ -251,7 +280,7 @@ fn apply_last_fillet_guard_fallback(code: &str) -> Option<String> {
     let mut idx: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
         let t = line.trim();
-        if t.contains(".fillet(") && !t.contains("auto-fillet-guard") {
+        if (t.contains(".fillet(") || t.contains(".chamfer(")) && !t.contains("auto-fillet-guard") {
             idx = Some(i);
         }
     }
@@ -260,6 +289,51 @@ fn apply_last_fillet_guard_fallback(code: &str) -> Option<String> {
     for (j, line) in lines.iter().enumerate() {
         if j == i {
             out.push(wrap_line_with_fillet_guard(line));
+        } else {
+            out.push((*line).to_string());
+        }
+    }
+    Some(out.join("\n"))
+}
+
+fn apply_line_targeted_sweep_guard(code: &str, source_line: &str) -> Option<String> {
+    let target = source_line.trim();
+    if target.is_empty() || !target.contains(".sweep(") {
+        return None;
+    }
+
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        if !changed && !line.contains("auto-sweep-guard") && line.trim() == target {
+            out.push(wrap_line_with_sweep_guard(line));
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn apply_last_sweep_guard_fallback(code: &str) -> Option<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.contains(".sweep(") && !t.contains("auto-sweep-guard") {
+            idx = Some(i);
+        }
+    }
+    let i = idx?;
+    let mut out = Vec::new();
+    for (j, line) in lines.iter().enumerate() {
+        if j == i {
+            out.push(wrap_line_with_sweep_guard(line));
         } else {
             out.push((*line).to_string());
         }
@@ -286,8 +360,16 @@ fn is_fillet_failure_candidate(
         .and_then(|c| c.source_line.as_ref())
         .map(|s| s.to_lowercase())
         .unwrap_or_default();
+    if msg.contains("cannot find a solid on the stack or in the parent chain")
+        && (source.contains(".fillet(") || source.contains(".chamfer("))
+    {
+        return true;
+    }
     (msg.contains("stdfail_notdone") || msg.contains("brep_api: command not done"))
-        && (msg.contains("fillet") || source.contains(".fillet("))
+        && (msg.contains("fillet")
+            || msg.contains("chamfer")
+            || source.contains(".fillet(")
+            || source.contains(".chamfer("))
 }
 
 fn maybe_apply_fillet_auto_repair(
@@ -310,6 +392,54 @@ fn maybe_apply_fillet_auto_repair(
     }
 
     apply_last_fillet_guard_fallback(current_code)
+}
+
+fn is_sweep_failure_candidate(
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+) -> bool {
+    if matches!(
+        structured_error.category,
+        validate::ErrorCategory::Topology(validate::TopologySubKind::SweepFailure)
+    ) {
+        return true;
+    }
+
+    let msg = runtime_error.to_lowercase();
+    let source = structured_error
+        .context
+        .as_ref()
+        .and_then(|c| c.source_line.as_ref())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    if msg.contains("no pending wires present") {
+        return true;
+    }
+
+    (msg.contains("sweep") && msg.contains("wire")) || source.contains(".sweep(")
+}
+
+fn maybe_apply_sweep_auto_repair(
+    current_code: &str,
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+) -> Option<String> {
+    if !is_sweep_failure_candidate(structured_error, runtime_error) {
+        return None;
+    }
+
+    if let Some(source_line) = structured_error
+        .context
+        .as_ref()
+        .and_then(|c| c.source_line.as_ref())
+    {
+        if let Some(repaired) = apply_line_targeted_sweep_guard(current_code, source_line) {
+            return Some(repaired);
+        }
+    }
+
+    apply_last_sweep_guard_fallback(current_code)
 }
 
 fn build_retry_prompt_with_findings(
@@ -632,6 +762,13 @@ pub async fn validate_and_retry(
                     continue;
                 }
 
+                if let Some(auto_fixed_code) =
+                    maybe_apply_sweep_auto_repair(&current_code, &structured_error, &error_msg)
+                {
+                    current_code = auto_fixed_code;
+                    continue;
+                }
+
                 let rules = AgentRules::from_preset(ctx.config.agent_rules_preset.as_deref()).ok();
                 let anti_pattern = rules.as_ref().and_then(|r| {
                     r.anti_patterns.as_ref().and_then(|patterns| {
@@ -877,5 +1014,62 @@ result = body"#;
             .expect("fallback should wrap last fillet");
         assert!(repaired.contains("auto-fillet-guard"));
         assert!(repaired.contains(".fillet(1.5)"));
+    }
+
+    #[test]
+    fn test_maybe_apply_fillet_auto_repair_handles_no_solid_error() {
+        let code = r#"import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+result = result.edges("|Z").fillet(3.0)"#;
+
+        let err = validate::StructuredError {
+            error_type: "ValueError".to_string(),
+            message: "Cannot find a solid on the stack or in the parent chain".to_string(),
+            line_number: Some(3),
+            suggestion: None,
+            category: validate::ErrorCategory::ApiMisuse,
+            failing_operation: None,
+            context: Some(validate::ErrorContext {
+                source_line: Some(r#"result = result.edges("|Z").fillet(3.0)"#.to_string()),
+                failing_parameters: None,
+            }),
+        };
+
+        let repaired = maybe_apply_fillet_auto_repair(
+            code,
+            &err,
+            "ValueError: Cannot find a solid on the stack or in the parent chain",
+        )
+        .expect("should guard fillet for no-solid failure");
+        assert!(repaired.contains("auto-fillet-guard"));
+    }
+
+    #[test]
+    fn test_maybe_apply_sweep_auto_repair_targets_source_line() {
+        let code = r#"import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 1)
+ridge = cq.Workplane("XY").rect(2, 2).sweep(path)
+result = result.union(ridge)"#;
+
+        let err = validate::StructuredError {
+            error_type: "ValueError".to_string(),
+            message: "No pending wires present".to_string(),
+            line_number: Some(3),
+            suggestion: None,
+            category: validate::ErrorCategory::Topology(validate::TopologySubKind::SweepFailure),
+            failing_operation: Some("sweep".to_string()),
+            context: Some(validate::ErrorContext {
+                source_line: Some(
+                    r#"ridge = cq.Workplane("XY").rect(2, 2).sweep(path)"#.to_string(),
+                ),
+                failing_parameters: None,
+            }),
+        };
+
+        let repaired =
+            maybe_apply_sweep_auto_repair(code, &err, "ValueError: No pending wires present")
+                .expect("should guard sweep");
+        assert!(repaired.contains("auto-sweep-guard"));
+        assert!(repaired.contains("ridge = result"));
     }
 }
