@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, TokenUsage};
+use crate::config::GenerationReliabilityProfile;
 use crate::error::AppError;
 
 /// The geometry design plan produced by the advisor before code generation.
@@ -62,6 +63,11 @@ What can't CadQuery do perfectly? What's the closest buildable shape? Where shou
 - For organic shapes: plan by cross-section at multiple heights, then use loft or revolve
 - For mechanical parts: plan by feature (base → holes → slots → fillets)
 - Prefer approaches that are ROBUST in CadQuery (box+cylinder+booleans > complex lofts)
+- Reliability-first default: prefer "outer solid + inner subtract" for enclosures over `shell()` on lofted geometry
+- Defer fillets/chamfers to optional last-step polish with fallback behavior
+- For enclosure-like objects, include BOTH:
+  1) a primary robust build path
+  2) a fallback build path if the primary fails
 - If the request is simple (e.g. "a box" or "a cylinder"), keep the plan brief — 2-3 lines is fine
 - NEVER write Python or CadQuery code — only describe geometry in plain English"#;
 
@@ -754,7 +760,10 @@ pub fn extract_operations_from_text(text: &str) -> Vec<String> {
 ///
 /// Extracts operations and dimensions, calculates a risk score (0-10),
 /// and rejects plans with a score > 7.
-pub fn validate_plan(plan_text: &str) -> PlanValidation {
+pub fn validate_plan_with_profile(
+    plan_text: &str,
+    profile: &GenerationReliabilityProfile,
+) -> PlanValidation {
     let sanitized = sanitize_plan_text(plan_text);
     let plan_text = sanitized.as_str();
 
@@ -847,6 +856,13 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         risk += 1;
         warnings
             .push("loft() is fragile — ensure profiles have compatible edge counts".to_string());
+    }
+
+    // Rule 4b: loft + shell is a fatal reliability combo on first pass.
+    let fatal_loft_shell = has_loft && has_shell;
+    if fatal_loft_shell {
+        risk += 3;
+        warnings.push("loft() + shell() is a known reliability-killer combination".to_string());
     }
 
     // Rule 5: sweep requires wire
@@ -950,6 +966,15 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         ));
     }
 
+    // Rule 14b: shell + fillet is fragile for enclosure flows.
+    let has_fillet = step_operations.contains(&"fillet".to_string());
+    let fatal_shell_internal_fillet = has_shell && has_fillet;
+    if fatal_shell_internal_fillet {
+        risk += 2;
+        warnings
+            .push("shell() combined with internal fillets is high risk in OpenCascade".to_string());
+    }
+
     // Rule 15: missing Object Analysis section
     if !has_section(plan_text, "Object Analysis") {
         risk += 1;
@@ -969,9 +994,22 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         && has_section(plan_text, "CadQuery Approach")
         && has_section(plan_text, "Build Plan")
         && build_plan_steps_text.is_some();
-    let is_valid = risk <= 7 && has_required_structure;
+    let risk_threshold = match profile {
+        GenerationReliabilityProfile::ReliabilityFirst => 5,
+        GenerationReliabilityProfile::Balanced => 7,
+        GenerationReliabilityProfile::FidelityFirst => 8,
+    };
+    let has_fatal_reliability_combo =
+        matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
+            && (fatal_loft_shell || fatal_shell_internal_fillet);
+
+    let is_valid = risk <= risk_threshold && has_required_structure && !has_fatal_reliability_combo;
     let rejected_reason = if !is_valid {
-        warnings.first().cloned()
+        if has_fatal_reliability_combo {
+            Some("Reliability-first policy rejected fatal operation combo; re-plan with robust path.".to_string())
+        } else {
+            warnings.first().cloned()
+        }
     } else {
         None
     };
@@ -985,6 +1023,10 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
         extracted_dimensions: step_dimensions,
         plan_text: plan_text.to_string(),
     }
+}
+
+pub fn validate_plan(plan_text: &str) -> PlanValidation {
+    validate_plan_with_profile(plan_text, &GenerationReliabilityProfile::Balanced)
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +1055,7 @@ pub fn build_rejection_feedback(validation: &PlanValidation) -> String {
     feedback.push_str(
         "**Instructions for revision:**\n\
          - Use simpler operations where possible (prefer box+cylinder+booleans over complex lofts)\n\
+         - For enclosure-type objects, include a primary robust path and a fallback path\n\
          - Use realistic, achievable dimensions\n\
          - Apply fillets and chamfers as the LAST operations\n\
          - Output EXACTLY these headings: `### Object Analysis`, `### CadQuery Approach`, `### Build Plan`, `### Approximation Notes`\n\
@@ -1715,5 +1758,42 @@ overhangs:
         let v = validate_plan(text);
         assert!(v.warnings.iter().any(|w| w.contains("Object Analysis")));
         assert!(v.warnings.iter().any(|w| w.contains("CadQuery Approach")));
+    }
+
+    #[test]
+    fn test_reliability_first_rejects_loft_shell_combo() {
+        let text = r#"### Object Analysis
+- Enclosure.
+### CadQuery Approach
+- loft + shell.
+### Build Plan
+1. Loft a rounded enclosure profile.
+2. Shell the body to create internal cavity.
+### Approximation Notes
+- None."#;
+
+        let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::ReliabilityFirst);
+        assert!(!v.is_valid);
+        assert!(v.risk_score >= 5);
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("loft() + shell()")));
+    }
+
+    #[test]
+    fn test_balanced_profile_can_accept_simple_plan() {
+        let text = r#"### Object Analysis
+- Simple bracket.
+### CadQuery Approach
+- extrude + cut.
+### Build Plan
+1. Extrude a 50x30x10mm base.
+2. Cut a 10mm hole through center.
+### Approximation Notes
+- None."#;
+
+        let v_balanced = validate_plan_with_profile(text, &GenerationReliabilityProfile::Balanced);
+        assert!(v_balanced.is_valid);
     }
 }

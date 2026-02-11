@@ -2,6 +2,20 @@ use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationReliabilityProfile {
+    ReliabilityFirst,
+    Balanced,
+    FidelityFirst,
+}
+
+impl Default for GenerationReliabilityProfile {
+    fn default() -> Self {
+        Self::ReliabilityFirst
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub ai_provider: String,
@@ -41,6 +55,12 @@ pub struct AppConfig {
     pub telemetry_enabled: bool,
     #[serde(default = "default_max_validation_attempts")]
     pub max_validation_attempts: u32,
+    #[serde(default)]
+    pub generation_reliability_profile: GenerationReliabilityProfile,
+    #[serde(default = "default_true")]
+    pub preview_on_partial_failure: bool,
+    #[serde(default = "default_max_generation_runtime_seconds")]
+    pub max_generation_runtime_seconds: u32,
     #[serde(default = "default_true")]
     pub mechanisms_enabled: bool,
     #[serde(default)]
@@ -87,6 +107,10 @@ fn default_max_validation_attempts() -> u32 {
     4
 }
 
+fn default_max_generation_runtime_seconds() -> u32 {
+    300
+}
+
 fn default_mechanism_cache_max_mb() -> u32 {
     512
 }
@@ -125,6 +149,9 @@ impl Default for AppConfig {
             retrieval_token_budget: default_retrieval_token_budget(),
             telemetry_enabled: true,
             max_validation_attempts: default_max_validation_attempts(),
+            generation_reliability_profile: GenerationReliabilityProfile::default(),
+            preview_on_partial_failure: true,
+            max_generation_runtime_seconds: default_max_generation_runtime_seconds(),
             mechanisms_enabled: true,
             mechanism_import_enabled: false,
             mechanism_cache_max_mb: default_mechanism_cache_max_mb(),

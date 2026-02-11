@@ -584,13 +584,16 @@
     return normalized || `part_${index}`;
   }
 
-  function tryQueueMultipartAssemblyImport(): boolean {
+  function tryQueueMultipartAssemblyImport(requireAllParts = true): boolean {
     if (!isMultiPart || multipartImportQueued) return false;
     if (partProgress.length === 0) return false;
-    const allReady = partProgress.every((p) => p.status === 'complete' && !!p.stl_base64);
-    if (!allReady) return false;
+    const readyParts = partProgress
+      .map((p, index) => ({ p, index }))
+      .filter(({ p }) => !!p.stl_base64);
+    if (requireAllParts && readyParts.length !== partProgress.length) return false;
+    if (readyParts.length === 0) return false;
 
-    const parts: PendingAssemblyPart[] = partProgress.map((p, index) => ({
+    const parts: PendingAssemblyPart[] = readyParts.map(({ p, index }) => ({
       part_key: normalizePartKey(multiPartPlanParts[index]?.name ?? p.name, index),
       name: p.name,
       stl_base64: p.stl_base64!,
@@ -693,7 +696,9 @@
     chatStore.setStreaming(true);
     let streamingContent = '';
     let validatedStl: string | null = null;
-    let backendValidated = false;
+    let backendValidationFinished = false;
+    let backendValidationSucceeded = false;
+    let backendDoneError: string | null = null;
 
     try {
       const result = await generateFromPlan(planText, userRequest, rustHistory, (event: MultiPartEvent) => {
@@ -991,7 +996,11 @@
             break;
 
           case 'Done':
-            if (event.validated) backendValidated = true;
+            if (event.validated) {
+              backendValidationFinished = true;
+              backendValidationSucceeded = event.success;
+              backendDoneError = event.error ?? null;
+            }
             tryQueueMultipartAssemblyImport();
             break;
         }
@@ -999,7 +1008,7 @@
 
       if (chatStore.generationId !== myGen) return;
 
-      const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport();
+      const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport(true);
       if (importedMultipart) {
         chatStore.addMessage({
           id: generateId(),
@@ -1011,8 +1020,13 @@
         viewportStore.setPendingStl(validatedStl);
       } else if (validatedStl) {
         viewportStore.setPendingStl(validatedStl);
-      } else if (backendValidated) {
-        // Backend validated — code already in editor
+      } else if (isMultiPart && tryQueueMultipartAssemblyImport(false)) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: 'Imported accepted parts as partial editable assembly.',
+          timestamp: Date.now(),
+        });
       } else if (isMultiPart && previewFirstAvailablePart()) {
         chatStore.addMessage({
           id: generateId(),
@@ -1020,6 +1034,18 @@
           content: 'Full assembly preview unavailable. Showing first available part preview.',
           timestamp: Date.now(),
         });
+      } else if (backendValidationFinished && !backendValidationSucceeded) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: backendDoneError
+            ? `Generation finished with validation failure: ${backendDoneError}`
+            : 'Generation finished with validation failure. No preview artifact available.',
+          timestamp: Date.now(),
+          isError: true,
+        });
+      } else if (backendValidationSucceeded) {
+        // Validation succeeded but no STL artifact was returned.
       } else if (isMultiPart) {
         const assembledCode = resolveGeneratedCode(result, true);
         if (!assembledCode) return;
@@ -1213,7 +1239,9 @@
     lastGenerationSuccess = true;
     lastGenerationError = undefined;
     let validatedStl: string | null = null;
-    let backendValidated = false;
+    let backendValidationFinished = false;
+    let backendValidationSucceeded = false;
+    let backendDoneError: string | null = null;
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -1597,7 +1625,11 @@
               break;
 
             case 'Done':
-              if (event.validated) backendValidated = true;
+              if (event.validated) {
+                backendValidationFinished = true;
+                backendValidationSucceeded = event.success;
+                backendDoneError = event.error ?? null;
+              }
               tryQueueMultipartAssemblyImport();
               break;
           }
@@ -1606,7 +1638,7 @@
         if (chatStore.generationId !== myGen) return;
 
         // Post-generation execution for modification path
-        const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport();
+        const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport(true);
         if (importedMultipart) {
           chatStore.addMessage({
             id: generateId(),
@@ -1620,8 +1652,13 @@
           // Iterative completed (possibly with skipped steps), code already set via FinalCode
         } else if (validatedStl) {
           viewportStore.setPendingStl(validatedStl);
-        } else if (backendValidated) {
-          // Backend validated but failed — code is already set in editor via FinalCode event.
+        } else if (isMultiPart && tryQueueMultipartAssemblyImport(false)) {
+          chatStore.addMessage({
+            id: generateId(),
+            role: 'system',
+            content: 'Imported accepted parts as partial editable assembly.',
+            timestamp: Date.now(),
+          });
         } else if (isMultiPart && previewFirstAvailablePart()) {
           chatStore.addMessage({
             id: generateId(),
@@ -1629,6 +1666,18 @@
             content: 'Full assembly preview unavailable. Showing first available part preview.',
             timestamp: Date.now(),
           });
+        } else if (backendValidationFinished && !backendValidationSucceeded) {
+          chatStore.addMessage({
+            id: generateId(),
+            role: 'system',
+            content: backendDoneError
+              ? `Generation finished with validation failure: ${backendDoneError}`
+              : 'Generation finished with validation failure. No preview artifact available.',
+            timestamp: Date.now(),
+            isError: true,
+          });
+        } else if (backendValidationSucceeded) {
+          // Validation succeeded but no STL artifact was returned.
         } else if (isMultiPart) {
           const assembledCode = resolveGeneratedCode(result, true);
           if (!assembledCode) return;

@@ -34,6 +34,9 @@ export interface AppConfig {
   retrieval_token_budget: number;
   telemetry_enabled: boolean;
   max_validation_attempts: number;
+  generation_reliability_profile: 'reliability_first' | 'balanced' | 'fidelity_first';
+  preview_on_partial_failure: boolean;
+  max_generation_runtime_seconds: number;
   mechanisms_enabled: boolean;
   mechanism_import_enabled: boolean;
   mechanism_cache_max_mb: number;

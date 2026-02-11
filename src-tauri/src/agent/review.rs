@@ -55,6 +55,10 @@ IMPORTANT:
 - If you fix the code, the fix must be a complete, self-contained script
 - Do not add features the user didn't ask for
 - Do not change dimensions unless they are clearly wrong
+- Preserve validated generation contract and multipart architecture:
+  - Keep `assy = cq.Assembly()`, `assy.add(part_...)`, and `result = assy.toCompound()` when present
+  - Do not drop part variables or silently collapse multipart into single-part code
+  - Do not replace a robust operation path with a riskier one unless required to fix a real defect
 - When in doubt, APPROVE the code"#;
 
 #[derive(Debug, Clone)]

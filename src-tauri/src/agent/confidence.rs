@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::agent::design::{self, PlanValidation};
 use crate::agent::rules::{CookbookEntry, DesignPatternEntry};
+use crate::config::GenerationReliabilityProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +33,20 @@ pub fn assess_confidence(
     validation: &PlanValidation,
     cookbook: Option<&[CookbookEntry]>,
     patterns: Option<&[DesignPatternEntry]>,
+) -> ConfidenceAssessment {
+    assess_confidence_with_profile(
+        validation,
+        cookbook,
+        patterns,
+        &GenerationReliabilityProfile::Balanced,
+    )
+}
+
+pub fn assess_confidence_with_profile(
+    validation: &PlanValidation,
+    cookbook: Option<&[CookbookEntry]>,
+    patterns: Option<&[DesignPatternEntry]>,
+    profile: &GenerationReliabilityProfile,
 ) -> ConfidenceAssessment {
     // Base score from risk (risk 0 -> 100, risk 10 -> 0)
     let base_score = 100_i32 - (validation.risk_score as i32 * 10);
@@ -71,7 +86,33 @@ pub fn assess_confidence(
     // Design pattern bonus (stacks with cookbook bonus)
     let pattern_bonus: i32 = if !pattern_matches.is_empty() { 10 } else { 0 };
 
-    let final_score = (base_score + cookbook_bonus + pattern_bonus).clamp(0, 100) as u32;
+    let has_loft = validation
+        .extracted_operations
+        .iter()
+        .any(|op| op == "loft");
+    let has_shell = validation
+        .extracted_operations
+        .iter()
+        .any(|op| op == "shell");
+    let reliability_combo_penalty =
+        if matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
+            && has_loft
+            && has_shell
+        {
+            20
+        } else {
+            0
+        };
+
+    let mut final_score = (base_score + cookbook_bonus + pattern_bonus - reliability_combo_penalty)
+        .clamp(0, 100) as u32;
+    if matches!(profile, GenerationReliabilityProfile::ReliabilityFirst)
+        && has_loft
+        && has_shell
+        && final_score > 65
+    {
+        final_score = 65;
+    }
 
     let level = if final_score >= 70 {
         ConfidenceLevel::High
@@ -83,15 +124,6 @@ pub fn assess_confidence(
 
     // Build warnings for yellow/red
     let mut warnings = Vec::new();
-
-    let has_loft = validation
-        .extracted_operations
-        .iter()
-        .any(|op| op == "loft");
-    let has_shell = validation
-        .extracted_operations
-        .iter()
-        .any(|op| op == "shell");
 
     if has_loft && has_shell {
         warnings.push("This design uses loft + shell — may need retries".to_string());
@@ -337,7 +369,7 @@ mod tests {
         // Actually need a risk that brings us to medium range
         let validation = make_validation(4, vec!["revolve"]);
         let cookbook = make_cookbook();
-        let result = assess_confidence(&validation, Some(&cookbook), None);
+        let _result = assess_confidence(&validation, Some(&cookbook), None);
         // base = 60, cookbook match +10 = 70 → actually High
         // Use higher risk to get medium
         let validation2 = make_validation(5, vec!["revolve"]);
@@ -406,7 +438,6 @@ mod tests {
         // Very high risk + no cookbook + many ops = should not go below 0
         let validation2 = make_validation(10, vec!["loft", "shell", "sweep", "revolve", "cut"]);
         let result2 = assess_confidence(&validation2, None, None);
-        assert!(result2.score >= 0, "score should not be negative");
         assert!(result2.score <= 100);
     }
 

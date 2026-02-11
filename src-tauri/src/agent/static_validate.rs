@@ -1,6 +1,8 @@
 use regex::Regex;
 use serde::Serialize;
 
+use crate::config::GenerationReliabilityProfile;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FindingLevel {
@@ -37,7 +39,25 @@ fn push_warning(findings: &mut Vec<StaticValidationFinding>, code: &str, message
     });
 }
 
-pub fn validate_code(code: &str) -> StaticValidationResult {
+fn push_profile_finding(
+    findings: &mut Vec<StaticValidationFinding>,
+    profile: &GenerationReliabilityProfile,
+    first_pass: bool,
+    code: &str,
+    message: &str,
+) {
+    if *profile == GenerationReliabilityProfile::ReliabilityFirst && first_pass {
+        push_error(findings, code, message);
+    } else {
+        push_warning(findings, code, message);
+    }
+}
+
+pub fn validate_code_with_profile(
+    code: &str,
+    profile: &GenerationReliabilityProfile,
+    first_pass: bool,
+) -> StaticValidationResult {
     let mut findings = Vec::new();
 
     let import_re = Regex::new(r"(?m)^\s*import\s+cadquery\s+as\s+cq\b").unwrap();
@@ -116,12 +136,56 @@ pub fn validate_code(code: &str) -> StaticValidationResult {
         }
     }
 
-    let shell_chain_re = Regex::new(r"(?s)\.(?:cut|union|intersect|fuse)\s*\(.*?\)\s*\.(?:cut|union|intersect|fuse)\s*\(.*?\)\s*\.shell\s*\(").unwrap();
-    if shell_chain_re.is_match(code) {
-        push_warning(
+    let lower = code.to_ascii_lowercase();
+    let has_shell = lower.contains(".shell(");
+    let has_loft = lower.contains(".loft(");
+    let has_sweep = lower.contains(".sweep(");
+    let has_blanket_edges_fillet = lower.contains(".edges().fillet(")
+        || lower.contains(".edges().chamfer(")
+        || Regex::new(r"\.edges\s*\(\s*\)\s*\.\s*(fillet|chamfer)\s*\(")
+            .unwrap()
+            .is_match(&lower);
+    let bool_re = Regex::new(r"\.(cut|union|intersect|fuse|combine)\s*\(").unwrap();
+    let boolean_count = bool_re.find_iter(&lower).count();
+
+    let shell_chain_re = Regex::new(r"(?s)\.(?:cut|union|intersect|fuse|combine)\s*\(.*?\)\s*\.(?:cut|union|intersect|fuse|combine)\s*\(.*?\)\s*\.shell\s*\(").unwrap();
+    if shell_chain_re.is_match(code) || (has_shell && boolean_count >= 2) {
+        push_profile_finding(
             &mut findings,
+            profile,
+            first_pass,
             "shell_after_booleans",
-            "`shell()` after multiple booleans is high risk and may fail in OpenCascade.",
+            "`shell()` after multi-boolean chains is fragile; prefer inner-solid subtraction.",
+        );
+    }
+
+    if has_loft && has_shell {
+        push_profile_finding(
+            &mut findings,
+            profile,
+            first_pass,
+            "loft_shell_combo",
+            "Using `loft()` and `shell()` together in first-pass generation is a known reliability risk.",
+        );
+    }
+
+    if has_sweep && !lower.contains(".wire(") {
+        push_profile_finding(
+            &mut findings,
+            profile,
+            first_pass,
+            "sweep_without_wire",
+            "`sweep()` detected without explicit wire path usage (`.wire()`); high failure risk.",
+        );
+    }
+
+    if has_blanket_edges_fillet && (has_loft || has_shell || boolean_count >= 2) {
+        push_profile_finding(
+            &mut findings,
+            profile,
+            first_pass,
+            "blanket_fillet_on_complex_body",
+            "Blanket `.edges().fillet()/chamfer()` on loft/shell/multi-boolean geometry is high risk.",
         );
     }
 
@@ -160,7 +224,6 @@ pub fn validate_code(code: &str) -> StaticValidationResult {
         );
     }
 
-    let lower = code.to_ascii_lowercase();
     let mentions_mechanism = [
         "snap", "hinge", "boss", "gasket", "o_ring", "oring", "detent", "bayonet", "dovetail",
     ]
@@ -185,9 +248,14 @@ pub fn validate_code(code: &str) -> StaticValidationResult {
     StaticValidationResult { passed, findings }
 }
 
+pub fn validate_code(code: &str) -> StaticValidationResult {
+    validate_code_with_profile(code, &GenerationReliabilityProfile::Balanced, true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::GenerationReliabilityProfile;
 
     #[test]
     fn test_static_validation_success() {
@@ -232,5 +300,34 @@ result = cq.Workplane("XY").box(10, 20, 30).faces(">Z").workplane().hole(3).cut(
             .findings
             .iter()
             .any(|f| f.code == "non_parametric_hardcoded_dimensions"));
+    }
+
+    #[test]
+    fn test_reliability_first_escalates_loft_shell_combo() {
+        let code = r#"
+import cadquery as cq
+body = cq.Workplane("XY").rect(10, 10).workplane(offset=5).rect(8, 8).loft()
+result = body.shell(1)
+"#;
+        let result =
+            validate_code_with_profile(code, &GenerationReliabilityProfile::ReliabilityFirst, true);
+        assert!(!result.passed);
+        assert!(result.findings.iter().any(|f| f.code == "loft_shell_combo"));
+    }
+
+    #[test]
+    fn test_balanced_keeps_loft_shell_as_warning() {
+        let code = r#"
+import cadquery as cq
+body = cq.Workplane("XY").rect(10, 10).workplane(offset=5).rect(8, 8).loft()
+result = body.shell(1)
+"#;
+        let result =
+            validate_code_with_profile(code, &GenerationReliabilityProfile::Balanced, true);
+        assert!(result.findings.iter().any(|f| f.code == "loft_shell_combo"));
+        assert!(result
+            .findings
+            .iter()
+            .any(|f| matches!(f.level, FindingLevel::Warning)));
     }
 }

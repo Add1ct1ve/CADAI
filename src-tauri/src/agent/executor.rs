@@ -50,6 +50,7 @@ pub struct ValidationResult {
     pub static_findings: Vec<String>,
     pub post_geometry_report: Option<PostGeometryValidationReport>,
     pub post_check_warning: Option<String>,
+    pub retry_ladder_stage_reached: Option<u32>,
 }
 
 /// Progress events emitted during the validation loop.
@@ -341,6 +342,77 @@ fn apply_last_sweep_guard_fallback(code: &str) -> Option<String> {
     Some(out.join("\n"))
 }
 
+fn apply_global_fillet_guard(code: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        let trimmed = line.trim();
+        if (trimmed.contains(".fillet(") || trimmed.contains(".chamfer("))
+            && !trimmed.contains("auto-fillet-guard")
+        {
+            out.push(wrap_line_with_fillet_guard(line));
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn strip_fillet_chamfer_operations(code: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains(".fillet(") || trimmed.contains(".chamfer(") {
+            let indent: String = line
+                .chars()
+                .take_while(|c| c.is_ascii_whitespace())
+                .collect();
+            if let Some(lhs) = extract_assignment_lhs(trimmed) {
+                out.push(format!(
+                    "{i}# auto-strip-fillet\n{i}{lhs} = {lhs}",
+                    i = indent,
+                    lhs = lhs
+                ));
+            } else {
+                out.push(format!("{}# auto-strip-fillet {}", indent, trimmed));
+            }
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn apply_global_sweep_guard(code: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains(".sweep(") && !trimmed.contains("auto-sweep-guard") {
+            out.push(wrap_line_with_sweep_guard(line));
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
 fn is_fillet_failure_candidate(
     structured_error: &validate::StructuredError,
     runtime_error: &str,
@@ -440,6 +512,67 @@ fn maybe_apply_sweep_auto_repair(
     }
 
     apply_last_sweep_guard_fallback(current_code)
+}
+
+fn maybe_apply_ladder_auto_repair(
+    current_code: &str,
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+    attempt: u32,
+) -> Option<(String, u32)> {
+    let fillet_candidate = is_fillet_failure_candidate(structured_error, runtime_error);
+    let sweep_candidate = is_sweep_failure_candidate(structured_error, runtime_error);
+
+    if fillet_candidate {
+        match attempt {
+            1 => {
+                if let Some(source_line) = structured_error
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.source_line.as_ref())
+                {
+                    if let Some(repaired) =
+                        apply_line_targeted_fillet_guard(current_code, source_line)
+                    {
+                        return Some((repaired, 1));
+                    }
+                }
+                if let Some(repaired) = apply_last_fillet_guard_fallback(current_code) {
+                    return Some((repaired, 1));
+                }
+            }
+            2 => {
+                if let Some(repaired) = apply_global_fillet_guard(current_code) {
+                    return Some((repaired, 2));
+                }
+            }
+            _ => {
+                if let Some(repaired) = strip_fillet_chamfer_operations(current_code) {
+                    return Some((repaired, 3));
+                }
+            }
+        }
+    }
+
+    if sweep_candidate && attempt >= 3 {
+        if let Some(source_line) = structured_error
+            .context
+            .as_ref()
+            .and_then(|c| c.source_line.as_ref())
+        {
+            if let Some(repaired) = apply_line_targeted_sweep_guard(current_code, source_line) {
+                return Some((repaired, 4));
+            }
+        }
+        if let Some(repaired) = apply_last_sweep_guard_fallback(current_code) {
+            return Some((repaired, 4));
+        }
+        if let Some(repaired) = apply_global_sweep_guard(current_code) {
+            return Some((repaired, 4));
+        }
+    }
+
+    None
 }
 
 fn build_retry_prompt_with_findings(
@@ -596,6 +729,7 @@ pub async fn validate_and_retry(
     let mut retry_usage = TokenUsage::default();
     let max_attempts = configured_max_attempts(&ctx.config);
     let mut static_findings_accum: Vec<String> = Vec::new();
+    let mut retry_ladder_stage_reached: Option<u32> = None;
 
     for attempt in 1..=max_attempts {
         let message = if attempt == 1 {
@@ -609,7 +743,11 @@ pub async fn validate_and_retry(
             message,
         });
 
-        let static_result = static_validate::validate_code(&current_code);
+        let static_result = static_validate::validate_code_with_profile(
+            &current_code,
+            &ctx.config.generation_reliability_profile,
+            attempt == 1,
+        );
         let static_findings: Vec<String> = static_result
             .findings
             .iter()
@@ -673,6 +811,7 @@ pub async fn validate_and_retry(
                                     static_findings: static_findings_accum,
                                     post_geometry_report: Some(post_report),
                                     post_check_warning: None,
+                                    retry_ladder_stage_reached,
                                 });
                             }
                         } else {
@@ -695,6 +834,7 @@ pub async fn validate_and_retry(
                                 static_findings: static_findings_accum,
                                 post_geometry_report: Some(post_report),
                                 post_check_warning: None,
+                                retry_ladder_stage_reached,
                             });
                         }
                     }
@@ -725,6 +865,7 @@ pub async fn validate_and_retry(
                             static_findings: static_findings_accum,
                             post_geometry_report: None,
                             post_check_warning: Some(warning),
+                            retry_ladder_stage_reached,
                         });
                     }
                 }
@@ -755,19 +896,21 @@ pub async fn validate_and_retry(
                         static_findings: static_findings_accum,
                         post_geometry_report: None,
                         post_check_warning: None,
+                        retry_ladder_stage_reached,
                     });
                 }
 
-                if let Some(auto_fixed_code) =
-                    maybe_apply_fillet_auto_repair(&current_code, &structured_error, &error_msg)
-                {
-                    current_code = auto_fixed_code;
-                    continue;
-                }
-
-                if let Some(auto_fixed_code) =
-                    maybe_apply_sweep_auto_repair(&current_code, &structured_error, &error_msg)
-                {
+                if let Some((auto_fixed_code, stage)) = maybe_apply_ladder_auto_repair(
+                    &current_code,
+                    &structured_error,
+                    &error_msg,
+                    attempt,
+                ) {
+                    retry_ladder_stage_reached = Some(
+                        retry_ladder_stage_reached
+                            .map(|s| s.max(stage))
+                            .unwrap_or(stage),
+                    );
                     current_code = auto_fixed_code;
                     continue;
                 }
@@ -824,6 +967,7 @@ pub async fn validate_and_retry(
                             static_findings: static_findings_accum,
                             post_geometry_report: None,
                             post_check_warning: None,
+                            retry_ladder_stage_reached,
                         });
                     }
                 }
@@ -841,6 +985,7 @@ pub async fn validate_and_retry(
         static_findings: static_findings_accum,
         post_geometry_report: None,
         post_check_warning: None,
+        retry_ladder_stage_reached,
     })
 }
 
@@ -868,6 +1013,7 @@ mod tests {
                 warnings: vec![],
             }),
             post_check_warning: None,
+            retry_ladder_stage_reached: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":true"));
@@ -890,6 +1036,7 @@ mod tests {
             static_findings: vec!["Error: missing result".to_string()],
             post_geometry_report: None,
             post_check_warning: None,
+            retry_ladder_stage_reached: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":false"));
@@ -963,6 +1110,7 @@ mod tests {
             static_findings: vec![],
             post_geometry_report: None,
             post_check_warning: Some(format_post_check_warning("trimesh API mismatch")),
+            retry_ladder_stage_reached: None,
         };
 
         assert!(result.success);
