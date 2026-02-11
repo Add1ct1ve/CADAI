@@ -425,6 +425,12 @@ fn extract_build_plan_steps_text(plan_text: &str) -> Option<String> {
 /// Remove any preamble text before the first expected section heading.
 /// This prevents leaked internal reasoning from polluting validators and UI.
 fn sanitize_plan_text(plan_text: &str) -> String {
+    // First try to normalize loosely formatted section labels (e.g. "*Object Analysis*:")
+    // into canonical markdown headings.
+    if let Some(normalized) = normalize_section_labels(plan_text) {
+        return normalized;
+    }
+
     let heading_re =
         Regex::new(r"(?im)^#{2,3}\s+(object analysis|cadquery approach|build plan|approximation notes)\s*$")
             .unwrap();
@@ -432,6 +438,105 @@ fn sanitize_plan_text(plan_text: &str) -> String {
         plan_text[m.start()..].trim().to_string()
     } else {
         plan_text.trim().to_string()
+    }
+}
+
+/// Normalize loose section label styles into canonical markdown headings.
+///
+/// Accepts variants like:
+/// - "*Object Analysis*:"
+/// - "**CadQuery Approach**"
+/// - "Build Plan Structure:"
+/// - "Object Analysis:"
+///
+/// Returns None if no recognizable section labels are found.
+fn normalize_section_labels(plan_text: &str) -> Option<String> {
+    fn canonical_label(line: &str) -> Option<&'static str> {
+        let mut s = line.trim();
+        if s.is_empty() {
+            return None;
+        }
+
+        // Drop common markdown/list prefixes
+        while let Some(first) = s.chars().next() {
+            if first == '#' || first == '-' || first == '*' || first == ' ' {
+                s = s[1..].trim_start();
+            } else {
+                break;
+            }
+        }
+
+        // Drop markdown emphasis and trailing punctuation
+        let cleaned = s
+            .replace('*', "")
+            .trim()
+            .trim_end_matches(':')
+            .trim()
+            .to_lowercase();
+
+        if cleaned == "object analysis" {
+            Some("Object Analysis")
+        } else if cleaned == "cadquery approach" {
+            Some("CadQuery Approach")
+        } else if cleaned == "build plan" || cleaned == "build plan structure" {
+            Some("Build Plan")
+        } else if cleaned == "approximation notes" {
+            Some("Approximation Notes")
+        } else {
+            None
+        }
+    }
+
+    let mut current: Option<&'static str> = None;
+    let mut sections: std::collections::HashMap<&'static str, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut seen_any = false;
+
+    for raw_line in plan_text.lines() {
+        if let Some(lbl) = canonical_label(raw_line) {
+            current = Some(lbl);
+            seen_any = true;
+            sections.entry(lbl).or_default();
+            continue;
+        }
+
+        if let Some(lbl) = current {
+            sections.entry(lbl).or_default().push(raw_line.to_string());
+        }
+    }
+
+    if !seen_any {
+        return None;
+    }
+
+    let order = [
+        "Object Analysis",
+        "CadQuery Approach",
+        "Build Plan",
+        "Approximation Notes",
+    ];
+
+    let mut out = String::new();
+    for name in order {
+        if let Some(lines) = sections.get(name) {
+            if lines.is_empty() {
+                continue;
+            }
+            let body = lines.join("\n").trim().to_string();
+            if body.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(&format!("### {}\n{}", name, body));
+        }
+    }
+
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
     }
 }
 
@@ -483,6 +588,9 @@ pub fn extract_operations_from_text(text: &str) -> Vec<String> {
 /// Extracts operations and dimensions, calculates a risk score (0-10),
 /// and rejects plans with a score > 7.
 pub fn validate_plan(plan_text: &str) -> PlanValidation {
+    let sanitized = sanitize_plan_text(plan_text);
+    let plan_text = sanitized.as_str();
+
     // Scope operation/risk extraction to numbered Build Plan steps only.
     let build_plan_steps_text = extract_build_plan_steps_text(plan_text);
     let operations = build_plan_steps_text
@@ -983,7 +1091,7 @@ mod tests {
 
     #[test]
     fn test_validate_negative_dimension() {
-        let text = "### Build Plan\nCreate a box with -50mm height.";
+        let text = "### Build Plan\n1. Create a box with -50mm height.";
         let v = validate_plan(text);
         assert!(v.risk_score >= 4);
         assert!(v.warnings.iter().any(|w| w.contains("negative dimension")));
@@ -991,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_validate_huge_dimension() {
-        let text = "### Build Plan\nCreate a beam 50000mm long, 10mm wide.";
+        let text = "### Build Plan\n1. Create a beam 50000mm long, 10mm wide.";
         let v = validate_plan(text);
         assert!(v.risk_score >= 3);
         assert!(v.warnings.iter().any(|w| w.contains("exceeds 10 meters")));
@@ -999,7 +1107,7 @@ mod tests {
 
     #[test]
     fn test_validate_tiny_dimension() {
-        let text = "### Build Plan\nAdd a 0.005mm detail and a 50mm base.";
+        let text = "### Build Plan\n1. Add a 0.005mm detail and a 50mm base.";
         let v = validate_plan(text);
         assert!(v.risk_score >= 3);
         assert!(v
@@ -1031,7 +1139,8 @@ mod tests {
 
     #[test]
     fn test_validate_fillet_on_small_feature() {
-        let text = "### Build Plan\nCreate a 15x15x10mm bracket.\nApply fillet 8mm on edges.";
+        let text =
+            "### Build Plan\n1. Create a 15x15x10mm bracket.\n2. Apply fillet 8mm on edges.";
         let v = validate_plan(text);
         assert!(v
             .warnings
@@ -1042,8 +1151,13 @@ mod tests {
     #[test]
     fn test_validate_accumulates_to_rejection() {
         // shell + 5 booleans (+3 + +2) + negative dim (+4) = 9, clamped to 9 > 7
-        let text = "Cut slot, cut hole, cut pocket, union boss, fuse cap.\n\
-            Shell the result. Dimension: -10mm.";
+        let text = "### Build Plan\n\
+            1. Cut slot.\n\
+            2. Cut hole.\n\
+            3. Cut pocket.\n\
+            4. Union boss.\n\
+            5. Fuse cap.\n\
+            6. Shell the result to -10mm wall.";
         let v = validate_plan(text);
         assert!(!v.is_valid);
         assert!(v.risk_score > 7);
@@ -1054,9 +1168,17 @@ mod tests {
     fn test_validate_risk_score_clamped_to_10() {
         // Stack many rules: shell + 6 booleans (+3), booleans >= 5 (+2), negative (-50mm, +4),
         // huge (50000mm, +3), no build plan (+2), loft (+1), sweep (+1) = 16 → clamped to 10
-        let text = "Cut, cut, cut, cut, union, fuse.\n\
-            Shell the result. Loft profiles. Sweep along path.\n\
-            Dimensions: -50mm, 50000mm.";
+        let text = "### Build Plan\n\
+            1. Cut slot.\n\
+            2. Cut vent.\n\
+            3. Cut pocket.\n\
+            4. Cut notch.\n\
+            5. Union boss.\n\
+            6. Fuse cap.\n\
+            7. Shell the result.\n\
+            8. Loft profiles for top blend.\n\
+            9. Sweep guide rail profile.\n\
+            10. Set dimensions to -50mm and 50000mm.";
         let v = validate_plan(text);
         assert_eq!(v.risk_score, 10);
         assert!(!v.is_valid);
@@ -1319,6 +1441,22 @@ overhangs:
         let sanitized = sanitize_plan_text(text);
         assert!(sanitized.starts_with("### Object Analysis"));
         assert!(!sanitized.contains("Thinking aloud"));
+    }
+
+    #[test]
+    fn test_normalize_section_labels_from_emphasis_style() {
+        let text = "Load template...\n\n\
+            *Object Analysis*:\nA wearable housing.\n\n\
+            *CadQuery Approach*:\nUse robust primitives.\n\n\
+            *Build Plan Structure*:\n1. Extrude 42x28x5mm base.\n2. Add dome.\n\n\
+            *Approximation Notes*:\nSimplify soft transitions.";
+        let sanitized = sanitize_plan_text(text);
+        assert!(sanitized.contains("### Object Analysis"));
+        assert!(sanitized.contains("### CadQuery Approach"));
+        assert!(sanitized.contains("### Build Plan"));
+        assert!(sanitized.contains("### Approximation Notes"));
+        assert!(sanitized.contains("1. Extrude 42x28x5mm base."));
+        assert!(!sanitized.contains("Load template"));
     }
 
     #[test]
