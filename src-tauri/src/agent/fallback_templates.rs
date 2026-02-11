@@ -219,13 +219,12 @@ fn simple_housing_with_slots_template(part_name: &str, description: &str) -> Fal
     let length = parse_dim(description, "length", dims[0]).max(10.0);
     let width = parse_dim(description, "width", dims[1]).max(8.0);
     let height = parse_dim(description, "height", dims[2]).max(4.0);
-    let height_ends =
-        parse_dim(description, "height_ends", (height - 2.0).max(3.0)).clamp(2.0, height);
     let wall = parse_dim(description, "wall", 1.8).clamp(0.8, 4.0);
     let top_thk = parse_dim(description, "top_thk", 1.5).clamp(0.8, (height - 1.0).max(1.0));
-    let back_lip = parse_dim(description, "back_lip", 1.5).clamp(0.6, (height_ends - 0.4).max(0.6));
+    let back_lip = parse_dim(description, "back_lip", 1.5).clamp(0.6, (height - 0.4).max(0.6));
     let oring_w = parse_dim(description, "oring_width", 1.2).clamp(0.6, 2.0);
     let oring_d = parse_dim(description, "oring_depth", 0.8).clamp(0.3, 1.5);
+    let chamfer = 0.6_f64.min(wall * 0.3);
     let button_len =
         parse_dim(description, "button_length", 12.0).clamp(4.0, (length * 0.5).max(4.0));
     let button_wid =
@@ -243,12 +242,12 @@ fn simple_housing_with_slots_template(part_name: &str, description: &str) -> Fal
 L = {length:.3}
 W = {width:.3}
 H = {height:.3}
-H_END = {height_ends:.3}
 WALL = {wall:.3}
 TOP = {top_thk:.3}
 BACK_LIP = {back_lip:.3}
 ORING_W = {oring_w:.3}
 ORING_D = {oring_d:.3}
+CHAMFER = {chamfer:.3}
 SLOT_W = {slot_w:.3}
 SLOT_H = {slot_h:.3}
 SLOT_D = {slot_d:.3}
@@ -256,14 +255,14 @@ BTN_L = {button_len:.3}
 BTN_W = {button_wid:.3}
 BTN_OFF = {button_off:.3}
 
-outer_base = cq.Workplane("XY").box(L, W, H_END, centered=(True, True, False))
-top_cap = cq.Workplane("XY", origin=(0, 0, H_END)).box(
-    max(L - 2.0, 2.0),
-    max(W - 2.0, 2.0),
-    max(H - H_END, 0.8),
-    centered=(True, True, False),
-)
-outer = outer_base.union(top_cap)
+# Single outer box (no stepped cap) — chamfer gives the finished look
+outer = cq.Workplane("XY").box(L, W, H, centered=(True, True, False))
+
+# Chamfer top edges for a polished appearance
+try:
+    outer = outer.edges(">Z").chamfer(CHAMFER)
+except Exception:
+    pass  # skip chamfer if geometry is too small
 
 inner = cq.Workplane("XY", origin=(0, 0, BACK_LIP)).box(
     max(L - 2 * WALL, 1.0),
@@ -282,14 +281,15 @@ groove_outer = cq.Workplane("XY", origin=(0, 0, max(BACK_LIP - ORING_D, 0.0))).r
 groove_inner = cq.Workplane("XY", origin=(0, 0, max(BACK_LIP - ORING_D, 0.0))).rect(g_inner_len, g_inner_wid).extrude(ORING_D)
 housing = housing.cut(groove_outer.cut(groove_inner))
 
-slot = cq.Workplane("XY", origin=(L / 2 - SLOT_D / 2, 0, H * 0.5)).box(
-    SLOT_D, SLOT_W, SLOT_H, centered=(True, True, True)
+# End slots — cut through the full wall at each end
+slot = cq.Workplane("XY", origin=(L / 2 - SLOT_D / 2, 0, BACK_LIP)).box(
+    SLOT_D, SLOT_W, SLOT_H, centered=(True, True, False)
 )
 housing = housing.cut(slot).cut(slot.mirror("YZ"))
 
-# Optional shallow side indicator; keeps wall solid.
-indicator = cq.Workplane("XY", origin=(BTN_OFF, W / 2 - 0.15, H * 0.5)).box(
-    max(BTN_L, 1.0), 0.3, max(BTN_W, 1.0), centered=(True, True, True)
+# Side button indicator — 0.6mm recess for visibility
+indicator = cq.Workplane("XY", origin=(BTN_OFF, W / 2 - 0.3, H * 0.5)).box(
+    max(BTN_L, 1.0), 0.6, max(BTN_W, 1.0), centered=(True, True, True)
 )
 housing = housing.cut(indicator)
 
