@@ -1013,6 +1013,13 @@
         viewportStore.setPendingStl(validatedStl);
       } else if (backendValidated) {
         // Backend validated — code already in editor
+      } else if (isMultiPart && previewFirstAvailablePart()) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: 'Full assembly preview unavailable. Showing first available part preview.',
+          timestamp: Date.now(),
+        });
       } else if (isMultiPart) {
         const assembledCode = resolveGeneratedCode(result, true);
         if (!assembledCode) return;
@@ -1095,6 +1102,13 @@
     if (assemblyStl) {
       viewportStore.setPendingStl(assemblyStl);
     }
+  }
+
+  function previewFirstAvailablePart(): boolean {
+    const firstWithStl = partProgress.find((p) => !!p.stl_base64);
+    if (!firstWithStl?.stl_base64) return false;
+    viewportStore.setPendingStl(firstWithStl.stl_base64);
+    return true;
   }
 
   async function handleRetryPart(index: number) {
@@ -1608,6 +1622,13 @@
           viewportStore.setPendingStl(validatedStl);
         } else if (backendValidated) {
           // Backend validated but failed — code is already set in editor via FinalCode event.
+        } else if (isMultiPart && previewFirstAvailablePart()) {
+          chatStore.addMessage({
+            id: generateId(),
+            role: 'system',
+            content: 'Full assembly preview unavailable. Showing first available part preview.',
+            timestamp: Date.now(),
+          });
         } else if (isMultiPart) {
           const assembledCode = resolveGeneratedCode(result, true);
           if (!assembledCode) return;
