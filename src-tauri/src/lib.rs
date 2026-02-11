@@ -3,6 +3,7 @@ mod ai;
 mod commands;
 mod config;
 mod error;
+mod mechanisms;
 mod python;
 mod state;
 
@@ -58,6 +59,11 @@ pub fn run() {
             commands::manufacturing::mesh_check,
             commands::manufacturing::orient_for_print,
             commands::manufacturing::sheet_metal_unfold,
+            commands::mechanisms::list_mechanisms,
+            commands::mechanisms::get_mechanism,
+            commands::mechanisms::search_mechanisms,
+            commands::mechanisms::install_mechanism_pack,
+            commands::mechanisms::remove_mechanism_pack,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

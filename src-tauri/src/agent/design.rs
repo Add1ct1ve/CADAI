@@ -502,7 +502,10 @@ fn extract_numbered_steps(text: &str) -> Vec<String> {
             .replace(&step, "")
             .to_string();
         // Collapse repeated whitespace to keep plans readable.
-        step = Regex::new(r"\s+").unwrap().replace_all(&step, " ").to_string();
+        step = Regex::new(r"\s+")
+            .unwrap()
+            .replace_all(&step, " ")
+            .to_string();
         if step.len() > 260 {
             let clipped = &step[..260];
             if let Some(idx) = clipped.rfind(". ") {
@@ -711,7 +714,10 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
     let lower = plan_text.to_lowercase();
     let heading_lower = heading.to_lowercase();
     let aliases: Vec<String> = match heading_lower.as_str() {
-        "object analysis" => vec!["object analysis".to_string(), "housing analysis".to_string()],
+        "object analysis" => vec![
+            "object analysis".to_string(),
+            "housing analysis".to_string(),
+        ],
         "cadquery approach" => vec![
             "cadquery approach".to_string(),
             "modeling approach".to_string(),
@@ -729,7 +735,9 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
     aliases.iter().any(|alias| {
         lower.contains(&format!("### {}", alias))
             || lower.contains(&format!("## {}", alias))
-            || lower.lines().any(|line| line.trim().to_lowercase() == *alias)
+            || lower
+                .lines()
+                .any(|line| line.trim().to_lowercase() == *alias)
     })
 }
 
@@ -899,7 +907,8 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Rule 10b: Build Plan exists but no numbered steps
     if has_section(plan_text, "Build Plan") && build_plan_steps_text.is_none() {
         risk += 2;
-        warnings.push("Build Plan section must include numbered steps (1., 2., 3., ...)".to_string());
+        warnings
+            .push("Build Plan section must include numbered steps (1., 2., 3., ...)".to_string());
     }
 
     // Rule 11: no dimensions
@@ -1318,8 +1327,7 @@ mod tests {
 
     #[test]
     fn test_validate_fillet_on_small_feature() {
-        let text =
-            "### Build Plan\n1. Create a 15x15x10mm bracket.\n2. Apply fillet 8mm on edges.";
+        let text = "### Build Plan\n1. Create a 15x15x10mm bracket.\n2. Apply fillet 8mm on edges.";
         let v = validate_plan(text);
         assert!(v
             .warnings

@@ -1,0 +1,322 @@
+{
+  "package_id": "core-open-v1",
+  "name": "Core Open Mechanisms",
+  "version": "1.0.0",
+  "license": "CC0-1.0",
+  "source": "built-in",
+  "homepage": "https://github.com/Add1ct1ve/CADAI",
+  "mechanisms": [
+    {
+      "id": "snap_fit_cantilever",
+      "title": "Cantilever Snap-Fit",
+      "summary": "Flexible cantilever hook for enclosure closures.",
+      "category": "locking",
+      "keywords": ["snap", "cantilever", "hook", "enclosure", "lid"],
+      "prompt_block": "Model a cantilever arm with root fillet, insertion chamfer, and retention undercut. Keep arm thickness and length parametric. Limit strain by using generous root radius and avoid sharp transitions.",
+      "parameters": [
+        { "name": "arm_len", "default_value": "12", "description": "Free arm length", "unit": "mm" },
+        { "name": "arm_thk", "default_value": "1.6", "description": "Arm thickness", "unit": "mm" },
+        { "name": "undercut", "default_value": "0.6", "description": "Retention undercut depth", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "snap_hook_window",
+      "title": "Snap Hook + Window",
+      "summary": "Hook feature with matching window receiver for plastic housings.",
+      "category": "locking",
+      "keywords": ["snap", "hook", "window", "receiver"],
+      "prompt_block": "Create mating hook and receiver window with insertion lead-in and stop faces. Keep clearance and draft parametric. Include anti-overstress relief where possible.",
+      "parameters": [
+        { "name": "hook_w", "default_value": "4", "description": "Hook width", "unit": "mm" },
+        { "name": "hook_h", "default_value": "2.2", "description": "Hook height", "unit": "mm" },
+        { "name": "fit_clearance", "default_value": "0.25", "description": "Mating clearance", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "bayonet_lock_quarter_turn",
+      "title": "Bayonet Lock (Quarter Turn)",
+      "summary": "L-slot bayonet lock for quick attach/lock mechanisms.",
+      "category": "locking",
+      "keywords": ["bayonet", "quarter-turn", "twist-lock"],
+      "prompt_block": "Build male lugs and female L-slots with entry ramp and lock detent at final angle. Keep lug thickness, slot width, and engagement depth parameterized.",
+      "parameters": [
+        { "name": "lug_count", "default_value": "3", "description": "Number of locking lugs" },
+        { "name": "engagement_depth", "default_value": "2.0", "description": "Axial engagement", "unit": "mm" },
+        { "name": "slot_clearance", "default_value": "0.2", "description": "Slot to lug clearance", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "dovetail_slide",
+      "title": "Dovetail Slide",
+      "summary": "Self-aligning male/female dovetail slide interface.",
+      "category": "guiding",
+      "keywords": ["dovetail", "slide", "rail"],
+      "prompt_block": "Create a trapezoidal dovetail pair with printable overhang angle and insertion lead. Parameterize taper angle, slide length, and fit clearance.",
+      "parameters": [
+        { "name": "slide_len", "default_value": "30", "description": "Engagement length", "unit": "mm" },
+        { "name": "dovetail_angle", "default_value": "60", "description": "Included angle", "unit": "deg" },
+        { "name": "clearance", "default_value": "0.2", "description": "Lateral clearance", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "tongue_groove",
+      "title": "Tongue and Groove",
+      "summary": "Alignment tongue with groove channel for enclosure seams.",
+      "category": "alignment",
+      "keywords": ["tongue", "groove", "alignment", "seam"],
+      "prompt_block": "Add perimeter tongue and matching groove with controlled depth and corner relief. Keep seam gap and wall-safe offsets parameterized.",
+      "parameters": [
+        { "name": "tongue_h", "default_value": "1.2", "description": "Tongue height", "unit": "mm" },
+        { "name": "tongue_w", "default_value": "1.5", "description": "Tongue width", "unit": "mm" },
+        { "name": "seam_gap", "default_value": "0.15", "description": "Assembly seam gap", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "living_hinge_strip",
+      "title": "Living Hinge Strip",
+      "summary": "Thin flexure hinge strip for repeated bending in suitable materials.",
+      "category": "hinge",
+      "keywords": ["living hinge", "flexure", "thin web"],
+      "prompt_block": "Model a thin hinge web between rigid bodies with stress-relief transitions and bend zone kept clear. Use conservative hinge thickness and radius transitions.",
+      "parameters": [
+        { "name": "hinge_thk", "default_value": "0.5", "description": "Web thickness", "unit": "mm" },
+        { "name": "hinge_w", "default_value": "8", "description": "Hinge width", "unit": "mm" },
+        { "name": "hinge_len", "default_value": "20", "description": "Hinge length", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "barrel_hinge",
+      "title": "Barrel Hinge",
+      "summary": "Alternating knuckles around a hinge pin axis.",
+      "category": "hinge",
+      "keywords": ["barrel hinge", "knuckle", "pin"],
+      "prompt_block": "Create alternating hinge knuckles with a through-pin bore and clearance for rotation. Keep knuckle spacing and bore diameter parameterized.",
+      "parameters": [
+        { "name": "pin_d", "default_value": "2.0", "description": "Pin diameter", "unit": "mm" },
+        { "name": "knuckle_len", "default_value": "6", "description": "Each knuckle length", "unit": "mm" },
+        { "name": "radial_clearance", "default_value": "0.15", "description": "Pin/bore clearance", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "pin_hinge",
+      "title": "Simple Pin Hinge",
+      "summary": "Two-ear hinge with single bore and pin.",
+      "category": "hinge",
+      "keywords": ["pin hinge", "pivot", "ears"],
+      "prompt_block": "Build mating hinge ears and pin path with filleted roots and rotation clearance. Keep ear thickness and bore offsets parameterized.",
+      "parameters": [
+        { "name": "ear_thk", "default_value": "2.5", "description": "Ear thickness", "unit": "mm" },
+        { "name": "pin_d", "default_value": "2.0", "description": "Pin diameter", "unit": "mm" },
+        { "name": "axial_gap", "default_value": "0.2", "description": "Gap between ears", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "detent_ball_spring",
+      "title": "Detent Ball Seat",
+      "summary": "Ball detent seat geometry for indexed positions.",
+      "category": "locking",
+      "keywords": ["detent", "ball", "indexing", "click"],
+      "prompt_block": "Model a detent pocket or groove path for a spring-loaded ball. Use smooth entry chamfers and avoid undercuts that prevent molding/printing.",
+      "parameters": [
+        { "name": "ball_d", "default_value": "3.0", "description": "Detent ball diameter", "unit": "mm" },
+        { "name": "seat_depth", "default_value": "0.4", "description": "Pocket depth", "unit": "mm" },
+        { "name": "entry_chamfer", "default_value": "0.3", "description": "Entry chamfer", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "slider_rail",
+      "title": "Slider Rail",
+      "summary": "Linear slider and rail pair with stop features.",
+      "category": "guiding",
+      "keywords": ["slider", "rail", "linear", "guide"],
+      "prompt_block": "Create rail and carriage profiles with controlled side and top clearance, plus end stops. Keep rail height, carriage envelope, and clearances parametric.",
+      "parameters": [
+        { "name": "rail_h", "default_value": "6", "description": "Rail height", "unit": "mm" },
+        { "name": "rail_w", "default_value": "8", "description": "Rail width", "unit": "mm" },
+        { "name": "slide_clearance", "default_value": "0.2", "description": "Running clearance", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "linear_bushing_seat",
+      "title": "Linear Bushing Seat",
+      "summary": "Press-fit/clearance seat for linear bushings.",
+      "category": "bearing",
+      "keywords": ["bushing", "bearing seat", "linear"],
+      "prompt_block": "Model cylindrical seat with chamfered lead-in and anti-crack wall thickness. Parameterize bore tolerance and shoulder depth.",
+      "parameters": [
+        { "name": "seat_d", "default_value": "8.0", "description": "Seat diameter", "unit": "mm" },
+        { "name": "seat_len", "default_value": "12", "description": "Seat length", "unit": "mm" },
+        { "name": "fit_delta", "default_value": "-0.05", "description": "Press-fit delta", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "spur_gear_pair",
+      "title": "Spur Gear Pair",
+      "summary": "Matched spur gear pair with module and center-distance control.",
+      "category": "power_transmission",
+      "keywords": ["gear", "spur gear", "module", "ratio"],
+      "prompt_block": "Generate two spur gears with shared module and proper center distance. Keep tooth count, face width, and bore diameters fully parameterized.",
+      "parameters": [
+        { "name": "module", "default_value": "1.0", "description": "Gear module", "unit": "mm" },
+        { "name": "teeth_a", "default_value": "20", "description": "Driver tooth count" },
+        { "name": "teeth_b", "default_value": "40", "description": "Driven tooth count" }
+      ]
+    },
+    {
+      "id": "pulley_pair",
+      "title": "V-Pulley Pair",
+      "summary": "Simple pulley pair for belt transmission studies.",
+      "category": "power_transmission",
+      "keywords": ["pulley", "belt", "groove"],
+      "prompt_block": "Create pulley pair with groove geometry and center distance. Parameterize groove angle, width, and hub dimensions.",
+      "parameters": [
+        { "name": "pulley_d1", "default_value": "20", "description": "Pulley 1 pitch diameter", "unit": "mm" },
+        { "name": "pulley_d2", "default_value": "40", "description": "Pulley 2 pitch diameter", "unit": "mm" },
+        { "name": "groove_w", "default_value": "3", "description": "Groove width", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "timing_pulley_pair",
+      "title": "Timing Pulley Pair",
+      "summary": "Toothed pulley pair with synchronized pitch.",
+      "category": "power_transmission",
+      "keywords": ["timing pulley", "gt2", "belt", "toothed"],
+      "prompt_block": "Model timing pulleys with synchronized tooth pitch and flange support. Keep tooth pitch, tooth count, and width parametric.",
+      "parameters": [
+        { "name": "pitch", "default_value": "2", "description": "Belt pitch", "unit": "mm" },
+        { "name": "teeth_driver", "default_value": "16", "description": "Driver tooth count" },
+        { "name": "teeth_driven", "default_value": "32", "description": "Driven tooth count" }
+      ]
+    },
+    {
+      "id": "o_ring_face_gland",
+      "title": "O-Ring Face Gland",
+      "summary": "Face-seal groove for O-ring compression.",
+      "category": "sealing",
+      "keywords": ["o-ring", "gland", "seal", "face seal"],
+      "prompt_block": "Create perimeter gland groove with controlled squeeze and stretch assumptions. Keep groove width/depth and edge clearances parametric.",
+      "parameters": [
+        { "name": "oring_cs", "default_value": "1.5", "description": "Cross-section", "unit": "mm" },
+        { "name": "groove_w", "default_value": "1.8", "description": "Groove width", "unit": "mm" },
+        { "name": "groove_d", "default_value": "1.1", "description": "Groove depth", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "gasket_channel",
+      "title": "Gasket Channel",
+      "summary": "Rectangular gasket retention channel around a sealing perimeter.",
+      "category": "sealing",
+      "keywords": ["gasket", "channel", "seal"],
+      "prompt_block": "Add continuous gasket channel with corner radii, compression land, and anti-extrusion lip where needed. Keep channel dimensions and offset parametric.",
+      "parameters": [
+        { "name": "channel_w", "default_value": "2.2", "description": "Channel width", "unit": "mm" },
+        { "name": "channel_d", "default_value": "1.4", "description": "Channel depth", "unit": "mm" },
+        { "name": "offset_from_edge", "default_value": "1.0", "description": "Edge offset", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "lip_seal_seat",
+      "title": "Lip Seal Seat",
+      "summary": "Seat and shoulder for radial lip seals.",
+      "category": "sealing",
+      "keywords": ["lip seal", "radial seal", "shaft"],
+      "prompt_block": "Build radial seal bore seat with insertion chamfer and shaft lead radius. Keep bore tolerance, shoulder depth, and seal land parametric.",
+      "parameters": [
+        { "name": "seal_od", "default_value": "12", "description": "Seal outer diameter", "unit": "mm" },
+        { "name": "seat_depth", "default_value": "4", "description": "Seat depth", "unit": "mm" },
+        { "name": "lead_chamfer", "default_value": "0.5", "description": "Insertion chamfer", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "screw_boss_pattern",
+      "title": "Screw Boss Pattern",
+      "summary": "Parametric standoff bosses for screw fastening.",
+      "category": "fastening",
+      "keywords": ["boss", "screw", "standoff"],
+      "prompt_block": "Generate cylindrical bosses with pilot holes, root fillets, and rib-ready spacing. Keep boss OD/ID and offsets parameterized.",
+      "parameters": [
+        { "name": "boss_od", "default_value": "6", "description": "Boss outer diameter", "unit": "mm" },
+        { "name": "pilot_d", "default_value": "2.5", "description": "Pilot hole diameter", "unit": "mm" },
+        { "name": "boss_h", "default_value": "8", "description": "Boss height", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "heatset_insert_boss",
+      "title": "Heat-Set Insert Boss",
+      "summary": "Boss optimized for brass heat-set threaded inserts.",
+      "category": "fastening",
+      "keywords": ["heat-set", "insert", "boss", "threaded"],
+      "prompt_block": "Model insert boss with lead-in chamfer and support walls. Keep insert bore, insertion depth, and anti-crack thickness parametric.",
+      "parameters": [
+        { "name": "insert_od", "default_value": "4.0", "description": "Insert outside diameter", "unit": "mm" },
+        { "name": "insert_depth", "default_value": "5.0", "description": "Insertion depth", "unit": "mm" },
+        { "name": "boss_od", "default_value": "7.0", "description": "Boss outside diameter", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "pcb_standoff_grid",
+      "title": "PCB Standoff Grid",
+      "summary": "Common PCB standoffs with hole pattern and relief.",
+      "category": "electronics",
+      "keywords": ["pcb", "standoff", "mounting"],
+      "prompt_block": "Build PCB standoffs in a parametric pattern with screw/pin top geometry and keepout around board edge. Keep hole spacing and standoff height parameterized.",
+      "parameters": [
+        { "name": "pitch_x", "default_value": "58", "description": "Hole spacing X", "unit": "mm" },
+        { "name": "pitch_y", "default_value": "49", "description": "Hole spacing Y", "unit": "mm" },
+        { "name": "standoff_h", "default_value": "6", "description": "Standoff height", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "keyhole_mount",
+      "title": "Keyhole Wall Mount",
+      "summary": "Keyhole slot for screw-head wall mounting.",
+      "category": "mounting",
+      "keywords": ["keyhole", "wall mount", "slot"],
+      "prompt_block": "Create keyhole profile with capture diameter and slot throat, plus chamfered entry. Keep screw head diameter assumptions and clearances parametric.",
+      "parameters": [
+        { "name": "head_d", "default_value": "7", "description": "Screw head diameter", "unit": "mm" },
+        { "name": "shank_d", "default_value": "3.5", "description": "Screw shank diameter", "unit": "mm" },
+        { "name": "slot_len", "default_value": "10", "description": "Slot travel length", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "usb_c_panel_cutout",
+      "title": "USB-C Panel Cutout",
+      "summary": "Rounded-rect USB-C interface opening with support shelf.",
+      "category": "electronics",
+      "keywords": ["usb-c", "connector", "panel cutout"],
+      "prompt_block": "Build USB-C cutout as rounded slot with datum-based placement and optional retention shelf. Keep slot dimensions and shell offsets parameterized.",
+      "parameters": [
+        { "name": "slot_w", "default_value": "9.2", "description": "Opening width", "unit": "mm" },
+        { "name": "slot_h", "default_value": "3.4", "description": "Opening height", "unit": "mm" },
+        { "name": "corner_r", "default_value": "1.2", "description": "Corner radius", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "button_membrane_pocket",
+      "title": "Membrane Button Pocket",
+      "summary": "Blind pocket for sealed membrane buttons.",
+      "category": "ui_controls",
+      "keywords": ["button", "membrane", "sealed", "pocket"],
+      "prompt_block": "Cut a shallow capsule pocket from outer wall while preserving membrane thickness. Keep cut depth and button geometry fully parametric.",
+      "parameters": [
+        { "name": "button_len", "default_value": "10", "description": "Button pocket length", "unit": "mm" },
+        { "name": "button_w", "default_value": "4", "description": "Button pocket width", "unit": "mm" },
+        { "name": "membrane_thk", "default_value": "0.6", "description": "Remaining wall thickness", "unit": "mm" }
+      ]
+    },
+    {
+      "id": "strap_slot_reinforced",
+      "title": "Reinforced Strap Slot",
+      "summary": "Pass-through strap slot with local reinforcement pads.",
+      "category": "wearable",
+      "keywords": ["strap", "slot", "wearable", "band"],
+      "prompt_block": "Create through-slot for strap path and add local reinforcement ribs/pads to reduce crack risk. Keep slot dimensions and wall support parameterized.",
+      "parameters": [
+        { "name": "slot_w", "default_value": "20", "description": "Slot width", "unit": "mm" },
+        { "name": "slot_h", "default_value": "2.5", "description": "Slot height", "unit": "mm" },
+        { "name": "reinforce_thk", "default_value": "1.2", "description": "Reinforcement thickness", "unit": "mm" }
+      ]
+    }
+  ]
+}

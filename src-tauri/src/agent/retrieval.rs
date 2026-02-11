@@ -10,6 +10,7 @@ use crate::agent::rules::{
     FewShotExample,
 };
 use crate::config::AppConfig;
+use crate::mechanisms::catalog as mechanism_catalog;
 
 const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 const DEFAULT_RETRIEVAL_BUDGET: u32 = 3500;
@@ -19,6 +20,7 @@ const MAX_ANTI_PATTERNS: usize = 3;
 const MAX_API_REF: usize = 4;
 const MAX_FEW_SHOT: usize = 2;
 const MAX_DESIGN_PATTERNS: usize = 2;
+const MAX_MECHANISMS: usize = 6;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RetrievedContextItem {
@@ -114,6 +116,37 @@ fn build_index(preset: Option<&str>, cq_version: Option<&str>) -> Vec<IndexedIte
     }
 
     docs
+}
+
+fn mechanism_docs(config: &AppConfig) -> Vec<IndexedItem> {
+    if !config.mechanisms_enabled {
+        return Vec::new();
+    }
+    let catalog = match mechanism_catalog::get_catalog(config) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    catalog
+        .mechanisms
+        .into_iter()
+        .map(|m| IndexedItem {
+            source: "mechanism".to_string(),
+            id: format!("mechanism:{}", m.id),
+            title: format!("{} ({})", m.title, m.id),
+            body: format!(
+                "{}\nCategory: {}\nKeywords: {}\nParameters: {}\n{}",
+                m.summary,
+                m.category,
+                m.keywords.join(", "),
+                m.parameters
+                    .iter()
+                    .map(|p| format!("{}={}", p.name, p.default_value))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                truncate(&m.prompt_block, 900)
+            ),
+        })
+        .collect()
 }
 
 fn index_cookbook(i: usize, entry: &CookbookEntry) -> IndexedItem {
@@ -315,6 +348,7 @@ fn source_limit(source: &str) -> usize {
         "api_ref" => MAX_API_REF,
         "few_shot" => MAX_FEW_SHOT,
         "design_pattern" => MAX_DESIGN_PATTERNS,
+        "mechanism" => MAX_MECHANISMS,
         _ => 1,
     }
 }
@@ -351,6 +385,12 @@ fn render_item(item: &IndexedItem, score: f32) -> String {
             score,
             truncate(&item.body, 850)
         ),
+        "mechanism" => format!(
+            "### Mechanism Library: {} (score {:.2})\n```text\n{}\n```\n",
+            item.title,
+            score,
+            truncate(&item.body, 900)
+        ),
         _ => format!("### {}\n{}\n", item.title, truncate(&item.body, 600)),
     }
 }
@@ -378,7 +418,7 @@ pub async fn retrieve_context(
     }
 
     let key = make_cache_key(preset, cq_version);
-    let docs = {
+    let mut docs = {
         let cache = get_index_cache();
         let mut guard = cache.lock().unwrap();
         if !guard.contains_key(&key) {
@@ -386,6 +426,8 @@ pub async fn retrieve_context(
         }
         guard.get(&key).cloned().unwrap_or_default()
     };
+
+    docs.extend(mechanism_docs(config));
 
     if docs.is_empty() || query.trim().is_empty() {
         return RetrievalResult::empty();
@@ -467,7 +509,12 @@ pub async fn retrieve_context(
         *entry += 1;
 
         if selected.len()
-            >= (MAX_COOKBOOK + MAX_ANTI_PATTERNS + MAX_API_REF + MAX_FEW_SHOT + MAX_DESIGN_PATTERNS)
+            >= (MAX_COOKBOOK
+                + MAX_ANTI_PATTERNS
+                + MAX_API_REF
+                + MAX_FEW_SHOT
+                + MAX_DESIGN_PATTERNS
+                + MAX_MECHANISMS)
         {
             break;
         }

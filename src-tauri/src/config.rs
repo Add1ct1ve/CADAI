@@ -41,6 +41,14 @@ pub struct AppConfig {
     pub telemetry_enabled: bool,
     #[serde(default = "default_max_validation_attempts")]
     pub max_validation_attempts: u32,
+    #[serde(default = "default_true")]
+    pub mechanisms_enabled: bool,
+    #[serde(default)]
+    pub mechanism_import_enabled: bool,
+    #[serde(default = "default_mechanism_cache_max_mb")]
+    pub mechanism_cache_max_mb: u32,
+    #[serde(default = "default_allowed_spdx_licenses")]
+    pub allowed_spdx_licenses: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -79,6 +87,20 @@ fn default_max_validation_attempts() -> u32 {
     4
 }
 
+fn default_mechanism_cache_max_mb() -> u32 {
+    512
+}
+
+fn default_allowed_spdx_licenses() -> Vec<String> {
+    vec![
+        "MIT".to_string(),
+        "Apache-2.0".to_string(),
+        "BSD-2-Clause".to_string(),
+        "BSD-3-Clause".to_string(),
+        "CC0-1.0".to_string(),
+    ]
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -103,6 +125,10 @@ impl Default for AppConfig {
             retrieval_token_budget: default_retrieval_token_budget(),
             telemetry_enabled: true,
             max_validation_attempts: default_max_validation_attempts(),
+            mechanisms_enabled: true,
+            mechanism_import_enabled: false,
+            mechanism_cache_max_mb: default_mechanism_cache_max_mb(),
+            allowed_spdx_licenses: default_allowed_spdx_licenses(),
         }
     }
 }
