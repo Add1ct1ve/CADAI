@@ -245,4 +245,59 @@ mod tests {
             .iter()
             .any(|f| f.contains("orientation policy")));
     }
+
+    #[test]
+    fn whoop_housing_contract_accepts_valid_geometry() {
+        let contract = build_default_contract(
+            "housing",
+            "Single editable housing solid. Footprint 42x28mm, top 7.5/5mm, wall 1.8mm.",
+        );
+        let mut report = base_report();
+        report.bounds_min = [-21.0, -14.0, 0.0];
+        report.bounds_max = [21.0, 14.0, 7.5];
+        report.component_count = 1;
+        let code = "result = housing";
+        let result = validate_part_semantics(&contract, &report, code);
+        assert!(
+            result.passed,
+            "valid Whoop housing should pass semantic validation, findings: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn whoop_backplate_contract_accepts_valid_geometry() {
+        let contract = build_default_contract(
+            "back_plate",
+            "Single editable back plate solid. Base 30x24mm, thickness 1.5mm.",
+        );
+        let mut report = base_report();
+        report.bounds_min = [-15.0, -12.0, 0.0];
+        report.bounds_max = [15.0, 12.0, 1.5];
+        report.component_count = 1;
+        let code = "result = back_plate";
+        let result = validate_part_semantics(&contract, &report, code);
+        assert!(
+            result.passed,
+            "valid Whoop back_plate should pass semantic validation, findings: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn whoop_housing_rejects_two_component_solid() {
+        let contract = build_default_contract(
+            "housing",
+            "Single editable housing solid. Footprint 42x28mm.",
+        );
+        let mut report = base_report();
+        report.bounds_min = [-21.0, -14.0, 0.0];
+        report.bounds_max = [21.0, 14.0, 7.5];
+        report.component_count = 2; // Two disconnected solids — invalid
+        let result = validate_part_semantics(&contract, &report, "result = housing");
+        assert!(
+            !result.passed,
+            "housing with 2 components should fail (must be single editable solid)"
+        );
+    }
 }

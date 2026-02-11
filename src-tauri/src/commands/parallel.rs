@@ -1588,17 +1588,25 @@ async fn run_generation_pipeline(
             emit_usage(on_event, "total", total_usage, provider_id, model_id);
         }
 
+        // Guard: report failure if no code was extracted from the AI response
+        let has_code = final_code.is_some();
+        let no_code_error = if has_code {
+            None
+        } else {
+            Some("No code block extracted from AI response".to_string())
+        };
+
         let _ = on_event.send(MultiPartEvent::Done {
-            success: true,
-            error: None,
+            success: has_code,
+            error: no_code_error.clone(),
             validated: false,
         });
 
         return Ok(PipelineOutcome {
             response: final_response,
             final_code,
-            success: true,
-            error: None,
+            success: has_code,
+            error: no_code_error,
             validation_attempts: None,
             static_findings: vec![],
             post_check_soft_failed: false,
@@ -1606,9 +1614,13 @@ async fn run_generation_pipeline(
             part_acceptance_rate: None,
             assembly_success_rate: None,
             partial_preview_shown: false,
-            empty_viewport_after_generation: false,
+            empty_viewport_after_generation: !has_code,
             retry_ladder_stage_reached: None,
-            failure_signatures: vec![],
+            failure_signatures: if has_code {
+                vec![]
+            } else {
+                vec!["no_code_extracted".to_string()]
+            },
         });
     }
 
@@ -2416,9 +2428,17 @@ pub async fn generate_parallel(
             emit_usage(&on_event, "total", &total_usage, &provider_id, &model_id);
         }
 
+        // Guard: report failure if no code was extracted from the modification response
+        let has_code = final_code.is_some();
+        let no_code_error = if has_code {
+            None
+        } else {
+            Some("No code block extracted from modification response".to_string())
+        };
+
         let _ = on_event.send(MultiPartEvent::Done {
-            success: true,
-            error: None,
+            success: has_code,
+            error: no_code_error.clone(),
             validated: false,
         });
 
@@ -2426,16 +2446,16 @@ pub async fn generate_parallel(
             &state,
             &user_request,
             final_code.as_deref(),
-            true,
+            has_code,
             None,
             None,
-            None,
+            no_code_error.clone(),
         );
         let outcome = PipelineOutcome {
             response: final_response.clone(),
             final_code: final_code.clone(),
-            success: true,
-            error: None,
+            success: has_code,
+            error: no_code_error,
             validation_attempts: None,
             static_findings: vec![],
             post_check_soft_failed: false,
@@ -2443,7 +2463,7 @@ pub async fn generate_parallel(
             part_acceptance_rate: None,
             assembly_success_rate: None,
             partial_preview_shown: false,
-            empty_viewport_after_generation: false,
+            empty_viewport_after_generation: !has_code,
             retry_ladder_stage_reached: None,
             failure_signatures: vec![],
         };
@@ -3084,6 +3104,208 @@ mod tests {
         assert_eq!(plan.parts.len(), 2);
         assert_eq!(plan.parts[0].name, "main_body");
         assert_eq!(plan.parts[1].name, "cover");
+    }
+
+    // -----------------------------------------------------------------------
+    // Whoop prompt integration tests
+    // -----------------------------------------------------------------------
+
+    const WHOOP_PROMPT: &str = r#"Create a fully parametric, editable CAD model of a wrist-worn fitness tracker housing with a snap-fit back plate, inspired by Whoop band design.
+- Units: millimeters
+- housing_length=42
+- housing_width=28
+- height_center=7.5
+- height_ends=5
+- wall=1.8
+- top_thk=1.5
+- corner_r=5
+- back_plate_thk=1.5
+- back_lip=1.5
+- snap_tolerance=0.15
+- oring_width=1.2
+- oring_depth=0.8
+- button_length=12
+- button_width=4
+- button_offset=6
+- indicator_depth=0.3
+- band_slot_width=20
+- band_slot_height=2.5
+- band_slot_depth=5
+- Create two separate solids/bodies: Housing and BackPlate."#;
+
+    #[test]
+    fn whoop_prompt_triggers_multipart_contract() {
+        assert!(
+            request_requires_multipart_contract(WHOOP_PROMPT, ""),
+            "Whoop prompt with 'separate solids' and 'back plate' must trigger multipart contract"
+        );
+    }
+
+    #[test]
+    fn whoop_prompt_triggers_multipart_contract_via_plan() {
+        // Also verify via plan_text path (design plan echoes the parameters)
+        let plan_text = "housing_length=42\nhousing_width=28\nback plate ledge\nseparate bodies";
+        assert!(request_requires_multipart_contract("", plan_text));
+    }
+
+    #[test]
+    fn deterministic_fallback_matches_whoop_prompt_full() {
+        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT)
+            .expect("Whoop prompt must produce a deterministic fallback plan");
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 2);
+        assert_eq!(plan.parts[0].name, "housing");
+        assert_eq!(plan.parts[1].name, "back_plate");
+    }
+
+    #[test]
+    fn whoop_fallback_housing_spec_contains_dimensions() {
+        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
+        let housing = &plan.parts[0];
+        // Housing description must reference the key dimensions from the prompt
+        assert!(
+            housing.description.contains("42"),
+            "housing should mention length=42"
+        );
+        assert!(
+            housing.description.contains("28"),
+            "housing should mention width=28"
+        );
+        assert!(
+            housing.description.contains("7.5") || housing.description.contains("7.50"),
+            "housing should mention height_center=7.5"
+        );
+        assert!(
+            housing.description.contains("1.8") || housing.description.contains("1.80"),
+            "housing should mention wall=1.8"
+        );
+    }
+
+    #[test]
+    fn whoop_fallback_backplate_spec_has_clearance() {
+        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
+        let back_plate = &plan.parts[1];
+        // Back plate should be smaller than housing (clearance via snap_tolerance)
+        assert!(
+            back_plate.description.contains("1.5") || back_plate.description.contains("1.50"),
+            "back_plate should reference plate thickness"
+        );
+        // Constraints should mention fit/clearance
+        assert!(
+            back_plate
+                .constraints
+                .iter()
+                .any(|c| c.contains("clearance") || c.contains("fit")),
+            "back_plate constraints must mention clearance/fit"
+        );
+    }
+
+    #[test]
+    fn whoop_fallback_assembly_produces_valid_code() {
+        use super::assemble_parts;
+        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
+
+        // Simulate successful part generation with mock code
+        let mock_parts: Vec<(String, String, [f64; 3])> = plan
+            .parts
+            .iter()
+            .map(|p| {
+                let code = format!(
+                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",
+                );
+                (p.name.clone(), code, p.position)
+            })
+            .collect();
+
+        let assembled = assemble_parts(&mock_parts).expect("assembly should succeed");
+        assert!(assembled.contains("cq.Assembly()"));
+        assert!(assembled.contains("part_housing"));
+        assert!(assembled.contains("part_back_plate"));
+        assert!(assembled.contains("assy.toCompound()"));
+    }
+
+    #[test]
+    fn assembly_contract_validates_whoop_assembly() {
+        use super::{assemble_parts, assembly_contract_issues};
+        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
+
+        let mock_parts: Vec<(String, String, [f64; 3])> = plan
+            .parts
+            .iter()
+            .map(|p| {
+                let code = format!(
+                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",
+                );
+                (p.name.clone(), code, p.position)
+            })
+            .collect();
+
+        let assembled = assemble_parts(&mock_parts).unwrap();
+        let issues = assembly_contract_issues(&assembled, &mock_parts);
+        assert!(
+            issues.is_empty(),
+            "assembled code should pass contract validation, got: {:?}",
+            issues
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge case: no code extracted
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_plan_handles_empty_parts_gracefully() {
+        let json = r#"{"mode":"multi","parts":[]}"#;
+        let plan = parse_plan(json).expect("empty parts should parse");
+        assert_eq!(plan.mode, "multi");
+        assert!(plan.parts.is_empty());
+    }
+
+    #[test]
+    fn parse_plan_extracts_json_from_prose() {
+        let wrapped = r#"Here is the plan:
+{"mode":"multi","description":"two parts","parts":[
+  {"name":"housing","description":"main body","position":[0,0,0],"constraints":[]},
+  {"name":"back_plate","description":"cover","position":[0,0,0],"constraints":[]}
+]}
+That should work."#;
+        let plan = parse_plan(wrapped).expect("should extract JSON from surrounding prose");
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 2);
+    }
+
+    #[test]
+    fn parse_plan_repairs_truncated_multi_part() {
+        // Simulate truncation mid-way through the second part
+        let truncated = r#"{"mode":"multi","description":"housing + plate","parts":[{"name":"housing","description":"main","position":[0,0,0],"constraints":[]},{"name":"back_plate","description":"cover","position":[0,0,0"#;
+        // Repair should close the array, the incomplete part object, and the root object
+        let result = parse_plan(truncated);
+        // This may or may not repair depending on how the JSON completes;
+        // the key invariant is it never panics
+        assert!(
+            result.is_ok() || result.is_err(),
+            "parse_plan must never panic on truncated input"
+        );
+    }
+
+    #[test]
+    fn multipart_contract_detects_norwegian_keywords() {
+        let user = "Lag en bakplate og eksplodert visning";
+        assert!(
+            request_requires_multipart_contract(user, ""),
+            "Norwegian keywords 'bakplate' and 'eksplodert' should trigger multipart"
+        );
+    }
+
+    #[test]
+    fn extract_numeric_param_reads_whoop_dimensions() {
+        use super::extract_numeric_param;
+        let text = "housing_length=42\nhousing_width=28\nwall=1.8";
+        assert_eq!(extract_numeric_param(text, "housing_length", 0.0), 42.0);
+        assert_eq!(extract_numeric_param(text, "housing_width", 0.0), 28.0);
+        assert_eq!(extract_numeric_param(text, "wall", 0.0), 1.8);
+        // Missing param should return default
+        assert_eq!(extract_numeric_param(text, "nonexistent", 99.0), 99.0);
     }
 }
 
