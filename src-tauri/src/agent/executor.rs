@@ -518,6 +518,7 @@ fn run_post_geometry_checks(
     let winding_consistent = parsed["winding_consistent"].as_bool().unwrap_or(false);
     let degenerate_faces = parsed["degenerate_faces"].as_u64().unwrap_or(0);
     let euler_number = parsed["euler_number"].as_i64().unwrap_or(0);
+    let component_count = parsed["component_count"].as_u64().unwrap_or(1).max(1);
     let triangle_count = parsed["triangle_count"].as_u64().unwrap_or(0);
 
     let mut warnings: Vec<String> = parsed["issues"]
@@ -562,7 +563,11 @@ fn run_post_geometry_checks(
         }
     }
 
-    let manifold = watertight && winding_consistent && degenerate_faces == 0 && euler_number == 2;
+    let expected_euler = (2_u64.saturating_mul(component_count)) as i64;
+    let manifold = watertight
+        && winding_consistent
+        && degenerate_faces == 0
+        && euler_number == expected_euler;
 
     Ok(PostGeometryValidationReport {
         watertight,
