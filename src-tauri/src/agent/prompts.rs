@@ -244,10 +244,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
                 if let Some(map) = item.as_mapping() {
                     if let Some(check) = map.get(&serde_yaml::Value::String("check".into())) {
                         if let Some(check_str) = check.as_str() {
-                            prompt.push_str(&format!(
-                                "- **{}**",
-                                format_category_name(check_str)
-                            ));
+                            prompt.push_str(&format!("- **{}**", format_category_name(check_str)));
                         }
                     }
                     if let Some(rule) = map.get(&serde_yaml::Value::String("rule".into())) {
@@ -265,10 +262,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
                 if let Some(map) = item.as_mapping() {
                     if let Some(check) = map.get(&serde_yaml::Value::String("check".into())) {
                         if let Some(check_str) = check.as_str() {
-                            prompt.push_str(&format!(
-                                "- **{}**",
-                                format_category_name(check_str)
-                            ));
+                            prompt.push_str(&format!("- **{}**", format_category_name(check_str)));
                         }
                     }
                     if let Some(rule) = map.get(&serde_yaml::Value::String("rule".into())) {
@@ -451,7 +445,9 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
     // -- Failure Prevention (proactive rules) --
     if let Some(ref fp) = rules.failure_prevention {
         prompt.push_str("## Failure Prevention — Proactive Rules\n");
-        prompt.push_str("Follow these rules BEFORE generating code to avoid common CadQuery failures.\n\n");
+        prompt.push_str(
+            "Follow these rules BEFORE generating code to avoid common CadQuery failures.\n\n",
+        );
         for (category, items) in fp {
             prompt.push_str(&format!("### {}\n", format_category_name(category)));
             for item in items {
@@ -505,7 +501,8 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
     // -- Output structure (always present) --
     prompt.push_str("\n## Output Structure\n");
     prompt.push_str("When generating CadQuery code, wrap it in XML-style tags:\n\n");
-    prompt.push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
+    prompt
+        .push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
     prompt.push_str("You may also use ```python fences inside or outside the tags.\n");
     prompt.push_str("The <CODE> tags help the system reliably extract your code.\n");
 
@@ -513,10 +510,103 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
 }
 
 /// Build a system prompt for a specific preset (e.g. "3d-printing", "cnc", or None for default).
-pub fn build_system_prompt_for_preset(preset_name: Option<&str>, cq_version: Option<&str>) -> String {
+pub fn build_system_prompt_for_preset(
+    preset_name: Option<&str>,
+    cq_version: Option<&str>,
+) -> String {
     let rules = AgentRules::from_preset(preset_name)
         .unwrap_or_else(|_| AgentRules::from_preset(None).unwrap());
     build_system_prompt(&rules, cq_version)
+}
+
+/// Build a compact prompt with core constraints only.
+/// Retrieval-selected snippets should be appended separately.
+pub fn build_compact_system_prompt_for_preset(
+    preset_name: Option<&str>,
+    cq_version: Option<&str>,
+) -> String {
+    let rules = AgentRules::from_preset(preset_name).unwrap_or_else(|_| {
+        AgentRules::from_preset(None).unwrap_or_else(|_| AgentRules::default_empty())
+    });
+
+    let mut prompt = String::new();
+    prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code.\\n\\n");
+
+    prompt.push_str("## Hard Requirements\\n");
+    prompt.push_str("- Always import cadquery as cq\\n");
+    prompt.push_str("- Assign final geometry to variable named `result`\\n");
+    prompt.push_str("- Use millimeters\\n");
+    prompt.push_str("- Do not use file I/O, network calls, GUI/display calls, or subprocesses\\n");
+    prompt.push_str("- Return complete executable CadQuery script\\n\\n");
+
+    prompt.push_str("## CadQuery Version Notes\\n");
+    match cq_version {
+        Some(ver) => {
+            prompt.push_str(&format!("- Installed CadQuery version: {}\\n", ver));
+            if !version_gte(ver, "2.3.0") {
+                prompt.push_str("- `.tag()` is unavailable in this version\\n");
+            }
+            if !version_gte(ver, "2.4.0") {
+                prompt.push_str("- `cq.Sketch()` is unavailable in this version\\n");
+            }
+        }
+        None => {
+            prompt.push_str(
+                "- CadQuery version unknown; avoid newer version-specific APIs unless necessary\\n",
+            );
+        }
+    }
+    prompt.push('\n');
+
+    if let Some(ref cs) = rules.coordinate_system {
+        prompt.push_str("## Coordinate System\\n");
+        if let Some(ref desc) = cs.description {
+            prompt.push_str(&format!("- {}\\n", desc));
+        }
+        if let Some(ref x) = cs.x {
+            if let (Some(ref dir), Some(ref pos)) = (&x.direction, &x.positive) {
+                prompt.push_str(&format!("- X axis: {} (positive {})\\n", dir, pos));
+            }
+        }
+        if let Some(ref y) = cs.y {
+            if let (Some(ref dir), Some(ref pos)) = (&y.direction, &y.positive) {
+                prompt.push_str(&format!("- Y axis: {} (positive {})\\n", dir, pos));
+            }
+        }
+        if let Some(ref z) = cs.z {
+            if let (Some(ref dir), Some(ref pos)) = (&z.direction, &z.positive) {
+                prompt.push_str(&format!("- Z axis: {} (positive {})\\n", dir, pos));
+            }
+        }
+        if let Some(ref origin) = cs.origin {
+            prompt.push_str(&format!("- Origin: {}\\n", origin));
+        }
+        prompt.push('\n');
+    }
+
+    if let Some(ref sr) = rules.spatial_rules {
+        prompt.push_str("## Critical Spatial Rules\\n");
+        for (category, items) in sr {
+            if category == "natural_language_to_axis"
+                || category == "splitting_and_halving"
+                || category == "face_selectors"
+                || category == "boolean_cut"
+                || category == "sketch_placement"
+            {
+                prompt.push_str(&format!("### {}\\n", format_category_name(category)));
+                for item in items.iter().take(8) {
+                    prompt.push_str(&format!("- {}\\n", item));
+                }
+            }
+        }
+        prompt.push('\n');
+    }
+
+    prompt.push_str("## Output Structure\\n");
+    prompt.push_str("Return your final code wrapped in <CODE>...</CODE> tags.\\n");
+    prompt.push_str("Use only one complete final script.\\n");
+
+    prompt
 }
 
 /// Build a system prompt with default rules.
@@ -538,10 +628,7 @@ mod tests {
 
     #[test]
     fn test_format_category_name_snake_case() {
-        assert_eq!(
-            format_category_name("common_pitfalls"),
-            "Common Pitfalls"
-        );
+        assert_eq!(format_category_name("common_pitfalls"), "Common Pitfalls");
     }
 
     #[test]
@@ -713,7 +800,11 @@ mod tests {
     fn test_prompt_manufacturing_content() {
         let prompt = build_system_prompt_for_preset(None, None);
         // Manufacturing data from default.yaml
-        assert!(prompt.contains("3d Printing") || prompt.contains("3D") || prompt.contains("3d_printing"));
+        assert!(
+            prompt.contains("3d Printing")
+                || prompt.contains("3D")
+                || prompt.contains("3d_printing")
+        );
     }
 
     // ── Existing sections still present ────────────────────────────────
@@ -1008,10 +1099,16 @@ mod tests {
         let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check all 5 examples are present
         assert!(prompt.contains("coffee mug"), "missing coffee mug example");
-        assert!(prompt.contains("motor mount"), "missing motor mount example");
+        assert!(
+            prompt.contains("motor mount"),
+            "missing motor mount example"
+        );
         assert!(prompt.contains("SD card"), "missing SD card example");
         assert!(prompt.contains("gear"), "missing gear example");
-        assert!(prompt.contains("phone stand"), "missing phone stand example");
+        assert!(
+            prompt.contains("phone stand"),
+            "missing phone stand example"
+        );
         // Check format markers
         assert!(prompt.contains("**User request:**"));
         assert!(prompt.contains("**Design plan:**"));
@@ -1048,14 +1145,38 @@ mod tests {
     fn test_prompt_operation_interactions_content() {
         let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check category names (formatted from snake_case)
-        assert!(prompt.contains("Fillet After Boolean"), "missing fillet_after_boolean category");
-        assert!(prompt.contains("Shell After Fillet"), "missing shell_after_fillet category");
-        assert!(prompt.contains("Loft Then Shell"), "missing loft_then_shell category");
-        assert!(prompt.contains("Boolean Chain Limit"), "missing boolean_chain_limit category");
-        assert!(prompt.contains("Extrude On Face"), "missing extrude_on_face category");
-        assert!(prompt.contains("Sweep With Boolean"), "missing sweep_with_boolean category");
-        assert!(prompt.contains("Revolve Then Cut"), "missing revolve_then_cut category");
-        assert!(prompt.contains("Operation Ordering"), "missing operation_ordering category");
+        assert!(
+            prompt.contains("Fillet After Boolean"),
+            "missing fillet_after_boolean category"
+        );
+        assert!(
+            prompt.contains("Shell After Fillet"),
+            "missing shell_after_fillet category"
+        );
+        assert!(
+            prompt.contains("Loft Then Shell"),
+            "missing loft_then_shell category"
+        );
+        assert!(
+            prompt.contains("Boolean Chain Limit"),
+            "missing boolean_chain_limit category"
+        );
+        assert!(
+            prompt.contains("Extrude On Face"),
+            "missing extrude_on_face category"
+        );
+        assert!(
+            prompt.contains("Sweep With Boolean"),
+            "missing sweep_with_boolean category"
+        );
+        assert!(
+            prompt.contains("Revolve Then Cut"),
+            "missing revolve_then_cut category"
+        );
+        assert!(
+            prompt.contains("Operation Ordering"),
+            "missing operation_ordering category"
+        );
     }
 
     #[test]
@@ -1092,39 +1213,87 @@ mod tests {
         let resp_pos = prompt.find("## Response Format").unwrap();
 
         // Design Thinking before Capabilities
-        assert!(dt_pos < caps_pos, "Design Thinking should come before Capabilities");
+        assert!(
+            dt_pos < caps_pos,
+            "Design Thinking should come before Capabilities"
+        );
         // Capabilities before Advanced Techniques
-        assert!(caps_pos < tech_pos, "Capabilities should come before Advanced Techniques");
+        assert!(
+            caps_pos < tech_pos,
+            "Capabilities should come before Advanced Techniques"
+        );
         // Advanced Techniques before Code Style
-        assert!(tech_pos < style_pos, "Advanced Techniques should come before Code Style");
+        assert!(
+            tech_pos < style_pos,
+            "Advanced Techniques should come before Code Style"
+        );
         // Validation after Code Style
-        assert!(style_pos < valid_pos, "Code Style should come before Validation");
+        assert!(
+            style_pos < valid_pos,
+            "Code Style should come before Validation"
+        );
         // Cookbook after Validation
-        assert!(valid_pos < cook_pos, "Validation should come before Cookbook");
+        assert!(
+            valid_pos < cook_pos,
+            "Validation should come before Cookbook"
+        );
         // Design Patterns after Cookbook
-        assert!(cook_pos < dp_pos, "Cookbook should come before Design Patterns");
+        assert!(
+            cook_pos < dp_pos,
+            "Cookbook should come before Design Patterns"
+        );
         // Anti-Patterns after Design Patterns
-        assert!(dp_pos < ap_pos, "Design Patterns should come before Anti-Patterns");
+        assert!(
+            dp_pos < ap_pos,
+            "Design Patterns should come before Anti-Patterns"
+        );
         // Operation Interactions after Anti-Patterns
         let oi_pos = prompt.find("## Operation Interactions").unwrap();
-        assert!(ap_pos < oi_pos, "Anti-Patterns should come before Operation Interactions");
+        assert!(
+            ap_pos < oi_pos,
+            "Anti-Patterns should come before Operation Interactions"
+        );
         // API Reference after Operation Interactions
-        assert!(oi_pos < apiref_pos, "Operation Interactions should come before API Reference");
+        assert!(
+            oi_pos < apiref_pos,
+            "Operation Interactions should come before API Reference"
+        );
         // Dimension Tables after API Reference
-        assert!(apiref_pos < dimtab_pos, "API Reference should come before Dimension Tables");
+        assert!(
+            apiref_pos < dimtab_pos,
+            "API Reference should come before Dimension Tables"
+        );
         // Dimension Guidance after Dimension Tables
-        assert!(dimtab_pos < dimguide_pos, "Dimension Tables should come before Dimension Guidance");
+        assert!(
+            dimtab_pos < dimguide_pos,
+            "Dimension Tables should come before Dimension Guidance"
+        );
         // Manufacturing after Dimension Guidance
-        assert!(dimguide_pos < mfg_pos, "Dimension Guidance should come before Manufacturing");
+        assert!(
+            dimguide_pos < mfg_pos,
+            "Dimension Guidance should come before Manufacturing"
+        );
         // Error Handling after Manufacturing
-        assert!(mfg_pos < err_pos, "Manufacturing should come before Error Handling");
+        assert!(
+            mfg_pos < err_pos,
+            "Manufacturing should come before Error Handling"
+        );
         // Failure Prevention after Error Handling
         let fp_pos = prompt.find("## Failure Prevention").unwrap();
-        assert!(err_pos < fp_pos, "Error Handling should come before Failure Prevention");
+        assert!(
+            err_pos < fp_pos,
+            "Error Handling should come before Failure Prevention"
+        );
         // Few-Shot Examples after Failure Prevention
-        assert!(fp_pos < fse_pos, "Failure Prevention should come before Few-Shot Examples");
+        assert!(
+            fp_pos < fse_pos,
+            "Failure Prevention should come before Few-Shot Examples"
+        );
         // Response Format last
-        assert!(fse_pos < resp_pos, "Few-Shot Examples should come before Response Format");
+        assert!(
+            fse_pos < resp_pos,
+            "Few-Shot Examples should come before Response Format"
+        );
     }
 
     // ── default_empty produces minimal prompt ──────────────────────────
@@ -1192,11 +1361,26 @@ mod tests {
     fn test_prompt_dimension_guidance_content() {
         let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check key content from each category
-        assert!(prompt.contains("real-world objects"), "missing when_to_estimate content");
-        assert!(prompt.contains("Tiny: < 20mm"), "missing size_classes content");
-        assert!(prompt.contains("Human hand"), "missing scale_anchors content");
-        assert!(prompt.contains("mug/cup"), "missing proportional_reasoning content");
-        assert!(prompt.contains("Lid or cap"), "missing relative_sizing content");
+        assert!(
+            prompt.contains("real-world objects"),
+            "missing when_to_estimate content"
+        );
+        assert!(
+            prompt.contains("Tiny: < 20mm"),
+            "missing size_classes content"
+        );
+        assert!(
+            prompt.contains("Human hand"),
+            "missing scale_anchors content"
+        );
+        assert!(
+            prompt.contains("mug/cup"),
+            "missing proportional_reasoning content"
+        );
+        assert!(
+            prompt.contains("Lid or cap"),
+            "missing relative_sizing content"
+        );
     }
 
     #[test]
@@ -1227,11 +1411,26 @@ mod tests {
     fn test_prompt_failure_prevention_content() {
         let prompt = build_system_prompt_for_preset(None, None);
         // Spot-check each category
-        assert!(prompt.contains("fillet() fails"), "missing self_diagnosis content");
-        assert!(prompt.contains("about to use shell()"), "missing preemptive_warnings content");
-        assert!(prompt.contains("loft() fails between two profiles"), "missing alternative_operations content");
-        assert!(prompt.contains("exceeds 50 lines"), "missing complexity_assessment content");
-        assert!(prompt.contains("Before outputting code, verify"), "missing pre_output_checklist content");
+        assert!(
+            prompt.contains("fillet() fails"),
+            "missing self_diagnosis content"
+        );
+        assert!(
+            prompt.contains("about to use shell()"),
+            "missing preemptive_warnings content"
+        );
+        assert!(
+            prompt.contains("loft() fails between two profiles"),
+            "missing alternative_operations content"
+        );
+        assert!(
+            prompt.contains("exceeds 50 lines"),
+            "missing complexity_assessment content"
+        );
+        assert!(
+            prompt.contains("Before outputting code, verify"),
+            "missing pre_output_checklist content"
+        );
     }
 
     #[test]

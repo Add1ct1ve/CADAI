@@ -34,7 +34,11 @@ pub struct StreamDelta {
 pub trait AiProvider: Send + Sync {
     /// Send messages and get a complete response.
     /// If `max_tokens` is `Some(n)`, cap the response length; otherwise use the provider default.
-    async fn complete(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError>;
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<(String, Option<TokenUsage>), AppError>;
 
     /// Send messages and stream the response via a channel.
     async fn stream(
@@ -57,14 +61,23 @@ mod tests {
 
     #[test]
     fn test_token_usage_total() {
-        let usage = TokenUsage { input_tokens: 100, output_tokens: 50 };
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+        };
         assert_eq!(usage.total(), 150);
     }
 
     #[test]
     fn test_token_usage_add() {
-        let mut usage = TokenUsage { input_tokens: 100, output_tokens: 50 };
-        let other = TokenUsage { input_tokens: 200, output_tokens: 75 };
+        let mut usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+        };
+        let other = TokenUsage {
+            input_tokens: 200,
+            output_tokens: 75,
+        };
         usage.add(&other);
         assert_eq!(usage.input_tokens, 300);
         assert_eq!(usage.output_tokens, 125);

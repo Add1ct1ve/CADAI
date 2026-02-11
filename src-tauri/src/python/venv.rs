@@ -1,6 +1,6 @@
+use crate::error::AppError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use crate::error::AppError;
 
 /// Get the default venv directory path (in app data).
 pub fn get_venv_dir() -> Result<PathBuf, AppError> {

@@ -2,10 +2,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine;
+use regex::Regex;
 use serde::Serialize;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 use crate::agent::rules::AgentRules;
+use crate::agent::static_validate;
 use crate::agent::validate;
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::TokenUsage;
@@ -14,7 +17,6 @@ use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::python::runner;
 
-const MAX_VALIDATION_ATTEMPTS: u32 = 3;
 const EXECUTION_TIMEOUT_SECS: u64 = 30;
 
 /// Everything the executor needs to run and validate code.
@@ -22,6 +24,18 @@ pub struct ExecutionContext {
     pub venv_dir: PathBuf,
     pub runner_script: PathBuf,
     pub config: AppConfig,
+}
+
+/// Geometry quality report emitted after successful execution.
+#[derive(Debug, Clone, Serialize)]
+pub struct PostGeometryValidationReport {
+    pub watertight: bool,
+    pub manifold: bool,
+    pub degenerate_faces: u64,
+    pub euler_number: i64,
+    pub triangle_count: u64,
+    pub bbox_ok: bool,
+    pub warnings: Vec<String>,
 }
 
 /// Outcome of the full validation loop.
@@ -33,6 +47,8 @@ pub struct ValidationResult {
     pub attempts: u32,
     pub error: Option<String>,
     pub retry_usage: TokenUsage,
+    pub static_findings: Vec<String>,
+    pub post_geometry_report: Option<PostGeometryValidationReport>,
 }
 
 /// Progress events emitted during the validation loop.
@@ -42,6 +58,10 @@ pub enum ValidationEvent {
         attempt: u32,
         max_attempts: u32,
         message: String,
+    },
+    StaticValidation {
+        passed: bool,
+        findings: Vec<String>,
     },
     Success {
         attempt: u32,
@@ -53,6 +73,13 @@ pub enum ValidationEvent {
         error_message: String,
         will_retry: bool,
     },
+    PostGeometryValidation {
+        report: PostGeometryValidationReport,
+    },
+}
+
+fn configured_max_attempts(config: &AppConfig) -> u32 {
+    config.max_validation_attempts.clamp(1, 8)
 }
 
 /// Run CadQuery code through `runner.py` with a timeout, using an isolated temp directory.
@@ -119,63 +146,286 @@ pub async fn execute_with_timeout(
     }
 }
 
+fn parse_dimensions_from_text(text: &str) -> Vec<f64> {
+    let mut out = Vec::new();
+    let re = Regex::new(r"(?i)(\d+(?:\.\d+)?)\s*(?:mm|millimeter|millimeters)\b").unwrap();
+    for cap in re.captures_iter(text) {
+        if let Ok(v) = cap[1].parse::<f64>() {
+            out.push(v);
+        }
+    }
+
+    let compact =
+        Regex::new(r"(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)")
+            .unwrap();
+    for cap in compact.captures_iter(text) {
+        for i in 1..=3 {
+            if let Ok(v) = cap[i].parse::<f64>() {
+                out.push(v);
+            }
+        }
+    }
+
+    out.retain(|v| *v > 0.0 && *v <= 10000.0);
+    out
+}
+
+fn build_retry_prompt_with_findings(
+    code: &str,
+    runtime_error: &str,
+    static_findings: &[String],
+    post_warnings: &[String],
+    structured_error: &validate::StructuredError,
+    strategy: &validate::RetryStrategy,
+    anti_pattern: Option<&crate::agent::rules::AntiPatternEntry>,
+) -> String {
+    let mut prompt = build_retry_prompt(
+        code,
+        runtime_error,
+        structured_error,
+        strategy,
+        anti_pattern,
+    );
+
+    if !static_findings.is_empty() {
+        prompt.push_str("\n\nStatic validator findings to address:\n");
+        for finding in static_findings {
+            prompt.push_str(&format!("- {}\n", finding));
+        }
+    }
+
+    if !post_warnings.is_empty() {
+        prompt.push_str("\n\nPost-geometry validation findings to address:\n");
+        for warning in post_warnings {
+            prompt.push_str(&format!("- {}\n", warning));
+        }
+    }
+
+    prompt
+}
+
+fn run_post_geometry_checks(
+    code: &str,
+    ctx: &ExecutionContext,
+    user_request: Option<&str>,
+) -> Result<PostGeometryValidationReport, String> {
+    let script = crate::commands::find_python_script("manufacturing.py")
+        .map_err(|e| format!("cannot find manufacturing.py: {}", e))?;
+
+    let temp_dir = std::env::temp_dir()
+        .join("cadai-studio")
+        .join(format!("post-check-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("failed to create post-check temp dir: {}", e))?;
+
+    let code_file = temp_dir.join("post_check_code.py");
+    std::fs::write(&code_file, code)
+        .map_err(|e| format!("failed to write post-check code file: {}", e))?;
+
+    let code_file_s = code_file.to_string_lossy().to_string();
+    let args: Vec<&str> = vec!["mesh_check", &code_file_s];
+
+    let script_result = runner::execute_python_script(&ctx.venv_dir, &script, &args)
+        .map_err(|e| format!("post-check execution failed: {}", e));
+
+    let _ = std::fs::remove_file(&code_file);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    let script_result = script_result?;
+    if script_result.exit_code != 0 {
+        return Err(format!(
+            "post-check returned exit code {}: {}",
+            script_result.exit_code, script_result.stderr
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(script_result.stdout.trim())
+        .map_err(|e| format!("failed to parse post-check result: {}", e))?;
+
+    let watertight = parsed["watertight"].as_bool().unwrap_or(false);
+    let winding_consistent = parsed["winding_consistent"].as_bool().unwrap_or(false);
+    let degenerate_faces = parsed["degenerate_faces"].as_u64().unwrap_or(0);
+    let euler_number = parsed["euler_number"].as_i64().unwrap_or(0);
+    let triangle_count = parsed["triangle_count"].as_u64().unwrap_or(0);
+
+    let mut warnings: Vec<String> = parsed["issues"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut bbox_ok = true;
+
+    if let (Some(req), Some(bounds_arr)) = (user_request, parsed["bounds"].as_array()) {
+        if bounds_arr.len() == 2 {
+            let min = bounds_arr[0].as_array();
+            let max = bounds_arr[1].as_array();
+            if let (Some(min), Some(max)) = (min, max) {
+                if min.len() >= 3 && max.len() >= 3 {
+                    let dx = max[0].as_f64().unwrap_or(0.0) - min[0].as_f64().unwrap_or(0.0);
+                    let dy = max[1].as_f64().unwrap_or(0.0) - min[1].as_f64().unwrap_or(0.0);
+                    let dz = max[2].as_f64().unwrap_or(0.0) - min[2].as_f64().unwrap_or(0.0);
+                    let bbox_max = dx.max(dy).max(dz).abs();
+
+                    let expected = parse_dimensions_from_text(req);
+                    if let Some(expected_max) = expected
+                        .iter()
+                        .copied()
+                        .filter(|v| *v > 0.0)
+                        .reduce(f64::max)
+                    {
+                        if bbox_max > expected_max * 8.0 || bbox_max < expected_max * 0.05 {
+                            bbox_ok = false;
+                            warnings.push(format!(
+                                "Bounding box sanity check failed: max extent {:.2}mm is inconsistent with requested size {:.2}mm",
+                                bbox_max, expected_max
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let manifold = watertight && winding_consistent && degenerate_faces == 0 && euler_number == 2;
+
+    Ok(PostGeometryValidationReport {
+        watertight,
+        manifold,
+        degenerate_faces,
+        euler_number,
+        triangle_count,
+        bbox_ok,
+        warnings,
+    })
+}
+
 /// Execute code and retry with AI fixes if execution fails.
 ///
-/// The loop runs up to `MAX_VALIDATION_ATTEMPTS` times:
-/// 1. Execute the code via `runner.py`
-/// 2. If success → return immediately with STL data
-/// 3. If failure → classify error, build retry prompt, call AI for a fix, loop
-///
-/// The `on_event` callback is invoked for each progress event so the caller
-/// can forward them to the frontend.
+/// The loop runs up to `config.max_validation_attempts` times:
+/// 1. Static-validate generated code.
+/// 2. Execute via `runner.py`.
+/// 3. Post-validate geometry using mesh checks.
+/// 4. If failure, classify, build retry prompt, call AI for fix.
 pub async fn validate_and_retry(
     code: String,
     ctx: &ExecutionContext,
     system_prompt: &str,
+    user_request: Option<&str>,
     on_event: &(dyn Fn(ValidationEvent) + Send + Sync),
 ) -> Result<ValidationResult, AppError> {
     let mut current_code = code;
     let mut retry_usage = TokenUsage::default();
+    let max_attempts = configured_max_attempts(&ctx.config);
+    let mut static_findings_accum: Vec<String> = Vec::new();
 
-    for attempt in 1..=MAX_VALIDATION_ATTEMPTS {
-        // Emit attempt event
+    for attempt in 1..=max_attempts {
         let message = if attempt == 1 {
             "Validating generated code...".to_string()
         } else {
-            format!("Retrying... (attempt {}/{})", attempt, MAX_VALIDATION_ATTEMPTS)
+            format!("Retrying... (attempt {}/{})", attempt, max_attempts)
         };
         on_event(ValidationEvent::Attempt {
             attempt,
-            max_attempts: MAX_VALIDATION_ATTEMPTS,
+            max_attempts,
             message,
         });
 
-        // Execute
-        match execute_with_timeout(&current_code, &ctx.venv_dir, &ctx.runner_script).await {
+        let static_result = static_validate::validate_code(&current_code);
+        let static_findings: Vec<String> = static_result
+            .findings
+            .iter()
+            .map(|f| format!("{:?}: {}", f.level, f.message))
+            .collect();
+
+        for finding in &static_findings {
+            if !static_findings_accum.contains(finding) {
+                static_findings_accum.push(finding.clone());
+            }
+        }
+
+        on_event(ValidationEvent::StaticValidation {
+            passed: static_result.passed,
+            findings: static_findings.clone(),
+        });
+
+        let execution_result = if static_result.passed {
+            execute_with_timeout(&current_code, &ctx.venv_dir, &ctx.runner_script).await
+        } else {
+            Err(format!(
+                "Static validation failed:\n{}",
+                static_findings.join("\n")
+            ))
+        };
+
+        match execution_result {
             Ok(exec_result) => {
-                // Success — encode STL as base64
-                let stl_base64 =
-                    base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
-                on_event(ValidationEvent::Success {
-                    attempt,
-                    message: format!("Code validated successfully on attempt {}.", attempt),
+                let post_report = run_post_geometry_checks(&current_code, ctx, user_request)
+                    .map_err(AppError::CadQueryError)?;
+
+                on_event(ValidationEvent::PostGeometryValidation {
+                    report: post_report.clone(),
                 });
-                return Ok(ValidationResult {
-                    code: current_code,
-                    stl_base64: Some(stl_base64),
-                    success: true,
-                    attempts: attempt,
-                    error: None,
-                    retry_usage,
-                });
+
+                if !post_report.manifold || !post_report.bbox_ok {
+                    let err = if post_report.warnings.is_empty() {
+                        "Post-geometry validation failed".to_string()
+                    } else {
+                        format!(
+                            "Post-geometry validation failed:\n{}",
+                            post_report.warnings.join("\n")
+                        )
+                    };
+
+                    let will_retry = attempt < max_attempts;
+                    on_event(ValidationEvent::Failed {
+                        attempt,
+                        error_category: "PostGeometry".to_string(),
+                        error_message: err.clone(),
+                        will_retry,
+                    });
+
+                    if !will_retry {
+                        return Ok(ValidationResult {
+                            code: current_code,
+                            stl_base64: None,
+                            success: false,
+                            attempts: attempt,
+                            error: Some(err),
+                            retry_usage,
+                            static_findings: static_findings_accum,
+                            post_geometry_report: Some(post_report),
+                        });
+                    }
+                } else {
+                    let stl_base64 =
+                        base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
+                    on_event(ValidationEvent::Success {
+                        attempt,
+                        message: format!("Code validated successfully on attempt {}.", attempt),
+                    });
+                    return Ok(ValidationResult {
+                        code: current_code,
+                        stl_base64: Some(stl_base64),
+                        success: true,
+                        attempts: attempt,
+                        error: None,
+                        retry_usage,
+                        static_findings: static_findings_accum,
+                        post_geometry_report: Some(post_report),
+                    });
+                }
             }
             Err(error_msg) => {
-                // Parse and classify the error
                 let structured_error = validate::parse_traceback(&error_msg);
-                let strategy = validate::get_retry_strategy(&structured_error, attempt, Some(&current_code));
+                let strategy =
+                    validate::get_retry_strategy(&structured_error, attempt, Some(&current_code));
 
                 let category_str = format!("{:?}", structured_error.category);
-                let will_retry = attempt < MAX_VALIDATION_ATTEMPTS;
+                let will_retry = attempt < max_attempts;
 
                 on_event(ValidationEvent::Failed {
                     attempt,
@@ -184,7 +434,6 @@ pub async fn validate_and_retry(
                     will_retry,
                 });
 
-                // If this was the last attempt, return failure
                 if !will_retry {
                     return Ok(ValidationResult {
                         code: current_code,
@@ -193,32 +442,31 @@ pub async fn validate_and_retry(
                         attempts: attempt,
                         error: Some(error_msg),
                         retry_usage,
+                        static_findings: static_findings_accum,
+                        post_geometry_report: None,
                     });
                 }
 
-                // Look up anti-pattern from agent rules
-                let rules = AgentRules::from_preset(
-                    ctx.config.agent_rules_preset.as_deref(),
-                )
-                .ok();
+                let rules = AgentRules::from_preset(ctx.config.agent_rules_preset.as_deref()).ok();
                 let anti_pattern = rules.as_ref().and_then(|r| {
                     r.anti_patterns.as_ref().and_then(|patterns| {
-                        strategy.matching_anti_pattern.as_ref().and_then(|title| {
-                            patterns.iter().find(|p| p.title == *title)
-                        })
+                        strategy
+                            .matching_anti_pattern
+                            .as_ref()
+                            .and_then(|title| patterns.iter().find(|p| p.title == *title))
                     })
                 });
 
-                // Build the retry prompt
-                let retry_prompt = build_retry_prompt(
+                let retry_prompt = build_retry_prompt_with_findings(
                     &current_code,
                     &error_msg,
+                    &static_findings,
+                    &[],
                     &structured_error,
                     &strategy,
                     anti_pattern,
                 );
 
-                // Call AI for a fix (non-streaming)
                 let provider = create_provider(&ctx.config)?;
                 let messages = vec![
                     ChatMessage {
@@ -236,22 +484,20 @@ pub async fn validate_and_retry(
                     retry_usage.add(u);
                 }
 
-                // Extract code from the AI response
                 match crate::agent::extract::extract_code(&ai_response) {
                     Some(new_code) => {
                         current_code = new_code;
                     }
                     None => {
-                        // AI didn't produce extractable code — give up
                         return Ok(ValidationResult {
                             code: current_code,
                             stl_base64: None,
                             success: false,
                             attempts: attempt,
-                            error: Some(
-                                "AI retry did not produce extractable code".to_string(),
-                            ),
+                            error: Some("AI retry did not produce extractable code".to_string()),
                             retry_usage,
+                            static_findings: static_findings_accum,
+                            post_geometry_report: None,
                         });
                     }
                 }
@@ -259,14 +505,15 @@ pub async fn validate_and_retry(
         }
     }
 
-    // Should not reach here, but just in case
     Ok(ValidationResult {
         code: current_code,
         stl_base64: None,
         success: false,
-        attempts: MAX_VALIDATION_ATTEMPTS,
+        attempts: configured_max_attempts(&ctx.config),
         error: Some("Validation loop exhausted".to_string()),
         retry_usage,
+        static_findings: static_findings_accum,
+        post_geometry_report: None,
     })
 }
 
@@ -283,6 +530,16 @@ mod tests {
             attempts: 1,
             error: None,
             retry_usage: TokenUsage::default(),
+            static_findings: vec![],
+            post_geometry_report: Some(PostGeometryValidationReport {
+                watertight: true,
+                manifold: true,
+                degenerate_faces: 0,
+                euler_number: 2,
+                triangle_count: 128,
+                bbox_ok: true,
+                warnings: vec![],
+            }),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":true"));
@@ -302,6 +559,8 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
             },
+            static_findings: vec!["Error: missing result".to_string()],
+            post_geometry_report: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"success\":false"));
@@ -318,5 +577,14 @@ mod tests {
         };
         assert_eq!(ctx.venv_dir, PathBuf::from("/tmp/venv"));
         assert_eq!(ctx.runner_script, PathBuf::from("/tmp/runner.py"));
+    }
+
+    #[test]
+    fn test_parse_dimensions_from_text() {
+        let dims = parse_dimensions_from_text("make a box 42x28x7.5mm with 1.8mm walls");
+        assert!(dims.contains(&42.0));
+        assert!(dims.contains(&28.0));
+        assert!(dims.contains(&7.5));
+        assert!(dims.contains(&1.8));
     }
 }

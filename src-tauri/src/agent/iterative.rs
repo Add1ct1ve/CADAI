@@ -137,8 +137,20 @@ fn generate_step_name(description: &str, index: usize) -> String {
         .filter(|w| {
             !matches!(
                 *w,
-                "the" | "a" | "an" | "with" | "using" | "and" | "to" | "of" | "for" | "at" | "in"
-                    | "on" | "by" | "from"
+                "the"
+                    | "a"
+                    | "an"
+                    | "with"
+                    | "using"
+                    | "and"
+                    | "to"
+                    | "of"
+                    | "for"
+                    | "at"
+                    | "in"
+                    | "on"
+                    | "by"
+                    | "from"
             )
         })
         .take(3)
@@ -222,14 +234,20 @@ fn build_step_retry_prompt(
     let rules = AgentRules::from_preset(None).ok();
     let anti_pattern = rules.as_ref().and_then(|r| {
         r.anti_patterns.as_ref().and_then(|patterns| {
-            strategy.matching_anti_pattern.as_ref().and_then(|title| {
-                patterns.iter().find(|p| p.title == *title)
-            })
+            strategy
+                .matching_anti_pattern
+                .as_ref()
+                .and_then(|title| patterns.iter().find(|p| p.title == *title))
         })
     });
 
-    let base_retry =
-        build_retry_prompt(failed_code, error_msg, &structured_error, &strategy, anti_pattern);
+    let base_retry = build_retry_prompt(
+        failed_code,
+        error_msg,
+        &structured_error,
+        &strategy,
+        anti_pattern,
+    );
 
     format!(
         "{}\n\n\

@@ -161,7 +161,11 @@ struct GeminiResponsePart {
 
 #[async_trait]
 impl AiProvider for GeminiProvider {
-    async fn complete(&self, messages: &[ChatMessage], _max_tokens: Option<u32>) -> Result<(String, Option<TokenUsage>), AppError> {
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        _max_tokens: Option<u32>,
+    ) -> Result<(String, Option<TokenUsage>), AppError> {
         let body = self.build_request(messages);
 
         let response = self
@@ -251,9 +255,8 @@ impl AiProvider for GeminiProvider {
         let mut tracked_usage: Option<TokenUsage> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                AppError::AiProviderError(format!("Stream read error: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| AppError::AiProviderError(format!("Stream read error: {}", e)))?;
 
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);

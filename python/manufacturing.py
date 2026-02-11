@@ -188,6 +188,7 @@ def cmd_mesh_check(args):
         volume = abs(volume)
 
     tri_count = int(len(mesh.faces))
+    bounds = mesh.bounds.tolist() if hasattr(mesh, "bounds") else [[0, 0, 0], [0, 0, 0]]
 
     result_json = {
         "watertight": watertight,
@@ -196,6 +197,7 @@ def cmd_mesh_check(args):
         "euler_number": euler,
         "volume": round(volume, 4),
         "triangle_count": tri_count,
+        "bounds": bounds,
         "issues": issues,
     }
     print(json.dumps(result_json))

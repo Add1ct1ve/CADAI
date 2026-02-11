@@ -1,0 +1,5 @@
+{
+  "id": "case_12_mechanical",
+  "category": "mechanical",
+  "prompt": "Create a mounting bracket with slotted holes, gussets, and a cable pass-through, optimized for FDM printing. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

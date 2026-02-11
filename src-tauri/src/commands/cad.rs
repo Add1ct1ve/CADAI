@@ -178,9 +178,7 @@ pub async fn execute_code(
 }
 
 #[tauri::command]
-pub async fn check_python(
-    state: State<'_, AppState>,
-) -> Result<PythonStatus, AppError> {
+pub async fn check_python(state: State<'_, AppState>) -> Result<PythonStatus, AppError> {
     // Check if Python is detected
     let python_info = detector::detect_python().ok();
 
@@ -211,10 +209,9 @@ pub async fn check_python(
     // Detect and cache CadQuery version
     let cadquery_version = if cadquery_installed {
         let ver = installer::detect_cadquery_version(&venv_dir);
-        *state
-            .cadquery_version
-            .lock()
-            .map_err(|_| AppError::ConfigError("Failed to update CadQuery version state".into()))? = ver.clone();
+        *state.cadquery_version.lock().map_err(|_| {
+            AppError::ConfigError("Failed to update CadQuery version state".into())
+        })? = ver.clone();
         ver
     } else {
         None
@@ -239,9 +236,7 @@ pub async fn check_python(
 }
 
 #[tauri::command]
-pub async fn setup_python(
-    state: State<'_, AppState>,
-) -> Result<String, AppError> {
+pub async fn setup_python(state: State<'_, AppState>) -> Result<String, AppError> {
     // Detect Python
     let info = detector::detect_python()?;
     *state
@@ -272,8 +267,7 @@ pub async fn setup_python(
     *state
         .venv_path
         .lock()
-        .map_err(|_| AppError::ConfigError("Failed to update venv state".into()))? =
-        Some(venv_dir);
+        .map_err(|_| AppError::ConfigError("Failed to update venv state".into()))? = Some(venv_dir);
 
     let cq_ver_str = cq_version.unwrap_or_else(|| "unknown".to_string());
     Ok(format!(

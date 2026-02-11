@@ -14,10 +14,25 @@ const CREATIVE_TEMP: f32 = 0.8;
 
 /// CadQuery operations used for scoring code complexity.
 const CADQUERY_OPS: &[&str] = &[
-    ".box(", ".cylinder(", ".sphere(", ".fillet(", ".chamfer(",
-    ".shell(", ".cut(", ".union(", ".intersect(", ".loft(",
-    ".sweep(", ".revolve(", ".extrude(", ".hole(", ".rect(",
-    ".circle(", ".translate(", ".rotate(", ".mirror(",
+    ".box(",
+    ".cylinder(",
+    ".sphere(",
+    ".fillet(",
+    ".chamfer(",
+    ".shell(",
+    ".cut(",
+    ".union(",
+    ".intersect(",
+    ".loft(",
+    ".sweep(",
+    ".revolve(",
+    ".extrude(",
+    ".hole(",
+    ".rect(",
+    ".circle(",
+    ".translate(",
+    ".rotate(",
+    ".mirror(",
 ];
 
 // ---------------------------------------------------------------------------
@@ -58,7 +73,9 @@ pub struct ConsensusResult {
 /// Events emitted during consensus to update the frontend.
 #[derive(Debug, Clone)]
 pub enum ConsensusEvent {
-    Started { candidate_count: u32 },
+    Started {
+        candidate_count: u32,
+    },
     CandidateUpdate {
         label: String,
         temperature: f32,
@@ -92,7 +109,10 @@ pub fn score_code(code: &str) -> ScoreBreakdown {
         })
         .count() as u32;
 
-    ScoreBreakdown { op_count, line_count }
+    ScoreBreakdown {
+        op_count,
+        line_count,
+    }
 }
 
 /// Select the winner between two candidates.
@@ -103,8 +123,18 @@ pub fn select_winner<'a>(
 ) -> (&'a Candidate, &'a Candidate, String) {
     const EXECUTION_BONUS: u32 = 1000;
 
-    let score_a = a.score.total() + if a.execution_success { EXECUTION_BONUS } else { 0 };
-    let score_b = b.score.total() + if b.execution_success { EXECUTION_BONUS } else { 0 };
+    let score_a = a.score.total()
+        + if a.execution_success {
+            EXECUTION_BONUS
+        } else {
+            0
+        };
+    let score_b = b.score.total()
+        + if b.execution_success {
+            EXECUTION_BONUS
+        } else {
+            0
+        };
 
     if score_a >= score_b {
         let reason = if a.execution_success && !b.execution_success {
@@ -169,12 +199,8 @@ pub async fn run_consensus(
     });
 
     // Run both completions in parallel
-    let handle_a = tokio::spawn(async move {
-        provider_a.complete(&messages_a, None).await
-    });
-    let handle_b = tokio::spawn(async move {
-        provider_b.complete(&messages_b, None).await
-    });
+    let handle_a = tokio::spawn(async move { provider_a.complete(&messages_a, None).await });
+    let handle_b = tokio::spawn(async move { provider_b.complete(&messages_b, None).await });
 
     let (result_a, result_b) = tokio::join!(handle_a, handle_b);
 
@@ -231,7 +257,13 @@ pub async fn run_consensus(
         code: code_a.clone(),
         execution_success: false,
         stl_base64: None,
-        score: code_a.as_ref().map(|c| score_code(c)).unwrap_or(ScoreBreakdown { op_count: 0, line_count: 0 }),
+        score: code_a
+            .as_ref()
+            .map(|c| score_code(c))
+            .unwrap_or(ScoreBreakdown {
+                op_count: 0,
+                line_count: 0,
+            }),
         usage: usage_a,
     };
 
@@ -242,7 +274,13 @@ pub async fn run_consensus(
         code: code_b.clone(),
         execution_success: false,
         stl_base64: None,
-        score: code_b.as_ref().map(|c| score_code(c)).unwrap_or(ScoreBreakdown { op_count: 0, line_count: 0 }),
+        score: code_b
+            .as_ref()
+            .map(|c| score_code(c))
+            .unwrap_or(ScoreBreakdown {
+                op_count: 0,
+                line_count: 0,
+            }),
         usage: usage_b,
     };
 
@@ -387,7 +425,10 @@ result = (
             code: Some(".box(".to_string()),
             execution_success: true,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 1, line_count: 1 },
+            score: ScoreBreakdown {
+                op_count: 1,
+                line_count: 1,
+            },
             usage: TokenUsage::default(),
         };
         let b = Candidate {
@@ -397,7 +438,10 @@ result = (
             code: Some(".box(.fillet(.cut(.cylinder(.translate(".to_string()),
             execution_success: false,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 5, line_count: 10 },
+            score: ScoreBreakdown {
+                op_count: 5,
+                line_count: 10,
+            },
             usage: TokenUsage::default(),
         };
         let (winner, _loser, reason) = select_winner(&a, &b);
@@ -414,7 +458,10 @@ result = (
             code: Some(".box(".to_string()),
             execution_success: false,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 1, line_count: 1 },
+            score: ScoreBreakdown {
+                op_count: 1,
+                line_count: 1,
+            },
             usage: TokenUsage::default(),
         };
         let b = Candidate {
@@ -424,7 +471,10 @@ result = (
             code: Some("complex code".to_string()),
             execution_success: false,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 5, line_count: 10 },
+            score: ScoreBreakdown {
+                op_count: 5,
+                line_count: 10,
+            },
             usage: TokenUsage::default(),
         };
         let (winner, _loser, reason) = select_winner(&a, &b);
@@ -441,7 +491,10 @@ result = (
             code: Some(".box(".to_string()),
             execution_success: false,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 1, line_count: 1 },
+            score: ScoreBreakdown {
+                op_count: 1,
+                line_count: 1,
+            },
             usage: TokenUsage::default(),
         };
         let b = Candidate {
@@ -451,7 +504,10 @@ result = (
             code: None,
             execution_success: false,
             stl_base64: None,
-            score: ScoreBreakdown { op_count: 0, line_count: 0 },
+            score: ScoreBreakdown {
+                op_count: 0,
+                line_count: 0,
+            },
             usage: TokenUsage::default(),
         };
         let (winner, _loser, reason) = select_winner(&a, &b);

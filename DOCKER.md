@@ -38,6 +38,18 @@ docker compose run --rm cadai bash -lc "pnpm install --frozen-lockfile"
 docker compose run --rm cadai bash -lc "pnpm install --frozen-lockfile && pnpm check && pnpm build && cd src-tauri && cargo test"
 ```
 
+## 3b) Run CAD generation eval harness (80 cases)
+
+```bash
+docker compose run --rm cadai bash -lc "pnpm install --frozen-lockfile && python python/evals/run_eval.py --cases-dir python/evals/cases --python-bin python --runner python/runner.py --manufacturing python/manufacturing.py --max-attempts 4"
+```
+
+If you want live generation evaluation, pass a generator adapter command:
+
+```bash
+docker compose run --rm cadai bash -lc \"python python/evals/run_eval.py --cases-dir python/evals/cases --generator-cmd './tools/generate_code.sh {prompt_file} {attempt}' --max-attempts 4\"
+```
+
 ## 4) Run clippy (known pre-existing failure)
 
 ```bash

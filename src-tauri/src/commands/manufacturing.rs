@@ -115,10 +115,7 @@ pub async fn export_3mf(
         .map_err(|e| AppError::CadQueryError(format!("Failed to parse result: {}", e)))?;
 
     Ok(Export3mfResult {
-        path: parsed["path"]
-            .as_str()
-            .unwrap_or(&output_path)
-            .to_string(),
+        path: parsed["path"].as_str().unwrap_or(&output_path).to_string(),
         triangles: parsed["triangles"].as_u64().unwrap_or(0),
     })
 }
@@ -221,8 +218,9 @@ pub async fn orient_for_print(
             2 => format!("CadQuery execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("Orientation analysis error:\n{}", result.stderr),
-            5 => "Missing dependency (trimesh/scipy). Will auto-install on next attempt."
-                .to_string(),
+            5 => {
+                "Missing dependency (trimesh/scipy). Will auto-install on next attempt.".to_string()
+            }
             _ => format!(
                 "Manufacturing error (exit code {}):\n{}",
                 result.exit_code, result.stderr
@@ -280,11 +278,7 @@ pub async fn sheet_metal_unfold(
 
     let code_file_s = code_file.to_string_lossy().to_string();
     let thickness_s = thickness.unwrap_or(1.0).to_string();
-    let mut args: Vec<String> = vec![
-        "unfold".into(),
-        code_file_s,
-        output_path.clone(),
-    ];
+    let mut args: Vec<String> = vec!["unfold".into(), code_file_s, output_path.clone()];
     if thickness.is_some() {
         args.push("--thickness".into());
         args.push(thickness_s);
@@ -322,10 +316,7 @@ pub async fn sheet_metal_unfold(
     }
 
     Ok(UnfoldResult {
-        path: parsed["path"]
-            .as_str()
-            .unwrap_or(&output_path)
-            .to_string(),
+        path: parsed["path"].as_str().unwrap_or(&output_path).to_string(),
         face_count: parsed["face_count"].as_u64().unwrap_or(0) as u32,
         bend_count: parsed["bend_count"].as_u64().unwrap_or(0) as u32,
         flat_width: parsed["flat_width"].as_f64().unwrap_or(0.0),

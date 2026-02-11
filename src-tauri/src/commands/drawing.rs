@@ -51,13 +51,7 @@ pub async fn generate_drawing_view(
     let input_s = input_file.to_string_lossy().to_string();
     let output_s = output_svg.to_string_lossy().to_string();
 
-    let mut args: Vec<&str> = vec![
-        &input_s,
-        &output_s,
-        &proj_x_s,
-        &proj_y_s,
-        &proj_z_s,
-    ];
+    let mut args: Vec<&str> = vec![&input_s, &output_s, &proj_x_s, &proj_y_s, &proj_z_s];
 
     if show_hidden {
         args.push("--hidden");
@@ -79,7 +73,10 @@ pub async fn generate_drawing_view(
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("SVG export error:\n{}", result.stderr),
             5 => format!("Section view error:\n{}", result.stderr),
-            _ => format!("Python error (exit code {}):\n{}", result.exit_code, result.stderr),
+            _ => format!(
+                "Python error (exit code {}):\n{}",
+                result.exit_code, result.stderr
+            ),
         };
         // Cleanup
         let _ = std::fs::remove_file(&input_file);
@@ -148,7 +145,10 @@ pub async fn export_drawing_pdf(
         let msg = match result.exit_code {
             2 => "cairosvg not installed. Run: pip install cairosvg".to_string(),
             3 => format!("PDF conversion error:\n{}", result.stderr),
-            _ => format!("Export error (exit code {}):\n{}", result.exit_code, result.stderr),
+            _ => format!(
+                "Export error (exit code {}):\n{}",
+                result.exit_code, result.stderr
+            ),
         };
         return Err(AppError::CadQueryError(msg));
     }
@@ -190,7 +190,10 @@ pub async fn export_drawing_dxf(
         let msg = match result.exit_code {
             2 => "ezdxf not installed. Run: pip install ezdxf".to_string(),
             3 => format!("DXF conversion error:\n{}", result.stderr),
-            _ => format!("Export error (exit code {}):\n{}", result.exit_code, result.stderr),
+            _ => format!(
+                "Export error (exit code {}):\n{}",
+                result.exit_code, result.stderr
+            ),
         };
         return Err(AppError::CadQueryError(msg));
     }

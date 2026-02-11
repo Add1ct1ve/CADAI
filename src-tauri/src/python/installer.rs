@@ -1,7 +1,7 @@
+use super::venv;
+use crate::error::AppError;
 use std::path::Path;
 use std::process::Command;
-use crate::error::AppError;
-use super::venv;
 
 /// Install CadQuery and dependencies into the venv.
 pub fn install_cadquery(venv_dir: &Path) -> Result<(), AppError> {

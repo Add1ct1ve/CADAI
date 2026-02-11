@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "eval:cad": "python python/evals/run_eval.py --cases-dir python/evals/cases --python-bin python --runner python/runner.py --manufacturing python/manufacturing.py --max-attempts 4"
   },
   "license": "MIT",
   "dependencies": {

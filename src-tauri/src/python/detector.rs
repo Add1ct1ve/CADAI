@@ -1,6 +1,6 @@
+use crate::error::AppError;
 use std::path::PathBuf;
 use std::process::Command;
-use crate::error::AppError;
 
 /// Represents a detected Python installation
 pub struct PythonInfo {
@@ -34,10 +34,7 @@ fn get_candidates() -> Vec<String> {
             "python3".to_string(),
         ]
     } else {
-        vec![
-            "python3".to_string(),
-            "python".to_string(),
-        ]
+        vec!["python3".to_string(), "python".to_string()]
     }
 }
 

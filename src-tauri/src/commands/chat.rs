@@ -3,16 +3,17 @@ use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::mpsc;
 
+use crate::agent::prompts;
+use crate::agent::retrieval;
+use crate::agent::rules::{AgentRules, AntiPatternEntry};
+use crate::agent::validate;
 use crate::ai::claude::ClaudeProvider;
+use crate::ai::cost;
 use crate::ai::gemini::GeminiProvider;
 use crate::ai::message::ChatMessage;
 use crate::ai::ollama::OllamaProvider;
 use crate::ai::openai::OpenAiProvider;
-use crate::ai::cost;
 use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
-use crate::agent::prompts;
-use crate::agent::rules::{AgentRules, AntiPatternEntry};
-use crate::agent::validate;
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -99,10 +100,7 @@ pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>,
                 .api_key
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("Gemini API key not set".into()))?;
-            Ok(Box::new(GeminiProvider::new(
-                api_key,
-                config.model.clone(),
-            )))
+            Ok(Box::new(GeminiProvider::new(api_key, config.model.clone())))
         }
         "ollama" => Ok(Box::new(OllamaProvider::new(
             config.ollama_base_url.clone(),
@@ -114,10 +112,7 @@ pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>,
                 .api_key
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("API key not set".into()))?;
-            Ok(Box::new(ClaudeProvider::new(
-                api_key,
-                config.model.clone(),
-            )))
+            Ok(Box::new(ClaudeProvider::new(api_key, config.model.clone())))
         }
     }
 }
@@ -135,8 +130,12 @@ pub(crate) fn create_provider_with_temp(
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("OpenAI API key not set".into()))?;
             Ok(Box::new(
-                OpenAiProvider::new(api_key, config.model.clone(), config.openai_base_url.clone())
-                    .with_temperature(temperature),
+                OpenAiProvider::new(
+                    api_key,
+                    config.model.clone(),
+                    config.openai_base_url.clone(),
+                )
+                .with_temperature(temperature),
             ))
         }
         "deepseek" => {
@@ -187,8 +186,7 @@ pub(crate) fn create_provider_with_temp(
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("Gemini API key not set".into()))?;
             Ok(Box::new(
-                GeminiProvider::new(api_key, config.model.clone())
-                    .with_temperature(temperature),
+                GeminiProvider::new(api_key, config.model.clone()).with_temperature(temperature),
             ))
         }
         "ollama" => Ok(Box::new(
@@ -201,8 +199,7 @@ pub(crate) fn create_provider_with_temp(
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("API key not set".into()))?;
             Ok(Box::new(
-                ClaudeProvider::new(api_key, config.model.clone())
-                    .with_temperature(temperature),
+                ClaudeProvider::new(api_key, config.model.clone()).with_temperature(temperature),
             ))
         }
     }
@@ -257,10 +254,44 @@ pub async fn send_message(
 
     // Build the system prompt from the configured preset.
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt = prompts::build_system_prompt_for_preset(
+    let base_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
     );
+    let session_ctx = state.session_memory.lock().unwrap().build_context_section();
+    let retrieval_result = retrieval::retrieve_context(
+        &message,
+        &config,
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    )
+    .await;
+
+    let _ = on_event.send(StreamEvent {
+        delta: if retrieval_result.items.is_empty() {
+            "Retrieval: no matching snippets, using compact rules.".to_string()
+        } else {
+            format!(
+                "Retrieval: using {} snippets (embeddings: {}, lexical fallback: {}).",
+                retrieval_result.items.len(),
+                retrieval_result.used_embeddings,
+                retrieval_result.lexical_fallback
+            )
+        },
+        done: false,
+        event_type: Some("retrieval_status".to_string()),
+        token_usage: None,
+    });
+
+    let mut system_prompt = base_prompt;
+    if let Some(ctx) = session_ctx {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&ctx);
+    }
+    if !retrieval_result.context_markdown.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&retrieval_result.context_markdown);
+    }
 
     // Create the AI provider.
     let provider = create_provider(&config)?;
@@ -371,10 +402,23 @@ pub async fn auto_retry(
 
     // Build the system prompt from the configured preset.
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let system_prompt = prompts::build_system_prompt_for_preset(
+    let base_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
     );
+    let retry_query = format!("{}\n\n{}", failed_code, error_message);
+    let retrieval_result = retrieval::retrieve_context(
+        &retry_query,
+        &config,
+        config.agent_rules_preset.as_deref(),
+        cq_version.as_deref(),
+    )
+    .await;
+    let mut system_prompt = base_prompt;
+    if !retrieval_result.context_markdown.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&retrieval_result.context_markdown);
+    }
 
     // Create the AI provider.
     let provider = create_provider(&config)?;
@@ -387,9 +431,10 @@ pub async fn auto_retry(
     let rules = AgentRules::from_preset(config.agent_rules_preset.as_deref()).ok();
     let anti_pattern = rules.as_ref().and_then(|r| {
         r.anti_patterns.as_ref().and_then(|patterns| {
-            strategy.matching_anti_pattern.as_ref().and_then(|title| {
-                patterns.iter().find(|p| p.title == *title)
-            })
+            strategy
+                .matching_anti_pattern
+                .as_ref()
+                .and_then(|title| patterns.iter().find(|p| p.title == *title))
         })
     });
 
@@ -525,8 +570,7 @@ mod tests {
             explanation: "The radius exceeds the smallest edge.".to_string(),
             correct_code: "result.fillet(1.0)".to_string(),
         };
-        let prompt =
-            build_retry_prompt("code", "error", &error, &strategy, Some(&anti_pattern));
+        let prompt = build_retry_prompt("code", "error", &error, &strategy, Some(&anti_pattern));
         assert!(prompt.contains("Known anti-pattern"));
         assert!(prompt.contains("Fillet radius too large"));
         assert!(prompt.contains("radius exceeds the smallest edge"));

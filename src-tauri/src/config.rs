@@ -1,6 +1,6 @@
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::error::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -33,6 +33,14 @@ pub struct AppConfig {
     pub enable_consensus: bool,
     #[serde(default)]
     pub auto_approve_plan: bool,
+    #[serde(default = "default_true")]
+    pub retrieval_enabled: bool,
+    #[serde(default = "default_retrieval_token_budget")]
+    pub retrieval_token_budget: u32,
+    #[serde(default = "default_true")]
+    pub telemetry_enabled: bool,
+    #[serde(default = "default_max_validation_attempts")]
+    pub max_validation_attempts: u32,
 }
 
 fn default_true() -> bool {
@@ -63,6 +71,14 @@ fn default_snap_sketch() -> Option<f64> {
     Some(0.5)
 }
 
+fn default_retrieval_token_budget() -> u32 {
+    3500
+}
+
+fn default_max_validation_attempts() -> u32 {
+    4
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -83,6 +99,10 @@ impl Default for AppConfig {
             snap_sketch: Some(0.5),
             enable_consensus: false,
             auto_approve_plan: false,
+            retrieval_enabled: true,
+            retrieval_token_budget: default_retrieval_token_budget(),
+            telemetry_enabled: true,
+            max_validation_attempts: default_max_validation_attempts(),
         }
     }
 }

@@ -130,7 +130,9 @@ pub fn format_manufacturing_constraints(manufacturing: &serde_yaml::Value) -> St
 }
 
 /// Format dimension guidance rules into a prompt-ready string for the geometry advisor.
-pub fn format_dimension_guidance(guidance: &std::collections::HashMap<String, Vec<String>>) -> String {
+pub fn format_dimension_guidance(
+    guidance: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
     let mut out = String::new();
     out.push_str("## Dimension Estimation Guidance\n");
     out.push_str("Follow these rules when choosing dimensions for your geometry plan.\n\n");
@@ -156,10 +158,14 @@ pub fn format_dimension_guidance(guidance: &std::collections::HashMap<String, Ve
 }
 
 /// Format failure prevention rules into a prompt-ready string for the geometry advisor.
-pub fn format_failure_prevention(prevention: &std::collections::HashMap<String, Vec<String>>) -> String {
+pub fn format_failure_prevention(
+    prevention: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
     let mut out = String::new();
     out.push_str("## Failure Prevention Rules\n");
-    out.push_str("Follow these rules when planning geometry to avoid operations that commonly fail.\n\n");
+    out.push_str(
+        "Follow these rules when planning geometry to avoid operations that commonly fail.\n\n",
+    );
     for (category, items) in prevention {
         let title: String = category
             .split('_')
@@ -186,8 +192,19 @@ pub fn format_failure_prevention(prevention: &std::collections::HashMap<String, 
 // ---------------------------------------------------------------------------
 
 const KNOWN_OPERATIONS: &[&str] = &[
-    "fillet", "chamfer", "shell", "loft", "sweep", "revolve", "cut", "union",
-    "intersect", "extrude", "hole", "fuse", "combine",
+    "fillet",
+    "chamfer",
+    "shell",
+    "loft",
+    "sweep",
+    "revolve",
+    "cut",
+    "union",
+    "intersect",
+    "extrude",
+    "hole",
+    "fuse",
+    "combine",
 ];
 
 const BOOLEAN_OPS: &[&str] = &["cut", "union", "fuse", "intersect", "combine"];
@@ -246,9 +263,9 @@ fn extract_dimensions(plan_text: &str) -> Vec<f64> {
     let mut multi_dim_values = std::collections::HashSet::new();
 
     // Pattern 1: multi-dim like "50x30x20mm" or "50 x 30 x 20 mm"
-    let multi_re = Regex::new(
-        r"(-?\d+\.?\d*)\s*[x×]\s*(-?\d+\.?\d*)(?:\s*[x×]\s*(-?\d+\.?\d*))?\s*(?:mm)?\b"
-    ).unwrap();
+    let multi_re =
+        Regex::new(r"(-?\d+\.?\d*)\s*[x×]\s*(-?\d+\.?\d*)(?:\s*[x×]\s*(-?\d+\.?\d*))?\s*(?:mm)?\b")
+            .unwrap();
     for cap in multi_re.captures_iter(plan_text) {
         if let Ok(v) = cap[1].parse::<f64>() {
             dims.push(v);
@@ -317,8 +334,16 @@ fn extract_chamfer_sizes(plan_text: &str) -> Vec<f64> {
 /// (the same line contains words like "offset", "move", "translate", etc.).
 fn is_offset_context(plan_text: &str, match_start: usize) -> bool {
     const OFFSET_WORDS: &[&str] = &[
-        "offset", "position", "move", "translate", "adjust",
-        "shift", "back", "direction", "from", "away",
+        "offset",
+        "position",
+        "move",
+        "translate",
+        "adjust",
+        "shift",
+        "back",
+        "direction",
+        "from",
+        "away",
     ];
 
     let line_start = plan_text[..match_start]
@@ -394,8 +419,8 @@ fn count_boolean_mentions(plan_text: &str) -> usize {
 /// Count boolean mentions scoped to the Build Plan section only.
 /// Falls back to the full text if no Build Plan section is found.
 fn count_boolean_mentions_in_build_plan(plan_text: &str) -> usize {
-    let section_text = extract_section(plan_text, "Build Plan")
-        .unwrap_or_else(|| plan_text.to_string());
+    let section_text =
+        extract_section(plan_text, "Build Plan").unwrap_or_else(|| plan_text.to_string());
     count_boolean_mentions(&section_text)
 }
 
@@ -406,7 +431,9 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
     // Match "### Build Plan", "## Build Plan", or just "Build Plan" on its own line
     lower.contains(&format!("### {}", heading_lower))
         || lower.contains(&format!("## {}", heading_lower))
-        || lower.lines().any(|line| line.trim().to_lowercase() == heading_lower)
+        || lower
+            .lines()
+            .any(|line| line.trim().to_lowercase() == heading_lower)
 }
 
 /// Public wrapper for `extract_operations` — used by `iterative.rs` to detect risky ops.
@@ -424,8 +451,8 @@ pub fn extract_operations_from_text(text: &str) -> Vec<String> {
 /// and rejects plans with a score > 7.
 pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Scope operations to the Build Plan section (fall back to full text)
-    let build_plan_text = extract_section(plan_text, "Build Plan")
-        .unwrap_or_else(|| plan_text.to_string());
+    let build_plan_text =
+        extract_section(plan_text, "Build Plan").unwrap_or_else(|| plan_text.to_string());
     let operations = extract_operations(&build_plan_text);
 
     let dimensions = extract_dimensions(plan_text);
@@ -486,17 +513,14 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Rule 4: loft is fragile
     if has_loft {
         risk += 1;
-        warnings.push(
-            "loft() is fragile — ensure profiles have compatible edge counts".to_string(),
-        );
+        warnings
+            .push("loft() is fragile — ensure profiles have compatible edge counts".to_string());
     }
 
     // Rule 5: sweep requires wire
     if has_sweep {
         risk += 1;
-        warnings.push(
-            "sweep() requires a Wire path — ensure .wire() is called".to_string(),
-        );
+        warnings.push("sweep() requires a Wire path — ensure .wire() is called".to_string());
     }
 
     // Rule 6: revolve axis
@@ -511,7 +535,10 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     for &d in &dimensions {
         if d < 0.0 {
             risk += 4;
-            warnings.push(format!("negative dimension {}mm is physically impossible", d));
+            warnings.push(format!(
+                "negative dimension {}mm is physically impossible",
+                d
+            ));
             break; // only count once
         }
     }
@@ -543,9 +570,7 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Rule 10: missing Build Plan section
     if !has_section(plan_text, "Build Plan") {
         risk += 2;
-        warnings.push(
-            "plan is missing a 'Build Plan' section with numbered steps".to_string(),
-        );
+        warnings.push("plan is missing a 'Build Plan' section with numbered steps".to_string());
     }
 
     // Rule 11: no dimensions
@@ -590,17 +615,13 @@ pub fn validate_plan(plan_text: &str) -> PlanValidation {
     // Rule 15: missing Object Analysis section
     if !has_section(plan_text, "Object Analysis") {
         risk += 1;
-        warnings.push(
-            "plan is missing an 'Object Analysis' section".to_string(),
-        );
+        warnings.push("plan is missing an 'Object Analysis' section".to_string());
     }
 
     // Rule 16: missing CadQuery Approach section
     if !has_section(plan_text, "CadQuery Approach") {
         risk += 1;
-        warnings.push(
-            "plan is missing a 'CadQuery Approach' section".to_string(),
-        );
+        warnings.push("plan is missing a 'CadQuery Approach' section".to_string());
     }
 
     // Clamp to 10
@@ -923,7 +944,10 @@ mod tests {
         let text = "### Build Plan\nAdd a 0.005mm detail and a 50mm base.";
         let v = validate_plan(text);
         assert!(v.risk_score >= 3);
-        assert!(v.warnings.iter().any(|w| w.contains("below manufacturing precision")));
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("below manufacturing precision")));
     }
 
     #[test]
@@ -931,21 +955,30 @@ mod tests {
         let text = "Just extrude a 50x30x20mm box.";
         let v = validate_plan(text);
         assert!(v.risk_score >= 2);
-        assert!(v.warnings.iter().any(|w| w.contains("missing a 'Build Plan'")));
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("missing a 'Build Plan'")));
     }
 
     #[test]
     fn test_validate_no_dimensions() {
         let text = "### Build Plan\n1. Make a box.\n2. Add a hole.";
         let v = validate_plan(text);
-        assert!(v.warnings.iter().any(|w| w.contains("no concrete dimensions")));
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("no concrete dimensions")));
     }
 
     #[test]
     fn test_validate_fillet_on_small_feature() {
         let text = "### Build Plan\nCreate a 15x15x10mm bracket.\nApply fillet 8mm on edges.";
         let v = validate_plan(text);
-        assert!(v.warnings.iter().any(|w| w.contains("fillet radius") && w.contains("too large")));
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("fillet radius") && w.contains("too large")));
     }
 
     #[test]
@@ -981,7 +1014,9 @@ mod tests {
             is_valid: false,
             risk_score: 8,
             warnings: vec!["shell() after 5 boolean operations is very likely to fail".to_string()],
-            rejected_reason: Some("shell() after 5 boolean operations is very likely to fail".to_string()),
+            rejected_reason: Some(
+                "shell() after 5 boolean operations is very likely to fail".to_string(),
+            ),
             extracted_operations: vec!["shell".to_string()],
             extracted_dimensions: vec![100.0],
             plan_text: String::new(),
@@ -1019,11 +1054,14 @@ mod tests {
 
     #[test]
     fn test_format_manufacturing_constraints_basic() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(r#"
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            r#"
 process: "3D Printing"
 min_wall: 0.8
 max_overhang: 45
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let result = format_manufacturing_constraints(&yaml);
         assert!(result.contains("## Manufacturing Constraints"));
         assert!(result.contains("MUST respect"));
@@ -1037,7 +1075,8 @@ max_overhang: 45
 
     #[test]
     fn test_format_manufacturing_constraints_nested() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(r#"
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            r#"
 process: "3D Printing (FDM/SLA)"
 wall_thickness:
   minimum: 1.2
@@ -1048,7 +1087,9 @@ overhangs:
   mitigation:
     - "Add chamfers instead of sharp overhangs"
     - "Use 45-degree angles where possible"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let result = format_manufacturing_constraints(&yaml);
         assert!(result.contains("## Manufacturing Constraints"));
         assert!(result.contains("wall_thickness"));
@@ -1084,14 +1125,17 @@ overhangs:
     #[test]
     fn test_format_dimension_guidance_basic() {
         let mut guidance = std::collections::HashMap::new();
-        guidance.insert("when_to_estimate".to_string(), vec![
-            "For real-world objects, use typical dimensions".to_string(),
-            "For abstract parts, ask the user".to_string(),
-        ]);
-        guidance.insert("size_classes".to_string(), vec![
-            "Tiny: < 20mm".to_string(),
-            "Small: 20-60mm".to_string(),
-        ]);
+        guidance.insert(
+            "when_to_estimate".to_string(),
+            vec![
+                "For real-world objects, use typical dimensions".to_string(),
+                "For abstract parts, ask the user".to_string(),
+            ],
+        );
+        guidance.insert(
+            "size_classes".to_string(),
+            vec!["Tiny: < 20mm".to_string(), "Small: 20-60mm".to_string()],
+        );
         let result = format_dimension_guidance(&guidance);
         assert!(result.contains("## Dimension Estimation Guidance"));
         assert!(result.contains("Follow these rules when choosing dimensions"));
@@ -1106,13 +1150,17 @@ overhangs:
     #[test]
     fn test_format_failure_prevention_basic() {
         let mut prevention = std::collections::HashMap::new();
-        prevention.insert("self_diagnosis".to_string(), vec![
-            "If fillet() fails, reduce the radius".to_string(),
-            "If shell() raises an error, simplify first".to_string(),
-        ]);
-        prevention.insert("preemptive_warnings".to_string(), vec![
-            "If you are about to use shell() after booleans, STOP".to_string(),
-        ]);
+        prevention.insert(
+            "self_diagnosis".to_string(),
+            vec![
+                "If fillet() fails, reduce the radius".to_string(),
+                "If shell() raises an error, simplify first".to_string(),
+            ],
+        );
+        prevention.insert(
+            "preemptive_warnings".to_string(),
+            vec!["If you are about to use shell() after booleans, STOP".to_string()],
+        );
         let result = format_failure_prevention(&prevention);
         assert!(result.contains("## Failure Prevention Rules"));
         assert!(result.contains("Follow these rules when planning geometry"));
@@ -1152,7 +1200,9 @@ overhangs:
             2. Shell with 3mm walls.\n3. Apply fillet 1mm on edges.";
         let v = validate_plan(text);
         assert!(
-            !v.warnings.iter().any(|w| w.contains("wall thickness") && w.contains("1mm")),
+            !v.warnings
+                .iter()
+                .any(|w| w.contains("wall thickness") && w.contains("1mm")),
             "1mm fillet should not trigger thin wall warning: {:?}",
             v.warnings
         );
@@ -1180,8 +1230,14 @@ overhangs:
         let body = section.unwrap();
         assert!(body.contains("Extrude a box"));
         assert!(body.contains("Add fillets"));
-        assert!(!body.contains("box shape"), "should not include Object Analysis");
-        assert!(!body.contains("Approximation"), "should not include next section");
+        assert!(
+            !body.contains("box shape"),
+            "should not include Object Analysis"
+        );
+        assert!(
+            !body.contains("Approximation"),
+            "should not include next section"
+        );
     }
 
     #[test]
