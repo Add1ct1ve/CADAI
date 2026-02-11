@@ -111,6 +111,11 @@ pub enum MultiPartEvent {
         part_name: String,
         stl_base64: String,
     },
+    PartStlFailed {
+        part_index: usize,
+        part_name: String,
+        error: String,
+    },
     AssemblyStatus {
         message: String,
     },
@@ -441,6 +446,29 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
     assembled.push_str("result = assy.toCompound()\n");
 
     Ok(assembled)
+}
+
+fn assembly_contract_issues(code: &str, parts: &[(String, String, [f64; 3])]) -> Vec<String> {
+    let mut issues = Vec::new();
+    for (name, _code, _pos) in parts {
+        let var_name = format!("part_{}", name);
+        if !code.contains(&var_name) {
+            issues.push(format!("missing {}", var_name));
+        }
+        let add_call = format!("assy.add({},", var_name);
+        if !code.contains(&add_call) {
+            issues.push(format!("missing assy.add for {}", var_name));
+        }
+    }
+
+    if !code.contains("assy = cq.Assembly()") {
+        issues.push("missing assembly initialization".to_string());
+    }
+    if !code.contains("result = assy.toCompound()") {
+        issues.push("missing assembly compound result".to_string());
+    }
+
+    issues
 }
 
 // ---------------------------------------------------------------------------
@@ -1453,7 +1481,11 @@ async fn run_generation_pipeline(
                             });
                         }
                         Err(e) => {
-                            eprintln!("Background part STL failed for {}: {}", part_name, e);
+                            let _ = evt_channel.send(MultiPartEvent::PartStlFailed {
+                                part_index: part_idx,
+                                part_name: part_name.clone(),
+                                error: e,
+                            });
                         }
                     }
                 });
@@ -1502,7 +1534,19 @@ async fn run_generation_pipeline(
                             explanation: result.explanation.clone(),
                         });
                         if result.was_modified {
-                            result.code
+                            let review_issues =
+                                assembly_contract_issues(&result.code, &successful_parts);
+                            if review_issues.is_empty() {
+                                result.code
+                            } else {
+                                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                                    message: format!(
+                                        "Reviewer output dropped multipart structure ({}). Keeping assembled code.",
+                                        review_issues.join(", ")
+                                    ),
+                                });
+                                code
+                            }
                         } else {
                             code
                         }
@@ -1544,6 +1588,30 @@ async fn run_generation_pipeline(
                     code: validation_result.code.clone(),
                     stl_base64: validation_result.stl_base64.clone(),
                 });
+
+                let contract_issues =
+                    assembly_contract_issues(&validation_result.code, &successful_parts);
+                if !contract_issues.is_empty() {
+                    let msg = format!(
+                        "Validation retry produced code that breaks multipart assembly contract: {}",
+                        contract_issues.join(", ")
+                    );
+                    let _ = on_event.send(MultiPartEvent::Done {
+                        success: false,
+                        error: Some(msg.clone()),
+                        validated: true,
+                    });
+                    return Ok(PipelineOutcome {
+                        response: validation_result.code.clone(),
+                        final_code: Some(validation_result.code),
+                        success: false,
+                        error: Some(msg),
+                        validation_attempts: Some(validation_result.attempts),
+                        static_findings: validation_result.static_findings,
+                        post_check_soft_failed: validation_result.post_check_warning.is_some(),
+                        post_check_soft_fail_reason: validation_result.post_check_warning,
+                    });
+                }
 
                 if total_usage.total() > 0 {
                     emit_usage(on_event, "total", total_usage, provider_id, model_id);
@@ -2451,7 +2519,11 @@ pub async fn retry_part(
                                 });
                             }
                             Err(e) => {
-                                eprintln!("Background part STL failed for {}: {}", part_name, e);
+                                let _ = evt_channel.send(MultiPartEvent::PartStlFailed {
+                                    part_index: pi,
+                                    part_name: part_name.clone(),
+                                    error: e,
+                                });
                             }
                         }
                     });

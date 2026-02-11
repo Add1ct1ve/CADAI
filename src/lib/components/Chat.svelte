@@ -778,10 +778,14 @@
           case 'PartStlReady':
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].stl_base64 = event.stl_base64;
-              const imported = tryQueueMultipartAssemblyImport();
-              if (!imported && !assemblyStl) {
-                viewportStore.setPendingStl(event.stl_base64);
-              }
+              tryQueueMultipartAssemblyImport();
+            }
+            break;
+
+          case 'PartStlFailed':
+            if (partProgress[event.part_index]) {
+              partProgress[event.part_index].status = 'failed';
+              partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
             }
             break;
 
@@ -1144,6 +1148,12 @@
                 partProgress[event.part_index].stl_base64 = event.stl_base64;
               }
               break;
+            case 'PartStlFailed':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = 'failed';
+                partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
+              }
+              break;
             case 'Done':
               break;
           }
@@ -1345,11 +1355,14 @@
             case 'PartStlReady':
               if (partProgress[event.part_index]) {
                 partProgress[event.part_index].stl_base64 = event.stl_base64;
-                // Show individual part in viewport if assembly not yet received
-                const imported = tryQueueMultipartAssemblyImport();
-                if (!imported && !assemblyStl) {
-                  viewportStore.setPendingStl(event.stl_base64);
-                }
+                tryQueueMultipartAssemblyImport();
+              }
+              break;
+
+            case 'PartStlFailed':
+              if (partProgress[event.part_index]) {
+                partProgress[event.part_index].status = 'failed';
+                partProgress[event.part_index].error = `Part preview failed: ${event.error}`;
               }
               break;
 
