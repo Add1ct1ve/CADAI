@@ -979,6 +979,7 @@ async fn run_generation_pipeline(
     let mut last_parse_err: Option<String> = None;
     let mut planner_response = String::new();
     const MAX_PLANNER_PARSE_ATTEMPTS: usize = 3;
+    const PLANNER_MAX_TOKENS: u32 = 3072;
 
     for attempt in 1..=MAX_PLANNER_PARSE_ATTEMPTS {
         let planner = create_provider(config)?;
@@ -1016,7 +1017,9 @@ async fn run_generation_pipeline(
             ]
         };
 
-        let (plan_json, plan_usage) = planner.complete(&planner_messages, Some(2048)).await?;
+        let (plan_json, plan_usage) = planner
+            .complete(&planner_messages, Some(PLANNER_MAX_TOKENS))
+            .await?;
         planner_response = plan_json.clone();
         if let Some(ref u) = plan_usage {
             total_usage.add(u);
@@ -1042,37 +1045,33 @@ async fn run_generation_pipeline(
         }
     }
 
-    let plan: GenerationPlan = match plan {
+    let mut plan: GenerationPlan = match plan {
         Some(p) => p,
         None => {
             if requires_multipart_contract {
-                if let Some(fallback_plan) =
-                    deterministic_multipart_fallback_plan(user_request, plan_text)
+                let parse_err = last_parse_err
+                    .clone()
+                    .unwrap_or_else(|| "unknown planner parse error".to_string());
+                let fallback_plan = deterministic_multipart_fallback_plan(user_request, plan_text)
+                    .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
+                let template_id = if fallback_plan
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("Generic multipart fallback")
                 {
-                    let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                        reason:
-                            "Planner JSON remained invalid; using deterministic multipart fallback."
-                                .to_string(),
-                        template_id: "planner_multipart_fallback".to_string(),
-                    });
-                    fallback_plan
+                    "planner_generic_multipart_fallback"
                 } else {
-                    let parse_err =
-                        last_parse_err.unwrap_or_else(|| "unknown planner parse error".to_string());
-                    let msg = format!(
-                        "Planner failed to return valid multipart JSON: {}",
+                    "planner_multipart_fallback"
+                };
+                let _ = on_event.send(MultiPartEvent::FallbackActivated {
+                    reason: format!(
+                        "Planner JSON remained invalid ({}); using deterministic multipart fallback.",
                         parse_err
-                    );
-                    let _ = on_event.send(MultiPartEvent::PlanStatus {
-                        message: msg.clone(),
-                    });
-                    let _ = on_event.send(MultiPartEvent::Done {
-                        success: false,
-                        error: Some(msg.clone()),
-                        validated: false,
-                    });
-                    return Err(AppError::AiProviderError(msg));
-                }
+                    ),
+                    template_id: template_id.to_string(),
+                });
+                fallback_plan
             } else {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
                     message:
@@ -1088,20 +1087,27 @@ async fn run_generation_pipeline(
         }
     };
 
-    let _ = on_event.send(MultiPartEvent::PlanResult { plan: plan.clone() });
-
     if requires_multipart_contract && (plan.mode != "multi" || plan.parts.len() < 2) {
-        let msg = "Strict multipart contract not satisfied: planner did not return at least 2 separable parts.".to_string();
-        let _ = on_event.send(MultiPartEvent::PlanStatus {
-            message: msg.clone(),
+        let fallback = deterministic_multipart_fallback_plan(user_request, plan_text)
+            .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
+        let _ = on_event.send(MultiPartEvent::FallbackActivated {
+            reason:
+                "Strict multipart contract not satisfied by planner output; replacing with fallback multipart split."
+                    .to_string(),
+            template_id: if fallback
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Generic multipart fallback")
+            {
+                "contract_generic_multipart_fallback".to_string()
+            } else {
+                "contract_multipart_fallback".to_string()
+            },
         });
-        let _ = on_event.send(MultiPartEvent::Done {
-            success: false,
-            error: Some(msg.clone()),
-            validated: false,
-        });
-        return Err(AppError::AiProviderError(msg));
+        plan = fallback;
     }
+    let _ = on_event.send(MultiPartEvent::PlanResult { plan: plan.clone() });
 
     // -----------------------------------------------------------------------
     // Single mode: fall through to normal streaming
@@ -2869,6 +2875,45 @@ fn deterministic_multipart_fallback_plan(
     None
 }
 
+fn generic_multipart_fallback_plan(user_request: &str) -> GenerationPlan {
+    let lower = user_request.to_lowercase();
+    let (part_a_name, part_b_name) = if lower.contains("top") && lower.contains("bottom") {
+        ("top_part", "bottom_part")
+    } else if lower.contains("cover") || lower.contains("lid") {
+        ("main_body", "cover")
+    } else {
+        ("part_1", "part_2")
+    };
+
+    GenerationPlan {
+        mode: "multi".to_string(),
+        description: Some(
+            "Generic multipart fallback split: two separable editable solids.".to_string(),
+        ),
+        parts: vec![
+            PartSpec {
+                name: part_a_name.to_string(),
+                description: "Primary editable solid for the main geometry.".to_string(),
+                position: [0.0, 0.0, 0.0],
+                constraints: vec![
+                    "Keep as one editable solid; no split bodies.".to_string(),
+                    "Preserve global parameters and origin conventions from the request."
+                        .to_string(),
+                ],
+            },
+            PartSpec {
+                name: part_b_name.to_string(),
+                description: "Secondary editable mating solid separated from primary.".to_string(),
+                position: [0.0, 0.0, 0.0],
+                constraints: vec![
+                    "Must remain a single editable solid.".to_string(),
+                    "Maintain fit/clearance relationship with primary part.".to_string(),
+                ],
+            },
+        ],
+    }
+}
+
 struct PartAcceptanceArtifact {
     code: String,
     stl_base64: Option<String>,
@@ -2960,7 +3005,8 @@ async fn build_part_preview_stl_with_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        deterministic_multipart_fallback_plan, parse_plan, request_requires_multipart_contract,
+        deterministic_multipart_fallback_plan, generic_multipart_fallback_plan, parse_plan,
+        request_requires_multipart_contract,
     };
 
     #[test]
@@ -3018,6 +3064,26 @@ mod tests {
         assert_eq!(plan.parts.len(), 2);
         assert_eq!(plan.parts[0].name, "housing");
         assert_eq!(plan.parts[1].name, "back_plate");
+    }
+
+    #[test]
+    fn generic_fallback_always_builds_two_parts() {
+        let user = "Need two separate editable components for exploded view";
+        let plan = generic_multipart_fallback_plan(user);
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 2);
+        assert!(plan.description.unwrap_or_default().contains("Generic multipart fallback"));
+        assert_eq!(plan.parts[0].name, "part_1");
+        assert_eq!(plan.parts[1].name, "part_2");
+    }
+
+    #[test]
+    fn generic_fallback_uses_cover_naming_hint() {
+        let user = "Create separate body and cover for this enclosure";
+        let plan = generic_multipart_fallback_plan(user);
+        assert_eq!(plan.parts.len(), 2);
+        assert_eq!(plan.parts[0].name, "main_body");
+        assert_eq!(plan.parts[1].name, "cover");
     }
 }
 
