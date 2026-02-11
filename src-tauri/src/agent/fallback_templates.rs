@@ -14,6 +14,115 @@ pub struct FallbackPlan {
     pub plan_text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartTemplateKind {
+    Housing,
+    Plate,
+    SnapLidBox,
+}
+
+fn tokenize_words(input: &str) -> Vec<String> {
+    let re = Regex::new(r"[A-Za-z0-9_]+").expect("valid token regex");
+    re.find_iter(&input.to_lowercase())
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
+fn has_token(tokens: &[String], token: &str) -> bool {
+    tokens.iter().any(|t| t == token)
+}
+
+fn has_phrase(tokens: &[String], first: &str, second: &str) -> bool {
+    tokens
+        .windows(2)
+        .any(|window| window[0] == first && window[1] == second)
+}
+
+fn score_template_kind(part_name: &str, description: &str) -> Option<PartTemplateKind> {
+    let name_tokens = tokenize_words(part_name);
+    let desc_tokens = tokenize_words(description);
+
+    let explicit_housing_name = has_token(&name_tokens, "housing")
+        || has_token(&name_tokens, "enclosure")
+        || has_token(&name_tokens, "main_body")
+        || has_token(&name_tokens, "body")
+        || has_token(&name_tokens, "case");
+    let explicit_plate_name = has_token(&name_tokens, "back_plate")
+        || has_token(&name_tokens, "backplate")
+        || has_phrase(&name_tokens, "back", "plate")
+        || has_token(&name_tokens, "cover")
+        || has_token(&name_tokens, "lid");
+
+    let mut housing_score = 0_i32;
+    if explicit_housing_name {
+        housing_score += 9;
+    }
+    if has_token(&desc_tokens, "housing") || has_token(&desc_tokens, "enclosure") {
+        housing_score += 3;
+    }
+    if has_token(&desc_tokens, "slot") || has_token(&desc_tokens, "slots") {
+        housing_score += 2;
+    }
+    if has_token(&desc_tokens, "ledge")
+        || has_token(&desc_tokens, "cavity")
+        || has_token(&desc_tokens, "button")
+    {
+        housing_score += 1;
+    }
+
+    let mut plate_score = 0_i32;
+    if explicit_plate_name {
+        plate_score += 9;
+    }
+    if has_phrase(&desc_tokens, "back", "plate")
+        || has_token(&desc_tokens, "backplate")
+        || has_token(&desc_tokens, "cover")
+        || has_token(&desc_tokens, "lid")
+    {
+        plate_score += 3;
+    }
+    if has_token(&desc_tokens, "lip") {
+        plate_score += 2;
+    }
+    if has_token(&desc_tokens, "ridge")
+        || has_token(&desc_tokens, "oring")
+        || has_token(&desc_tokens, "o_ring")
+    {
+        plate_score += 2;
+    }
+
+    let mut snap_score = 0_i32;
+    if has_token(&name_tokens, "snap_lid_box") {
+        snap_score += 9;
+    }
+    if has_token(&desc_tokens, "snap") && has_token(&desc_tokens, "box") {
+        snap_score += 4;
+    }
+    if has_token(&desc_tokens, "latch") || has_token(&desc_tokens, "detent") {
+        snap_score += 1;
+    }
+
+    let mut scored = vec![
+        (PartTemplateKind::Housing, housing_score),
+        (PartTemplateKind::Plate, plate_score),
+        (PartTemplateKind::SnapLidBox, snap_score),
+    ];
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let (best_kind, best_score) = scored[0];
+    if best_score < 3 {
+        return None;
+    }
+
+    let second_score = scored[1].1;
+    let ambiguous = best_score - second_score <= 1;
+    if ambiguous && !explicit_housing_name && !explicit_plate_name {
+        return None;
+    }
+
+    Some(best_kind)
+}
+
 fn parse_dim(text: &str, label: &str, default_val: f64) -> f64 {
     let pat = format!(
         r"(?i)\b{}\b[^0-9-]*(-?\d+(?:\.\d+)?)\s*mm",
@@ -110,7 +219,19 @@ fn simple_housing_with_slots_template(part_name: &str, description: &str) -> Fal
     let length = parse_dim(description, "length", dims[0]).max(10.0);
     let width = parse_dim(description, "width", dims[1]).max(8.0);
     let height = parse_dim(description, "height", dims[2]).max(4.0);
+    let height_ends =
+        parse_dim(description, "height_ends", (height - 2.0).max(3.0)).clamp(2.0, height);
     let wall = parse_dim(description, "wall", 1.8).clamp(0.8, 4.0);
+    let top_thk = parse_dim(description, "top_thk", 1.5).clamp(0.8, (height - 1.0).max(1.0));
+    let back_lip = parse_dim(description, "back_lip", 1.5).clamp(0.6, (height_ends - 0.4).max(0.6));
+    let oring_w = parse_dim(description, "oring_width", 1.2).clamp(0.6, 2.0);
+    let oring_d = parse_dim(description, "oring_depth", 0.8).clamp(0.3, 1.5);
+    let button_len =
+        parse_dim(description, "button_length", 12.0).clamp(4.0, (length * 0.5).max(4.0));
+    let button_wid =
+        parse_dim(description, "button_width", 4.0).clamp(2.0, (height * 0.6).max(2.0));
+    let button_off =
+        parse_dim(description, "button_offset", 6.0).clamp(-length * 0.4, length * 0.4);
     let slot_w = parse_dim(description, "slot width", 20.0).clamp(2.0, width - 1.0);
     let slot_h = parse_dim(description, "slot height", 2.5).clamp(1.0, height - 0.5);
     let slot_d = parse_dim(description, "slot depth", 5.0).clamp(1.0, length * 0.45);
@@ -122,24 +243,55 @@ fn simple_housing_with_slots_template(part_name: &str, description: &str) -> Fal
 L = {length:.3}
 W = {width:.3}
 H = {height:.3}
+H_END = {height_ends:.3}
 WALL = {wall:.3}
+TOP = {top_thk:.3}
+BACK_LIP = {back_lip:.3}
+ORING_W = {oring_w:.3}
+ORING_D = {oring_d:.3}
 SLOT_W = {slot_w:.3}
 SLOT_H = {slot_h:.3}
 SLOT_D = {slot_d:.3}
+BTN_L = {button_len:.3}
+BTN_W = {button_wid:.3}
+BTN_OFF = {button_off:.3}
 
-outer = cq.Workplane("XY").box(L, W, H, centered=(True, True, False))
-inner = cq.Workplane("XY", origin=(0, 0, WALL)).box(
+outer_base = cq.Workplane("XY").box(L, W, H_END, centered=(True, True, False))
+top_cap = cq.Workplane("XY", origin=(0, 0, H_END)).box(
+    max(L - 2.0, 2.0),
+    max(W - 2.0, 2.0),
+    max(H - H_END, 0.8),
+    centered=(True, True, False),
+)
+outer = outer_base.union(top_cap)
+
+inner = cq.Workplane("XY", origin=(0, 0, BACK_LIP)).box(
     max(L - 2 * WALL, 1.0),
     max(W - 2 * WALL, 1.0),
-    max(H - WALL, 1.0),
+    max(H - TOP - BACK_LIP, 1.0),
     centered=(True, True, False),
 )
 housing = outer.cut(inner)
+
+# O-ring groove on ledge (rectangular ring cut)
+g_outer_len = max(L - 2 * (WALL + 1.0), 2.0)
+g_outer_wid = max(W - 2 * (WALL + 1.0), 2.0)
+g_inner_len = max(g_outer_len - 2 * ORING_W, 1.0)
+g_inner_wid = max(g_outer_wid - 2 * ORING_W, 1.0)
+groove_outer = cq.Workplane("XY", origin=(0, 0, max(BACK_LIP - ORING_D, 0.0))).rect(g_outer_len, g_outer_wid).extrude(ORING_D)
+groove_inner = cq.Workplane("XY", origin=(0, 0, max(BACK_LIP - ORING_D, 0.0))).rect(g_inner_len, g_inner_wid).extrude(ORING_D)
+housing = housing.cut(groove_outer.cut(groove_inner))
 
 slot = cq.Workplane("XY", origin=(L / 2 - SLOT_D / 2, 0, H * 0.5)).box(
     SLOT_D, SLOT_W, SLOT_H, centered=(True, True, True)
 )
 housing = housing.cut(slot).cut(slot.mirror("YZ"))
+
+# Optional shallow side indicator; keeps wall solid.
+indicator = cq.Workplane("XY", origin=(BTN_OFF, W / 2 - 0.15, H * 0.5)).box(
+    max(BTN_L, 1.0), 0.3, max(BTN_W, 1.0), centered=(True, True, True)
+)
+housing = housing.cut(indicator)
 
 result = housing
 "#
@@ -193,51 +345,16 @@ result = outer.cut(inner)
 }
 
 pub fn maybe_template_for_part(part_name: &str, description: &str) -> Option<FallbackTemplate> {
-    let lower_name = part_name.to_lowercase();
-    let lower_desc = description.to_lowercase();
-    let combined = format!("{} {}", lower_name, lower_desc);
-
-    // Priority 1: Match on part NAME for housing/enclosure.
-    // This must come first because a housing description may reference other
-    // parts (e.g. "internal ledge for back plate"), which would otherwise
-    // trigger a false plate-template match.
-    let is_housing_name = lower_name.contains("housing")
-        || lower_name.contains("enclosure")
-        || lower_name == "case"
-        || lower_name.contains("body")
-        || lower_name.contains("main_body");
-    if is_housing_name {
-        return Some(simple_housing_with_slots_template(part_name, description));
+    match score_template_kind(part_name, description) {
+        Some(PartTemplateKind::Housing) => {
+            Some(simple_housing_with_slots_template(part_name, description))
+        }
+        Some(PartTemplateKind::Plate) => {
+            Some(plate_with_lip_ridge_template(part_name, description))
+        }
+        Some(PartTemplateKind::SnapLidBox) => Some(snap_lid_box_template(part_name, description)),
+        None => None,
     }
-
-    // Priority 2: Match on part NAME for explicit back-plate/cover/lid.
-    // Use word-boundary matching for short words ("lid", "cover") to avoid false
-    // positives from substrings (e.g. "solid" contains "lid").
-    let is_plate_name = lower_name.contains("back_plate")
-        || lower_name.contains("backplate")
-        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&lower_name)
-        || regex::Regex::new(r"\blid\b").unwrap().is_match(&lower_name);
-    if is_plate_name {
-        return Some(plate_with_lip_ridge_template(part_name, description));
-    }
-
-    // Priority 3: Fall back to description-based matching for parts whose
-    // names don't directly indicate their type.
-    let is_plate_desc = lower_desc.contains("back_plate")
-        || lower_desc.contains("back plate")
-        || lower_desc.contains("backplate")
-        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&lower_desc)
-        || regex::Regex::new(r"\blid\b").unwrap().is_match(&lower_desc);
-    if is_plate_desc {
-        return Some(plate_with_lip_ridge_template(part_name, description));
-    }
-    if combined.contains("snap") && combined.contains("box") {
-        return Some(snap_lid_box_template(part_name, description));
-    }
-    if combined.contains("housing") || combined.contains("enclosure") || combined.contains("case") {
-        return Some(simple_housing_with_slots_template(part_name, description));
-    }
-    None
 }
 
 pub fn maybe_fallback_plan(user_request: &str) -> Option<FallbackPlan> {
@@ -371,11 +488,21 @@ mod tests {
 
     #[test]
     fn body_part_name_matches_housing_template() {
-        let tpl = maybe_template_for_part(
-            "main_body",
-            "Primary enclosure body with internal cavity",
-        )
-        .expect("main_body should match housing template");
+        let tpl =
+            maybe_template_for_part("main_body", "Primary enclosure body with internal cavity")
+                .expect("main_body should match housing template");
         assert_eq!(tpl.template_id, "simple_housing_with_slots");
+    }
+
+    #[test]
+    fn template_name_does_not_false_match_plate() {
+        let tpl = maybe_template_for_part(
+            "template_part",
+            "generic helper part used for staging geometry",
+        );
+        assert!(
+            tpl.is_none(),
+            "template_part should not map to plate template"
+        );
     }
 }

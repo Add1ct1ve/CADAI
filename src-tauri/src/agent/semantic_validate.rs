@@ -30,7 +30,54 @@ pub struct SemanticValidationResult {
     pub findings: Vec<String>,
 }
 
-fn parse_dimension_triple(description: &str) -> Option<[f64; 3]> {
+fn tokenize_words(input: &str) -> Vec<String> {
+    let re = Regex::new(r"[A-Za-z0-9_]+").expect("valid token regex");
+    re.find_iter(&input.to_lowercase())
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
+fn contains_token(tokens: &[String], token: &str) -> bool {
+    tokens.iter().any(|t| t == token)
+}
+
+fn contains_phrase_tokens(tokens: &[String], first: &str, second: &str) -> bool {
+    tokens
+        .windows(2)
+        .any(|window| window[0] == first && window[1] == second)
+}
+
+fn is_back_plate_like_part(part_name: &str) -> bool {
+    let tokens = tokenize_words(part_name);
+    contains_token(&tokens, "backplate")
+        || contains_token(&tokens, "back_plate")
+        || contains_phrase_tokens(&tokens, "back", "plate")
+        || contains_token(&tokens, "cover")
+        || contains_token(&tokens, "lid")
+        || contains_token(&tokens, "backplate")
+        || contains_token(&tokens, "back") && contains_token(&tokens, "plate")
+}
+
+fn parse_named_dimension(description: &str, labels: &[&str]) -> Option<f64> {
+    for label in labels {
+        let pat = format!(
+            r"(?i)\b{}\b[^0-9-]*(-?\d+(?:\.\d+)?)\s*mm",
+            regex::escape(label)
+        );
+        if let Some(val) = Regex::new(&pat)
+            .ok()
+            .and_then(|re| re.captures(description))
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+        {
+            return Some(val);
+        }
+    }
+    None
+}
+
+pub fn infer_envelope_dimensions_mm(description: &str) -> Option<[f64; 3]> {
     let compact = Regex::new(
         r"(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?",
     )
@@ -48,24 +95,20 @@ fn parse_dimension_triple(description: &str) -> Option<[f64; 3]> {
         }
     }
 
-    let find_named = |label: &str| -> Option<f64> {
-        let pat = format!(
-            r"(?i)\b{}\b[^0-9-]*(-?\d+(?:\.\d+)?)\s*mm",
-            regex::escape(label)
-        );
-        Regex::new(&pat)
-            .ok()?
-            .captures(description)
-            .and_then(|c| c.get(1))
-            .and_then(|m| m.as_str().parse::<f64>().ok())
-            .filter(|v| *v > 0.0)
-    };
-
-    let length = find_named("length");
-    let width = find_named("width");
-    let height = find_named("height")
-        .or_else(|| find_named("thickness"))
-        .or_else(|| find_named("depth"));
+    // Semantic-aware envelope extraction:
+    // - Prefer explicit outer/envelope dimensions.
+    // - Do not use feature values like thickness/depth as a fake third axis.
+    let length = parse_named_dimension(description, &["overall length", "outer length", "length"]);
+    let width = parse_named_dimension(description, &["overall width", "outer width", "width"]);
+    let height = parse_named_dimension(
+        description,
+        &[
+            "overall height",
+            "outer height",
+            "envelope height",
+            "height",
+        ],
+    );
 
     match (length, width, height) {
         (Some(a), Some(b), Some(c)) => Some([a, b, c]),
@@ -75,19 +118,18 @@ fn parse_dimension_triple(description: &str) -> Option<[f64; 3]> {
 
 fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<String> {
     let mut hints = Vec::new();
-    let lower_name = part_name.to_lowercase();
+    let name_tokens = tokenize_words(part_name);
     let lower_desc = description.to_lowercase();
-    let combined = format!("{} {}", lower_name, lower_desc);
+    let combined = format!("{} {}", part_name.to_lowercase(), lower_desc);
 
     // Only require lip/ridge features when the PART NAME indicates it's a
     // back plate, lid, or cover.  Checking the description would cause false
     // positives for housing parts whose descriptions reference "back plate"
     // as a cross-part constraint (e.g. "internal ledge for back plate").
-    let is_plate_name = lower_name.contains("back_plate")
-        || lower_name.contains("backplate")
-        || lower_name.contains("plate")
-        || lower_name.contains("lid")
-        || lower_name.contains("cover");
+    let is_plate_name = is_back_plate_like_part(part_name)
+        || contains_token(&name_tokens, "plate")
+        || contains_token(&name_tokens, "cover")
+        || contains_token(&name_tokens, "lid");
     if is_plate_name {
         if combined.contains("lip") {
             hints.push("lip".to_string());
@@ -107,7 +149,7 @@ fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<Strin
 }
 
 pub fn build_default_contract(part_name: &str, description: &str) -> SemanticPartContract {
-    let expected_bbox_mm = parse_dimension_triple(description).map(|mut dims| {
+    let expected_bbox_mm = infer_envelope_dimensions_mm(description).map(|mut dims| {
         dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
         ExpectedBboxMm {
             sorted_extents_mm: dims,
@@ -303,5 +345,35 @@ mod tests {
             !result.passed,
             "housing with 2 components should fail (must be single editable solid)"
         );
+    }
+
+    #[test]
+    fn does_not_false_match_template_as_plate() {
+        let hints = infer_required_feature_hints(
+            "template_part",
+            "generic generated part with slots and chamfer",
+        );
+        assert!(
+            !hints.contains(&"lip".to_string()) && !hints.contains(&"ridge".to_string()),
+            "template_part must not be treated as back plate"
+        );
+    }
+
+    #[test]
+    fn does_not_false_match_solid_as_lid() {
+        let hints = infer_required_feature_hints("housing", "solid side wall, no cutout");
+        assert!(
+            !hints.contains(&"lip".to_string()) && !hints.contains(&"ridge".to_string()),
+            "word 'solid' must not trigger lid/cover plate hints"
+        );
+    }
+
+    #[test]
+    fn infer_envelope_dimensions_ignores_feature_only_values() {
+        let dims = infer_envelope_dimensions_mm(
+            "Outer dimensions length 42mm width 28mm. Wall thickness 1.8mm. Top thickness 1.5mm. Height 7.5mm.",
+        )
+        .expect("should infer envelope dimensions");
+        assert_eq!(dims, [42.0, 28.0, 7.5]);
     }
 }
