@@ -413,6 +413,114 @@ fn apply_global_sweep_guard(code: &str) -> Option<String> {
     }
 }
 
+fn line_has_ambiguous_faces_workplane_chain(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.contains(".faces(") || !trimmed.contains(".workplane(") {
+        return false;
+    }
+    if trimmed.contains(".first().workplane(")
+        || trimmed.contains(".last().workplane(")
+        || trimmed.contains(".item(")
+    {
+        return false;
+    }
+
+    let faces_idx = match trimmed.find(".faces(") {
+        Some(i) => i,
+        None => return false,
+    };
+    let wp_idx = match trimmed.find(".workplane(") {
+        Some(i) => i,
+        None => return false,
+    };
+
+    faces_idx < wp_idx
+}
+
+fn add_first_before_workplane(line: &str) -> Option<String> {
+    if !line_has_ambiguous_faces_workplane_chain(line) {
+        return None;
+    }
+
+    let wp_idx = line.find(".workplane(")?;
+    let mut out = String::new();
+    out.push_str(&line[..wp_idx]);
+    out.push_str(".first().workplane(");
+    out.push_str(&line[wp_idx + ".workplane(".len()..]);
+    Some(out)
+}
+
+fn apply_line_targeted_workplane_face_fix(code: &str, source_line: &str) -> Option<String> {
+    let target = source_line.trim();
+    if target.is_empty() || !line_has_ambiguous_faces_workplane_chain(target) {
+        return None;
+    }
+
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        if !changed && line.trim() == target {
+            if let Some(rewritten) = add_first_before_workplane(line) {
+                out.push(rewritten);
+                changed = true;
+            } else {
+                out.push(line.to_string());
+            }
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn apply_global_workplane_face_fix(code: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out = Vec::new();
+    for line in code.lines() {
+        if let Some(rewritten) = add_first_before_workplane(line) {
+            out.push(rewritten);
+            changed = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if changed {
+        Some(out.join("\n"))
+    } else {
+        None
+    }
+}
+
+fn is_workplane_selection_failure_candidate(
+    structured_error: &validate::StructuredError,
+    runtime_error: &str,
+) -> bool {
+    let msg = runtime_error.to_lowercase();
+    let source = structured_error
+        .context
+        .as_ref()
+        .and_then(|c| c.source_line.as_ref())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    if msg.contains("if multiple objects selected, they all must be planar faces")
+        || (msg.contains("multiple objects selected") && msg.contains("planar faces"))
+    {
+        return true;
+    }
+
+    matches!(
+        structured_error.category,
+        validate::ErrorCategory::ApiMisuse
+    ) && source.contains(".faces(")
+        && source.contains(".workplane(")
+}
+
 fn is_fillet_failure_candidate(
     structured_error: &validate::StructuredError,
     runtime_error: &str,
@@ -520,6 +628,25 @@ fn maybe_apply_ladder_auto_repair(
     runtime_error: &str,
     attempt: u32,
 ) -> Option<(String, u32)> {
+    let workplane_candidate =
+        is_workplane_selection_failure_candidate(structured_error, runtime_error);
+    if workplane_candidate {
+        if let Some(source_line) = structured_error
+            .context
+            .as_ref()
+            .and_then(|c| c.source_line.as_ref())
+        {
+            if let Some(repaired) =
+                apply_line_targeted_workplane_face_fix(current_code, source_line)
+            {
+                return Some((repaired, 1));
+            }
+        }
+        if let Some(repaired) = apply_global_workplane_face_fix(current_code) {
+            return Some((repaired, 1));
+        }
+    }
+
     let fillet_candidate = is_fillet_failure_candidate(structured_error, runtime_error);
     let sweep_candidate = is_sweep_failure_candidate(structured_error, runtime_error);
 
@@ -1222,5 +1349,55 @@ result = result.union(ridge)"#;
                 .expect("should guard sweep");
         assert!(repaired.contains("auto-sweep-guard"));
         assert!(repaired.contains("ridge = result"));
+    }
+
+    #[test]
+    fn test_workplane_face_fix_inserts_first() {
+        let line = r#"wp = body.faces(">Z").workplane(offset=1.0)"#;
+        let fixed = add_first_before_workplane(line).expect("should rewrite ambiguous workplane");
+        assert_eq!(
+            fixed,
+            r#"wp = body.faces(">Z").first().workplane(offset=1.0)"#
+        );
+    }
+
+    #[test]
+    fn test_workplane_face_fix_skips_existing_first() {
+        let line = r#"wp = body.faces(">Z").first().workplane(offset=1.0)"#;
+        assert!(add_first_before_workplane(line).is_none());
+    }
+
+    #[test]
+    fn test_ladder_repairs_planar_faces_workplane_error() {
+        let code = r#"import cadquery as cq
+body = cq.Workplane("XY").box(10, 10, 10)
+wp = body.faces(">Z").workplane(offset=1.0)
+result = body"#;
+
+        let err = validate::StructuredError {
+            error_type: "ValueError".to_string(),
+            message: "If multiple objects selected, they all must be planar faces.".to_string(),
+            line_number: Some(3),
+            suggestion: None,
+            category: validate::ErrorCategory::ApiMisuse,
+            failing_operation: Some("workplane".to_string()),
+            context: Some(validate::ErrorContext {
+                source_line: Some(r#"wp = body.faces(">Z").workplane(offset=1.0)"#.to_string()),
+                failing_parameters: None,
+            }),
+        };
+
+        let repaired = maybe_apply_ladder_auto_repair(
+            code,
+            &err,
+            "ValueError: If multiple objects selected, they all must be planar faces.",
+            1,
+        )
+        .expect("planar-faces workplane failure should be auto-repaired");
+
+        assert_eq!(repaired.1, 1);
+        assert!(repaired
+            .0
+            .contains(r#"body.faces(">Z").first().workplane(offset=1.0)"#));
     }
 }

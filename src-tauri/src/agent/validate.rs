@@ -155,6 +155,9 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
                 || lower.contains("cannot find a solid in the parent chain")
             {
                 ErrorCategory::Topology(TopologySubKind::FilletFailure)
+            } else if lower.contains("multiple objects selected") && lower.contains("planar faces")
+            {
+                ErrorCategory::ApiMisuse
             } else {
                 ErrorCategory::ApiMisuse
             }
@@ -610,14 +613,28 @@ pub fn get_retry_strategy(
                 .to_string(),
             vec![],
         ),
-        ErrorCategory::ApiMisuse => (
-            format!(
-                "There is an API usage error: {}. Check the CadQuery API — verify method names, \
-                 argument types, and tuple signatures (e.g. .translate((x,y,z)) needs double parens).",
-                msg
-            ),
-            vec![],
-        ),
+        ErrorCategory::ApiMisuse => {
+            if msg.to_lowercase().contains("multiple objects selected")
+                && msg.to_lowercase().contains("planar faces")
+            {
+                (
+                    "workplane() is being called after faces() that selects multiple faces. \
+                     Select one face explicitly before workplane, e.g. \
+                     `.faces(selector).first().workplane(...)` or use a tighter selector."
+                        .to_string(),
+                    vec![],
+                )
+            } else {
+                (
+                    format!(
+                        "There is an API usage error: {}. Check the CadQuery API — verify method names, \
+                         argument types, and tuple signatures (e.g. .translate((x,y,z)) needs double parens).",
+                        msg
+                    ),
+                    vec![],
+                )
+            }
+        }
         ErrorCategory::ImportRuntime => (
             format!(
                 "Fix the import/name error: {}. Only cadquery and standard library modules are \
@@ -1025,6 +1042,18 @@ OCP.OCP.StdFail.StdFail_NotDone: BRep_API: command not done"#;
     }
 
     #[test]
+    fn test_classify_multiple_objects_planar_faces_as_api_misuse() {
+        assert_eq!(
+            classify_error(
+                "ValueError",
+                "If multiple objects selected, they all must be planar faces.",
+                "result = body.faces(\">Z\").workplane()"
+            ),
+            ErrorCategory::ApiMisuse
+        );
+    }
+
+    #[test]
     fn test_classify_unknown_error() {
         assert_eq!(
             classify_error("ZeroDivisionError", "division by zero", ""),
@@ -1306,6 +1335,20 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             strategy.matching_anti_pattern.as_deref(),
             Some("translate() wrong signature")
         );
+    }
+
+    #[test]
+    fn test_strategy_api_misuse_planar_faces_workplane() {
+        let err = make_error(
+            ErrorCategory::ApiMisuse,
+            "If multiple objects selected, they all must be planar faces.",
+            Some("workplane"),
+        );
+        let strategy = get_retry_strategy(&err, 1, None);
+        assert!(strategy
+            .fix_instruction
+            .contains(".faces(selector).first().workplane"));
+        assert!(strategy.forbidden_operations.is_empty());
     }
 
     #[test]
