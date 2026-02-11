@@ -34,6 +34,10 @@ export interface AppConfig {
   retrieval_token_budget: number;
   telemetry_enabled: boolean;
   max_validation_attempts: number;
+  mechanisms_enabled: boolean;
+  mechanism_import_enabled: boolean;
+  mechanism_cache_max_mb: number;
+  allowed_spdx_licenses: string[];
 }
 
 export interface ModelInfo {
@@ -229,6 +233,52 @@ export interface PlanTemplate {
   name: string;
   description: string;
   plan_text: string;
+}
+
+export interface MechanismParameter {
+  name: string;
+  default_value: string;
+  description: string;
+  unit?: string | null;
+}
+
+export interface MechanismItem {
+  package_id: string;
+  package_name: string;
+  package_version: string;
+  id: string;
+  title: string;
+  summary: string;
+  category: string;
+  keywords: string[];
+  prompt_block: string;
+  license?: string | null;
+  source_url?: string | null;
+  preview_url?: string | null;
+  parameters: MechanismParameter[];
+}
+
+export interface MechanismPackage {
+  package_id: string;
+  name: string;
+  version: string;
+  license: string;
+  source?: string | null;
+  homepage?: string | null;
+  mechanism_count: number;
+  is_imported: boolean;
+}
+
+export interface MechanismListResponse {
+  packages: MechanismPackage[];
+  mechanisms: MechanismItem[];
+}
+
+export interface MechanismImportReport {
+  package_id: string;
+  package_name: string;
+  installed_count: number;
+  source_url: string;
 }
 
 export interface ProjectFile {

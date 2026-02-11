@@ -14,6 +14,9 @@ import type {
   SkippedStepInfo,
   DesignPlanResult,
   PartSpec,
+  MechanismListResponse,
+  MechanismItem,
+  MechanismImportReport,
 } from '$lib/types';
 
 /**
@@ -307,6 +310,42 @@ export async function executeCode(
   } catch (err) {
     console.error('execute_code failed:', err);
     throw new Error(`Execute code failed: ${err}`);
+  }
+}
+
+export async function listMechanisms(): Promise<MechanismListResponse> {
+  try {
+    return await invoke<MechanismListResponse>('list_mechanisms');
+  } catch (err) {
+    console.error('list_mechanisms failed:', err);
+    throw new Error(`List mechanisms failed: ${err}`);
+  }
+}
+
+export async function searchMechanisms(query: string, limit = 50): Promise<MechanismItem[]> {
+  try {
+    return await invoke<MechanismItem[]>('search_mechanisms', { query, limit });
+  } catch (err) {
+    console.error('search_mechanisms failed:', err);
+    throw new Error(`Search mechanisms failed: ${err}`);
+  }
+}
+
+export async function installMechanismPack(manifestUrl: string): Promise<MechanismImportReport> {
+  try {
+    return await invoke<MechanismImportReport>('install_mechanism_pack', { manifestUrl });
+  } catch (err) {
+    console.error('install_mechanism_pack failed:', err);
+    throw new Error(`Install mechanism pack failed: ${err}`);
+  }
+}
+
+export async function removeMechanismPack(packageId: string): Promise<boolean> {
+  try {
+    return await invoke<boolean>('remove_mechanism_pack', { packageId });
+  } catch (err) {
+    console.error('remove_mechanism_pack failed:', err);
+    throw new Error(`Remove mechanism pack failed: ${err}`);
   }
 }
 

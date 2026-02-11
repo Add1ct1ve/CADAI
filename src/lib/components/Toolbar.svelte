@@ -3,6 +3,7 @@
   import type { MeshCheckResult, OrientResult } from '$lib/services/tauri';
   import MeshCheckPanel from './MeshCheckPanel.svelte';
   import OrientationPanel from './OrientationPanel.svelte';
+  import MechanismCatalog from './MechanismCatalog.svelte';
   import { getComponentStore } from '$lib/stores/component.svelte';
   import { getMateStore } from '$lib/stores/mate.svelte';
   import { getToolStore } from '$lib/stores/tools.svelte';
@@ -43,6 +44,7 @@
   let isBusy = $state(false);
   let statusMessage = $state('');
   let activeDropdown = $state<string | null>(null);
+  let mechanismCatalogOpen = $state(false);
 
   function showStatus(msg: string, duration = 3000) {
     statusMessage = msg;
@@ -57,6 +59,11 @@
 
   function closeDropdowns() {
     activeDropdown = null;
+  }
+
+  function openMechanismCatalog() {
+    closeDropdowns();
+    mechanismCatalogOpen = true;
   }
 
   async function handleNew() {
@@ -796,6 +803,15 @@
       {/if}
     </div>
 
+    <button
+      class="tb"
+      onclick={openMechanismCatalog}
+      disabled={isBusy || scene.codeMode !== 'parametric'}
+      title="Open mechanism catalog"
+    >
+      Mechanisms
+    </button>
+
     <!-- Undo/Redo -->
     <button
       class="tb icon-btn"
@@ -1167,6 +1183,12 @@
     onClose={() => orientResult = null}
   />
 {/if}
+
+<MechanismCatalog
+  open={mechanismCatalogOpen}
+  onClose={() => mechanismCatalogOpen = false}
+  onStatus={(msg) => showStatus(msg)}
+/>
 
 <style>
   /* ── Backdrop for closing dropdowns ── */

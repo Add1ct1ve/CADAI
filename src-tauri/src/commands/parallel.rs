@@ -291,6 +291,18 @@ fn record_generation_trace(
         execution_success: outcome.success,
         retry_attempts: outcome.validation_attempts,
         final_error: outcome.error.clone(),
+        mechanism_candidates: retrieval_result
+            .items
+            .iter()
+            .filter(|i| i.source == "mechanism")
+            .map(|i| i.title.clone())
+            .collect(),
+        mechanism_selected_ids: retrieval_result
+            .items
+            .iter()
+            .filter(|i| i.source == "mechanism")
+            .map(|i| i.id.clone())
+            .collect(),
     };
 
     if let Err(e) = telemetry::write_trace(&trace) {

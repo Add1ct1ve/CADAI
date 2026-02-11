@@ -13,6 +13,7 @@ Persistent caches/volumes:
 - Cargo registry/git
 - Rustup
 - pnpm store
+- `/root/.config/cadai-studio` (settings, telemetry traces, imported mechanism packs)
 
 ## 1) Build image
 
@@ -49,6 +50,16 @@ If you want live generation evaluation, pass a generator adapter command:
 ```bash
 docker compose run --rm cadai bash -lc \"python python/evals/run_eval.py --cases-dir python/evals/cases --generator-cmd './tools/generate_code.sh {prompt_file} {attempt}' --max-attempts 4\"
 ```
+
+## 3c) Verify mechanism catalog + imports
+
+```bash
+docker compose run --rm cadai bash -lc "ls -la mechanisms/core-open-v1 && test -f mechanisms/core-open-v1/manifest.json && echo 'mechanism catalog OK'"
+```
+
+Imported packs are persisted at:
+
+`/root/.config/cadai-studio/mechanisms/imported`
 
 ## 4) Run clippy (known pre-existing failure)
 

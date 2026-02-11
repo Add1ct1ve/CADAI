@@ -160,6 +160,24 @@ pub fn validate_code(code: &str) -> StaticValidationResult {
         );
     }
 
+    let lower = code.to_ascii_lowercase();
+    let mentions_mechanism = [
+        "snap", "hinge", "boss", "gasket", "o_ring", "oring", "detent", "bayonet", "dovetail",
+    ]
+    .iter()
+    .any(|k| lower.contains(k));
+    let has_tolerance_var = lower.contains("clearance")
+        || lower.contains("tolerance")
+        || lower.contains("gap")
+        || lower.contains("fit_delta");
+    if mentions_mechanism && !has_tolerance_var {
+        push_warning(
+            &mut findings,
+            "mechanism_tolerance_missing",
+            "Mechanism-like geometry detected without explicit tolerance/clearance variables.",
+        );
+    }
+
     let passed = findings
         .iter()
         .all(|f| !matches!(f.level, FindingLevel::Error));

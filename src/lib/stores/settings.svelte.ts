@@ -23,6 +23,10 @@ const defaultConfig: AppConfig = {
   retrieval_token_budget: 3500,
   telemetry_enabled: true,
   max_validation_attempts: 4,
+  mechanisms_enabled: true,
+  mechanism_import_enabled: false,
+  mechanism_cache_max_mb: 512,
+  allowed_spdx_licenses: ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'CC0-1.0'],
 };
 
 let config = $state<AppConfig>({ ...defaultConfig });

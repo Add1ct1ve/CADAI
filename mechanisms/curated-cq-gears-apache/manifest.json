@@ -1,0 +1,82 @@
+{
+  "package_id": "curated-cq-gears-apache",
+  "name": "Curated CQ Gears Patterns",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/meadiode/cq_gears",
+  "homepage": "https://github.com/meadiode/cq_gears",
+  "mechanisms": [
+    {
+      "id": "involute_spur_gear_pair",
+      "title": "Involute Spur Gear Pair",
+      "summary": "Matched spur gear pair with parametric module, pressure angle and backlash.",
+      "category": "power_transmission",
+      "keywords": ["gear", "spur", "involute", "backlash"],
+      "prompt_block": "Generate a meshing involute spur gear pair from shared module and pressure angle. Keep tooth counts, bore diameters, face width, and backlash offset as named parameters. Verify center distance from pitch radii.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "helical_gear_pair",
+      "title": "Helical Gear Pair",
+      "summary": "Helical pair with mirrored helix angle and axial alignment.",
+      "category": "power_transmission",
+      "keywords": ["gear", "helical", "helix angle"],
+      "prompt_block": "Build a helical gear pair with opposite helix directions for proper meshing. Parameterize helix angle, module, tooth counts, and face width. Keep backlash and center distance explicit.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "herringbone_gear_pair",
+      "title": "Herringbone Gear Pair",
+      "summary": "Double-helical gears to reduce axial thrust.",
+      "category": "power_transmission",
+      "keywords": ["gear", "herringbone", "double-helical"],
+      "prompt_block": "Create herringbone gears by combining mirrored helical halves. Keep split-plane, half-width, and helix angle parametric. Maintain mesh compatibility and center distance constraints.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "internal_ring_gear_mesh",
+      "title": "Internal Ring Gear Mesh",
+      "summary": "Internal ring gear and mating pinion geometry.",
+      "category": "power_transmission",
+      "keywords": ["ring gear", "internal", "pinion"],
+      "prompt_block": "Model an internal ring gear with mating external pinion. Parameterize rim width, tooth counts, module, and radial clearance. Ensure interference-free rotation envelope.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "planetary_gearset_layout",
+      "title": "Planetary Gearset Layout",
+      "summary": "Sun-planet-ring gearset with configurable number of planets.",
+      "category": "power_transmission",
+      "keywords": ["planetary", "sun gear", "ring gear", "planet"],
+      "prompt_block": "Generate a planetary set using consistent module and tooth relationships. Parameterize sun/planet tooth counts and planet count. Keep carrier bolt-circle and clearances adjustable.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "bevel_gear_pair",
+      "title": "Bevel Gear Pair",
+      "summary": "Conical gear pair for intersecting axes.",
+      "category": "power_transmission",
+      "keywords": ["bevel gear", "right-angle", "conical"],
+      "prompt_block": "Create a bevel gear pair for specified shaft angle. Parameterize module, tooth counts, cone angle, and face width. Keep cone apex alignment and backlash explicit.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "gear_rack_interface",
+      "title": "Gear and Rack Interface",
+      "summary": "Pinion and linear rack conversion mechanism.",
+      "category": "power_transmission",
+      "keywords": ["rack", "pinion", "linear motion"],
+      "prompt_block": "Build a pinion-rack set from shared module and pressure angle. Parameterize rack length, tooth count, and mounting offset. Include backlash control and engagement depth.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    },
+    {
+      "id": "ring_planet_clearance_shell",
+      "title": "Ring-Planet Clearance Shell",
+      "summary": "Clearance envelope for ring and planet carrier motion.",
+      "category": "analysis",
+      "keywords": ["planetary", "clearance", "envelope"],
+      "prompt_block": "Generate clearance envelopes around rotating planet gears inside ring gear. Parameterize radial and axial clearances and report collision-safe shell thickness for housing integration.",
+      "source_url": "https://github.com/meadiode/cq_gears"
+    }
+  ]
+}

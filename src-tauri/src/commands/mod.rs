@@ -2,6 +2,7 @@ pub mod cad;
 pub mod chat;
 pub mod drawing;
 pub mod manufacturing;
+pub mod mechanisms;
 pub mod parallel;
 pub mod project;
 pub mod settings;

@@ -22,6 +22,8 @@ pub struct GenerationTraceV1 {
     pub execution_success: bool,
     pub retry_attempts: Option<u32>,
     pub final_error: Option<String>,
+    pub mechanism_candidates: Vec<String>,
+    pub mechanism_selected_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

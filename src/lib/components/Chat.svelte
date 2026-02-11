@@ -1725,9 +1725,18 @@
     }
   }
 
+  function handleMechanismInsert(e: Event) {
+    const detail = (e as CustomEvent<{ prompt?: string; mechanismId?: string }>).detail;
+    if (!detail?.prompt) return;
+    inputText = inputText.trim()
+      ? `${inputText.trim()}\n\n${detail.prompt}`
+      : detail.prompt;
+  }
+
   onMount(() => {
     window.addEventListener('keydown', handleWindowKeydown);
     window.addEventListener('generation-history:restore', handleHistoryRestore);
+    window.addEventListener('mechanism:insert-prompt', handleMechanismInsert);
 
     // Add welcome message
     chatStore.addMessage({
@@ -1741,6 +1750,7 @@
   onDestroy(() => {
     window.removeEventListener('keydown', handleWindowKeydown);
     window.removeEventListener('generation-history:restore', handleHistoryRestore);
+    window.removeEventListener('mechanism:insert-prompt', handleMechanismInsert);
   });
 </script>
 
