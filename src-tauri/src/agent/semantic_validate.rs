@@ -79,12 +79,16 @@ fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<Strin
     let lower_desc = description.to_lowercase();
     let combined = format!("{} {}", lower_name, lower_desc);
 
-    if combined.contains("back_plate")
-        || combined.contains("back plate")
-        || combined.contains("backplate")
-        || combined.contains("lid")
-        || combined.contains("cover")
-    {
+    // Only require lip/ridge features when the PART NAME indicates it's a
+    // back plate, lid, or cover.  Checking the description would cause false
+    // positives for housing parts whose descriptions reference "back plate"
+    // as a cross-part constraint (e.g. "internal ledge for back plate").
+    let is_plate_name = lower_name.contains("back_plate")
+        || lower_name.contains("backplate")
+        || lower_name.contains("plate")
+        || lower_name.contains("lid")
+        || lower_name.contains("cover");
+    if is_plate_name {
         if combined.contains("lip") {
             hints.push("lip".to_string());
         }
