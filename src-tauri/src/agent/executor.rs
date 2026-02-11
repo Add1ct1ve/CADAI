@@ -564,10 +564,8 @@ fn run_post_geometry_checks(
     }
 
     let expected_euler = (2_u64.saturating_mul(component_count)) as i64;
-    let manifold = watertight
-        && winding_consistent
-        && degenerate_faces == 0
-        && euler_number == expected_euler;
+    let manifold =
+        watertight && winding_consistent && degenerate_faces == 0 && euler_number == expected_euler;
 
     Ok(PostGeometryValidationReport {
         watertight,
