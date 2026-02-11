@@ -10,7 +10,7 @@
   import DesignPlanEditor from './DesignPlanEditor.svelte';
   import MultiPartProgress from './MultiPartProgress.svelte';
   import { PLAN_TEMPLATES } from '$lib/data/plan-templates';
-  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, PartSpec, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult, GenerationEntry } from '$lib/types';
+  import type { ChatMessage, RustChatMessage, MultiPartEvent, PartProgress, PartSpec, IterativeStepProgress, SkippedStepInfo, TokenUsageData, DiffLine, DesignPlanResult, GenerationEntry, PendingAssemblyPart } from '$lib/types';
   import { getGenerationHistoryStore } from '$lib/stores/generationHistory.svelte';
   import { onMount, onDestroy } from 'svelte';
 
@@ -44,6 +44,7 @@
   let lastUserRequest = $state('');
   let assemblyStl = $state<string | null>(null);
   let multiPartPlanParts = $state<PartSpec[]>([]);
+  let multipartImportQueued = $state(false);
   let diffData = $state<{ diff_lines: DiffLine[]; additions: number; deletions: number } | null>(null);
   let isModification = $state(false);
   let isConsensus = $state(false);
@@ -119,6 +120,7 @@
     pendingPlan = null;
     assemblyStl = null;
     multiPartPlanParts = [];
+    multipartImportQueued = false;
   }
 
   async function handleAutoRetry(failedCode: string, errorMessage: string, attempt: number) {
@@ -577,6 +579,29 @@
     return `Generating ${parts.length} parts in parallel:\n${lines.join('\n')}`;
   }
 
+  function normalizePartKey(name: string, index: number): string {
+    const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return normalized || `part_${index}`;
+  }
+
+  function tryQueueMultipartAssemblyImport(): boolean {
+    if (!isMultiPart || multipartImportQueued) return false;
+    if (partProgress.length === 0) return false;
+    const allReady = partProgress.every((p) => p.status === 'complete' && !!p.stl_base64);
+    if (!allReady) return false;
+
+    const parts: PendingAssemblyPart[] = partProgress.map((p, index) => ({
+      part_key: normalizePartKey(multiPartPlanParts[index]?.name ?? p.name, index),
+      name: p.name,
+      stl_base64: p.stl_base64!,
+      position: p.position,
+    }));
+
+    viewportStore.setPendingAssemblyParts(parts);
+    multipartImportQueued = true;
+    return true;
+  }
+
   function formatConsensusProgress(candidates: typeof consensusProgress): string {
     if (candidates.length === 0) return '';
     const lines = candidates.map((c) => {
@@ -664,6 +689,7 @@
     existingCode: string | null,
   ) {
     const myGen = chatStore.generationId;
+    multipartImportQueued = false;
     chatStore.setStreaming(true);
     let streamingContent = '';
     let validatedStl: string | null = null;
@@ -752,7 +778,8 @@
           case 'PartStlReady':
             if (partProgress[event.part_index]) {
               partProgress[event.part_index].stl_base64 = event.stl_base64;
-              if (!assemblyStl) {
+              const imported = tryQueueMultipartAssemblyImport();
+              if (!imported && !assemblyStl) {
                 viewportStore.setPendingStl(event.stl_base64);
               }
             }
@@ -837,6 +864,13 @@
                 ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
                 : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
               chatStore.updateLastMessage(`${last}\n${summary}`);
+            }
+            break;
+
+          case 'PostGeometryValidationWarning':
+            {
+              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+              chatStore.updateLastMessage(`${last}\n${event.message}`);
             }
             break;
 
@@ -955,13 +989,22 @@
 
           case 'Done':
             if (event.validated) backendValidated = true;
+            tryQueueMultipartAssemblyImport();
             break;
         }
       }, existingCode);
 
       if (chatStore.generationId !== myGen) return;
 
-      if (isIterative && validatedStl) {
+      const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport();
+      if (importedMultipart) {
+        chatStore.addMessage({
+          id: generateId(),
+          role: 'system',
+          content: 'Imported multipart result as editable assembly components.',
+          timestamp: Date.now(),
+        });
+      } else if (isIterative && validatedStl) {
         viewportStore.setPendingStl(validatedStl);
       } else if (validatedStl) {
         viewportStore.setPendingStl(validatedStl);
@@ -1138,6 +1181,7 @@
     confidenceData = null;
     assemblyStl = null;
     multiPartPlanParts = [];
+    multipartImportQueued = false;
     lastUserRequest = text;
     generationStartTime = Date.now();
     generationType = 'single';
@@ -1302,7 +1346,8 @@
               if (partProgress[event.part_index]) {
                 partProgress[event.part_index].stl_base64 = event.stl_base64;
                 // Show individual part in viewport if assembly not yet received
-                if (!assemblyStl) {
+                const imported = tryQueueMultipartAssemblyImport();
+                if (!imported && !assemblyStl) {
                   viewportStore.setPendingStl(event.stl_base64);
                 }
               }
@@ -1387,6 +1432,13 @@
                   ? `Geometry checks passed (triangles: ${event.report.triangle_count}).`
                   : `Geometry checks flagged issues: ${event.report.warnings.join('; ')}`;
                 chatStore.updateLastMessage(`${last}\n${summary}`);
+              }
+              break;
+
+            case 'PostGeometryValidationWarning':
+              {
+                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
+                chatStore.updateLastMessage(`${last}\n${event.message}`);
               }
               break;
 
@@ -1522,6 +1574,7 @@
 
             case 'Done':
               if (event.validated) backendValidated = true;
+              tryQueueMultipartAssemblyImport();
               break;
           }
         }, existingCode);
@@ -1529,7 +1582,15 @@
         if (chatStore.generationId !== myGen) return;
 
         // Post-generation execution for modification path
-        if (isIterative && validatedStl) {
+        const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport();
+        if (importedMultipart) {
+          chatStore.addMessage({
+            id: generateId(),
+            role: 'system',
+            content: 'Imported multipart result as editable assembly components.',
+            timestamp: Date.now(),
+          });
+        } else if (isIterative && validatedStl) {
           viewportStore.setPendingStl(validatedStl);
         } else if (isIterative) {
           // Iterative completed (possibly with skipped steps), code already set via FinalCode

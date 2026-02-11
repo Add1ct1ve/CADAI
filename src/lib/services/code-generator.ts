@@ -378,7 +378,8 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   }
 
   // Legacy fallback: original behavior (insertion order)
-  const hasObjects = objects.length > 0;
+  const codegenObjects = objects.filter((o) => !o.importedMeshBase64);
+  const hasObjects = codegenObjects.length > 0;
   const nonEmptySketches = sketches.filter((s) => s.entities.length > 0);
   const hasSketches = nonEmptySketches.length > 0;
 
@@ -388,7 +389,7 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
 
   const lines: string[] = ['import cadquery as cq', ''];
   const componentStore = getComponentStore();
-  const symbolMap = buildSymbolMap(objects, nonEmptySketches, componentStore.components);
+  const symbolMap = buildSymbolMap(codegenObjects, nonEmptySketches, componentStore.components);
 
   // Separate sketches into add-mode and cut-mode
   const addSketches = nonEmptySketches.filter((s) => !s.operation || s.operation.mode === 'add');
@@ -402,7 +403,7 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   }
 
   // Generate objects (primitives)
-  const visibleObjects = objects.filter((o) => o.visible);
+  const visibleObjects = codegenObjects.filter((o) => o.visible);
 
   for (const obj of visibleObjects) {
     const objVar = symbolForFeature(symbolMap, obj.id, 'obj');
@@ -488,12 +489,13 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
 
 /** Feature-tree-ordered code generation */
 function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeFeatureIds: string[]): string {
+  const codegenObjects = objects.filter((o) => !o.importedMeshBase64);
   // Build lookup maps
-  const objMap = new Map(objects.map((o) => [o.id, o]));
+  const objMap = new Map(codegenObjects.map((o) => [o.id, o]));
   const allSketches = sketches.filter((s) => s.entities.length > 0);
   const sketchMap = new Map(allSketches.map((s) => [s.id, s]));
   const compStore = getComponentStore();
-  const symbolMap = buildSymbolMap(objects, allSketches, compStore.components);
+  const symbolMap = buildSymbolMap(codegenObjects, allSketches, compStore.components);
 
   // Categorize features in order
   const addFeatures: Array<{ type: 'object'; obj: SceneObject } | { type: 'sketch'; sketch: Sketch }> = [];

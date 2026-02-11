@@ -91,6 +91,68 @@ def tessellate_result(result, tolerance=0.1):
         sys.exit(4)
 
 
+def _count_face_selector(values):
+    """Count entries for index lists or boolean masks."""
+    try:
+        seq = list(values)
+    except Exception:
+        return 0
+    if not seq:
+        return 0
+    if all(isinstance(v, bool) or type(v).__name__ == "bool_" for v in seq):
+        return int(sum(1 for v in seq if bool(v)))
+    return int(len(seq))
+
+
+def count_degenerate_faces(mesh):
+    """Count degenerate faces across trimesh versions.
+
+    Compatibility order:
+    1. mesh.degenerate_faces (attribute or callable in some versions)
+    2. mesh.nondegenerate_faces (attribute/callable) + face count delta
+    3. area-based fallback from mesh.area_faces
+    """
+    # New/old trimesh variants may expose `degenerate_faces` differently.
+    deg_attr = getattr(mesh, "degenerate_faces", None)
+    if deg_attr is not None:
+        try:
+            deg = deg_attr() if callable(deg_attr) else deg_attr
+            return max(0, _count_face_selector(deg))
+        except Exception:
+            pass
+
+    # Some versions expose only nondegenerate faces.
+    nondeg_attr = getattr(mesh, "nondegenerate_faces", None)
+    if nondeg_attr is not None:
+        try:
+            nondeg = nondeg_attr() if callable(nondeg_attr) else nondeg_attr
+            total = int(len(mesh.faces))
+            nondeg_count = _count_face_selector(nondeg)
+            if 0 <= nondeg_count <= total:
+                return total - nondeg_count
+        except Exception:
+            pass
+
+    # Final fallback: infer degenerate faces from near-zero/non-finite areas.
+    try:
+        areas = getattr(mesh, "area_faces", None)
+        if areas is not None:
+            deg = 0
+            for area in areas:
+                try:
+                    val = float(area)
+                except Exception:
+                    continue
+                if (not math.isfinite(val)) or val <= 1e-12:
+                    deg += 1
+            return int(deg)
+    except Exception:
+        pass
+
+    # Conservative default: unknown means "not detected".
+    return 0
+
+
 def cmd_export_3mf(args):
     """Export model as 3MF with optional per-object colors."""
     if len(args) < 2:
@@ -174,7 +236,7 @@ def cmd_mesh_check(args):
     if not winding:
         issues.append("Inconsistent face winding (flipped normals)")
 
-    degen = int(len(mesh.degenerate_faces))
+    degen = count_degenerate_faces(mesh)
     if degen > 0:
         issues.append(f"{degen} degenerate (zero-area) faces found")
 

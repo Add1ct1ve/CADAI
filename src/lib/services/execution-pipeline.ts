@@ -22,6 +22,11 @@ export function triggerPipeline(delay = 500) {
     const project = getProjectStore();
 
     if (scene.codeMode !== 'parametric') return;
+    const codegenObjects = scene.objects.filter((o) => !o.importedMeshBase64);
+    const hasSketchGeometry = sketchStore.sketches.some((s) => s.entities.length > 0);
+    // Imported STL parts are preview/edit references, not codegen primitives.
+    // If they are the only content, keep the existing generated code untouched.
+    if (codegenObjects.length === 0 && hasSketchGeometry === false) return;
 
     const featureTree = getFeatureTreeStore();
     const code = generateCode(scene.objects, sketchStore.sketches, featureTree.activeFeatureIds);
@@ -43,9 +48,13 @@ export async function runPythonExecution() {
 
   // Always generate fresh code from scene if in parametric mode
   if (scene.codeMode === 'parametric') {
+    const codegenObjects = scene.objects.filter((o) => !o.importedMeshBase64);
+    const hasSketchGeometry = sketchStore.sketches.some((s) => s.entities.length > 0);
     const featureTree = getFeatureTreeStore();
-    const code = generateCode(scene.objects, sketchStore.sketches, featureTree.activeFeatureIds);
-    project.setCode(code);
+    if (codegenObjects.length > 0 || hasSketchGeometry) {
+      const code = generateCode(scene.objects, sketchStore.sketches, featureTree.activeFeatureIds);
+      project.setCode(code);
+    }
   }
 
   const code = project.code;
