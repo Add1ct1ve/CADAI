@@ -197,12 +197,16 @@ pub fn maybe_template_for_part(part_name: &str, description: &str) -> Option<Fal
     let lower_desc = description.to_lowercase();
     let combined = format!("{} {}", lower_name, lower_desc);
 
-    if combined.contains("back_plate")
+    // Check for explicit back-plate/cover/lid keywords.
+    // Use word-boundary matching for short words ("lid", "cover") to avoid false
+    // positives from substrings (e.g. "solid" contains "lid").
+    let is_plate_part = combined.contains("back_plate")
         || combined.contains("back plate")
         || combined.contains("backplate")
-        || combined.contains("cover")
-        || combined.contains("lid")
-    {
+        || regex::Regex::new(r"\bcover\b").unwrap().is_match(&combined)
+        || regex::Regex::new(r"\blid\b").unwrap().is_match(&combined);
+
+    if is_plate_part {
         return Some(plate_with_lip_ridge_template(part_name, description));
     }
     if combined.contains("snap") && combined.contains("box") {
@@ -299,5 +303,34 @@ mod tests {
             .expect("fallback plan should be selected");
         assert_eq!(plan.template_id, "enclosure_with_back_plate");
         assert!(plan.plan_text.contains("### Build Plan"));
+    }
+
+    #[test]
+    fn whoop_prompt_matches_housing_template() {
+        let tpl = maybe_template_for_part(
+            "housing",
+            "Single editable housing solid. Footprint 42x28mm, wall 1.8mm. Include ledge, O-ring groove, two end slots, solid side button indicator.",
+        )
+        .expect("Whoop housing description should match housing template");
+        // Previously this failed because "solid" contains substring "lid" — fixed with word-boundary matching
+        assert_eq!(tpl.template_id, "simple_housing_with_slots");
+    }
+
+    #[test]
+    fn whoop_prompt_matches_backplate_template() {
+        let tpl = maybe_template_for_part(
+            "back_plate",
+            "Single editable back plate solid. Base 30x24mm, thickness 1.5mm. Add insertion lip and O-ring ridge.",
+        )
+        .expect("Whoop back_plate description should match plate template");
+        assert_eq!(tpl.template_id, "plate_with_lip_ridge");
+    }
+
+    #[test]
+    fn whoop_prompt_triggers_fallback_plan() {
+        let whoop_request = "Create a fully parametric, editable CAD model of a wrist-worn fitness tracker housing with a snap-fit back plate";
+        let plan = maybe_fallback_plan(whoop_request)
+            .expect("Whoop-style request should trigger enclosure fallback plan");
+        assert_eq!(plan.template_id, "enclosure_with_back_plate");
     }
 }
