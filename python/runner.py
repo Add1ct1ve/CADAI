@@ -183,6 +183,64 @@ def _normalize_result_for_export(result, cq):
     return cq.Compound.makeCompound(exportables)
 
 
+def _indent_width(line):
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4
+        else:
+            break
+    return width
+
+
+def _is_try_header(stripped):
+    header = stripped.split("#", 1)[0].rstrip()
+    if not header.endswith(":"):
+        return False
+    head = header[:-1].strip()
+    return head == "try" or head.startswith("except") or head == "else" or head == "finally"
+
+
+def guard_fillet_chamfer(code):
+    """
+    Wrap unguarded .fillet()/.chamfer() lines in try/except blocks.
+    Line-based and indentation-aware; does not parse multi-line statements.
+    """
+    lines = code.splitlines()
+    protected = []
+    out = []
+
+    for line in lines:
+        stripped = line.lstrip()
+        indent = _indent_width(line)
+
+        if stripped:
+            while protected and indent <= protected[-1]:
+                protected.pop()
+
+        in_try = bool(protected) and indent > protected[-1]
+        has_fillet = ".fillet(" in line or ".chamfer(" in line
+        is_comment = stripped.startswith("#")
+        already_guarded = "auto-fillet-guard" in line
+
+        if has_fillet and not in_try and not is_comment and stripped and not already_guarded:
+            indent_str = line[: len(line) - len(stripped)]
+            out.append(f"{indent_str}# auto-fillet-guard")
+            out.append(f"{indent_str}try:")
+            out.append(f"{indent_str}    {stripped}")
+            out.append(f"{indent_str}except Exception:")
+            out.append(f"{indent_str}    pass")
+        else:
+            out.append(line)
+
+        if stripped and _is_try_header(stripped):
+            protected.append(indent)
+
+    return "\n".join(out)
+
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: runner.py <input_file> <output_stl_file>", file=sys.stderr)
@@ -197,6 +255,8 @@ def main():
 
     with open(input_file, "r", encoding="utf-8") as f:
         code = f.read()
+
+    code = guard_fillet_chamfer(code)
 
     # Execute the CadQuery code
     namespace = {}
