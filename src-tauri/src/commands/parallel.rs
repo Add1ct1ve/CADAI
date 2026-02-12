@@ -430,7 +430,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
   "parts": [
     {
       "name": "snake_case_name",
-      "description": "Compact geometric description (max ~280 chars) in mm. State robust primary path + optional high-fidelity fallback path. Keep it concise and self-contained.",
+      "description": "Detailed geometric description in mm. Include all critical dimensions, wall thicknesses, operation sequence, and mating surface specs. Must be self-contained.",
       "position": [x, y, z],
       "constraints": ["any constraints like 'inner diameter must match outer diameter of part X'"]
     }
@@ -452,8 +452,10 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 - Include geometric detail from the design plan: profiles, cross-sections, radii
 - Use reliability-first phrasing for the primary path (prefer extrude + cut/union + explicit intermediates)
 - Mention shell+loft only as optional fallback when absolutely required
-- Keep each part `description` short (single paragraph, <= 280 chars) to avoid truncation.
-- Each part description must be self-contained (another AI must be able to build it without other context)
+- Each part description must be self-contained (another AI must be able to build it without seeing other parts)
+- Include ALL dimensions (length, width, height, wall thickness, radii, hole diameters)
+- Specify mating surface dimensions explicitly (e.g. "inner bore 42mm to receive part X's 42mm OD")
+- Aim for 2-4 sentences per part; do not truncate critical dimensions
 
 Rules:
 - Part names must be valid Python identifiers (snake_case)
@@ -476,19 +478,51 @@ fn reliability_policy_text(profile: &crate::config::GenerationReliabilityProfile
     }
 }
 
+/// Extract dimensional constraints that reference mating surfaces between parts.
+fn extract_dimensional_dependencies(constraints: &[String]) -> String {
+    let dim_re = Regex::new(r"(\d+(?:\.\d+)?)\s*mm").unwrap();
+    let mating_keywords = ["match", "fit", "mate", "diameter", "width", "height", "align", "receive", "bore", "OD", "ID"];
+
+    let relevant: Vec<&String> = constraints
+        .iter()
+        .filter(|c| {
+            let lower = c.to_lowercase();
+            dim_re.is_match(c) && mating_keywords.iter().any(|kw| lower.contains(&kw.to_lowercase()))
+        })
+        .collect();
+
+    if relevant.is_empty() {
+        return String::new();
+    }
+
+    let mut section = String::from("\n\n## Mating Dimensions (MUST MATCH EXACTLY)\n");
+    for constraint in relevant {
+        section.push_str(&format!("- {}\n", constraint));
+    }
+    section
+}
+
 fn build_part_prompt(
     system_prompt: &str,
     part: &PartSpec,
     design_context: &str,
     config: &crate::config::AppConfig,
 ) -> String {
+    let constraints_text = part.constraints
+        .iter()
+        .map(|c| format!("- {}", c))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mating_dims = extract_dimensional_dependencies(&part.constraints);
+
     format!(
         "{}\n\n\
         ## Geometry Design Context\n{}\n\n\
         ## IMPORTANT: You are generating ONE SPECIFIC PART of a multi-part assembly.\n\n\
         Generate ONLY this part: **{}**\n\n\
         Description: {}\n\n\
-        Constraints:\n{}\n\n\
+        Constraints:\n{}\n\
+        {}\n\n\
         Active reliability policy: {}\n\
         Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\
         The final result variable MUST contain ONLY this single part.\n\
@@ -511,11 +545,8 @@ fn build_part_prompt(
         design_context,
         part.name,
         part.description,
-        part.constraints
-            .iter()
-            .map(|c| format!("- {}", c))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        constraints_text,
+        mating_dims,
         reliability_policy_text(&config.generation_reliability_profile),
     )
 }
@@ -786,7 +817,7 @@ async fn build_system_prompt_with_retrieval(
     session_context: Option<String>,
     on_event: &Channel<MultiPartEvent>,
 ) -> (String, retrieval::RetrievalResult) {
-    let base = prompts::build_compact_system_prompt_for_preset(
+    let base = prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version,
     );
@@ -1073,7 +1104,7 @@ async fn run_generation_pipeline(
         } else {
             let retry_instruction = format!(
                 "Your previous response could not be parsed as JSON ({:?}). Return ONLY valid compact JSON now. \
-                 Keep each part description <= 280 chars. No markdown, no prose.\n\nPrevious response:\n{}",
+                 Include all critical dimensions in each part description. No markdown, no prose.\n\nPrevious response:\n{}",
                 last_parse_err,
                 planner_response.chars().take(2500).collect::<String>()
             );
@@ -1910,6 +1941,167 @@ async fn run_generation_pipeline(
                             part_name: name,
                             success: false,
                             error: Some(format!("Rejected in per-part acceptance: {}", e)),
+                        });
+                    }
+                }
+            }
+        }
+
+        // --- Retry failed parts from scratch with error context ---
+        let failed_indices: Vec<usize> = part_codes
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.is_none())
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if !failed_indices.is_empty() {
+            let _ = on_event.send(MultiPartEvent::PlanStatus {
+                message: format!(
+                    "Retrying {} failed part(s) from scratch with error context...",
+                    failed_indices.len()
+                ),
+            });
+
+            for &failed_idx in &failed_indices {
+                let part_spec = &plan.parts[failed_idx];
+                let first_error = part_failure_signatures
+                    .get(failed_idx)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown error".to_string());
+
+                let retry_prompt = format!(
+                    "{}\n\n\
+                    ## RETRY CONTEXT\n\
+                    A previous attempt to generate this part FAILED with error:\n\
+                    ```\n{}\n```\n\n\
+                    Use simpler, more robust CadQuery operations. Avoid shell(), loft(), \
+                    and blanket fillet(). Prefer box/cylinder primitives with boolean cut/union.\n\n\
+                    {}",
+                    system_prompt,
+                    first_error.chars().take(1500).collect::<String>(),
+                    build_part_prompt("", part_spec, plan_text, config)
+                );
+
+                let retry_messages = vec![
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: retry_prompt,
+                    },
+                    ChatMessage {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Generate the CadQuery code for: {}. \
+                            Use only robust primitives and boolean operations.",
+                            part_spec.description
+                        ),
+                    },
+                ];
+
+                let retry_provider = match create_provider(config) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: format!("Retry-generating part '{}'...", part_spec.name),
+                });
+
+                match retry_provider.complete(&retry_messages, None).await {
+                    Ok((response, usage)) => {
+                        if let Some(ref u) = usage {
+                            total_usage.add(u);
+                        }
+                        if let Some(code) = extract_code_from_response(&response) {
+                            let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
+                                part_index: failed_idx,
+                                part_name: part_spec.name.clone(),
+                                code: code.clone(),
+                            });
+
+                            let part_request = part_spec.description.clone();
+                            let semantic_contract =
+                                semantic_validate::build_default_contract(&part_spec.name, &part_request);
+                            let preview_ctx = executor::ExecutionContext {
+                                venv_dir: ctx.venv_dir.clone(),
+                                runner_script: ctx.runner_script.clone(),
+                                config: config.clone(),
+                            };
+
+                            match evaluate_part_acceptance(
+                                &code,
+                                &preview_ctx,
+                                system_prompt,
+                                &part_request,
+                                &part_spec.name,
+                                Some(&semantic_contract),
+                            )
+                            .await
+                            {
+                                Ok(artifact) => {
+                                    let _ = on_event.send(MultiPartEvent::SemanticValidationReport {
+                                        part_name: part_spec.name.clone(),
+                                        passed: true,
+                                        findings: artifact.semantic_findings.clone(),
+                                    });
+                                    if let Some(stage) = artifact.retry_ladder_stage_reached {
+                                        accepted_retry_stage = Some(
+                                            accepted_retry_stage.map(|s| s.max(stage)).unwrap_or(stage),
+                                        );
+                                    }
+                                    if let Some(ref report) = artifact.post_geometry_report {
+                                        let _ = on_event.send(
+                                            MultiPartEvent::PostGeometryValidationReport {
+                                                report: report.clone(),
+                                            },
+                                        );
+                                    }
+                                    if config.preview_on_partial_failure {
+                                        if let Some(stl_base64) = artifact.stl_base64.clone() {
+                                            partial_preview_available = true;
+                                            let _ = on_event.send(MultiPartEvent::PartStlReady {
+                                                part_index: failed_idx,
+                                                part_name: part_spec.name.clone(),
+                                                stl_base64,
+                                            });
+                                        }
+                                    }
+                                    let position = part_spec.position;
+                                    part_codes[failed_idx] = Some((
+                                        part_spec.name.clone(),
+                                        artifact.code.clone(),
+                                        position,
+                                    ));
+                                    accepted_parts.push((
+                                        part_spec.name.clone(),
+                                        artifact.code,
+                                        position,
+                                    ));
+                                    any_success = true;
+                                    let _ = on_event.send(MultiPartEvent::PartComplete {
+                                        part_index: failed_idx,
+                                        part_name: part_spec.name.clone(),
+                                        success: true,
+                                        error: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = on_event.send(MultiPartEvent::PlanStatus {
+                                        message: format!(
+                                            "Retry for '{}' also failed acceptance: {}",
+                                            part_spec.name, e
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = on_event.send(MultiPartEvent::PlanStatus {
+                            message: format!(
+                                "Retry generation for '{}' failed: {}",
+                                part_spec.name, e
+                            ),
                         });
                     }
                 }
@@ -3189,7 +3381,7 @@ pub async fn retry_skipped_steps(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let mut system_prompt = crate::agent::prompts::build_compact_system_prompt_for_preset(
+    let mut system_prompt = crate::agent::prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
     );
@@ -3357,7 +3549,7 @@ pub async fn retry_part(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let mut system_prompt = prompts::build_compact_system_prompt_for_preset(
+    let mut system_prompt = prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
     );
