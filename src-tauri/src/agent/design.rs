@@ -1,14 +1,15 @@
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::config::GenerationReliabilityProfile;
 use crate::error::AppError;
 
-/// Result of prompt triage before plan generation.
-#[derive(Debug, Clone, Serialize)]
-pub struct PromptClarityAnalysis {
+/// Result of the fast prompt triage that determines whether a user request
+/// has enough detail for CadQuery code generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptAnalysis {
     pub needs_clarification: bool,
     pub questions: Vec<String>,
     pub enriched_prompt: Option<String>,
@@ -41,29 +42,10 @@ pub struct PlanRiskSignals {
     pub repair_sensitive_ops: Vec<String>,
 }
 
-/// Fast prompt triage. Currently conservative: only flags empty prompts.
-pub async fn analyze_prompt_clarity(
-    _provider: Box<dyn AiProvider>,
-    message: &str,
-) -> Result<PromptClarityAnalysis, AppError> {
-    if message.trim().is_empty() {
-        return Ok(PromptClarityAnalysis {
-            needs_clarification: true,
-            questions: vec!["What should the object be?".to_string()],
-            enriched_prompt: None,
-        });
-    }
-
-    Ok(PromptClarityAnalysis {
-        needs_clarification: false,
-        questions: vec![],
-        enriched_prompt: None,
-    })
-}
 
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.
 
-You must think carefully about what the object actually looks like and how to build it with CadQuery primitives. Do NOT write any code — describe the geometry.
+You must think carefully about what the object actually looks like. Describe geometry by shape, dimensions, and spatial relationships. Do NOT write code or specify construction methods — the code generator will choose the best approach.
 Do not include hidden reasoning, self-critique, or internal deliberation in the output.
 Output only the final plan sections listed below.
 The first line of your response MUST be exactly: `### Object Analysis`
@@ -75,19 +57,20 @@ Wrap the entire response in `<PLAN>...</PLAN>` tags.
 ### Object Analysis
 Describe what this object looks like in the real world. What are its key visual features? What are its proportions? What makes it recognizable?
 
-### CadQuery Approach
-Which CadQuery primitives and operations best approximate each feature? Be specific:
-- Prefer robust primary path first: extrude + cut/union with explicit intermediate solids
-- Use loft()/sweep()/revolve() only when clearly necessary for geometry
-- For enclosure-like objects, avoid `shell()` on lofted bodies in first pass
-- For optional fidelity upgrade, describe a fallback path separately
+### Geometry Breakdown
+Describe each feature by its geometric shape, dimensions, and spatial relationship to other features:
+- Use shape vocabulary: rectangular, cylindrical, spherical, conical, domed, tapered, flat, curved, hollow, etc.
+- Specify positions relative to the base or other features (centered on top face, offset 5mm from left edge, etc.)
+- Do NOT name CadQuery operations — the code generator chooses the construction method
+- For enclosure-like objects, describe wall thickness, cavity dimensions, and opening positions
 
 ### Build Plan
-Number each step. Be specific about dimensions and positions:
-1. Start with [base shape] — dimensions: X×Y×Z mm
-2. Add [feature] using [operation] — positioned at (x, y, z)
-3. Cut [opening] using [method] — dimensions and position
-...
+Number each step. Describe the resulting shape, NOT the construction method:
+1. Base body: [shape] — X×Y×Z mm
+2. [feature name]: [shape description] — dimensions, positioned at (x, y, z)
+3. [feature name]: [shape description] — dimensions and position
+Example — WRONG: "Revolve a semi-circular arc (r=6.25mm) around X-axis to create dome"
+Example — RIGHT: "Smooth dome on top surface — 7.5mm at center, tapering to 5mm at edges"
 
 ### Approximation Notes
 What can't CadQuery do perfectly? What's the closest buildable shape? Where should fillets be applied to smooth transitions?
@@ -96,14 +79,17 @@ What can't CadQuery do perfectly? What's the closest buildable shape? Where shou
 - Think about CROSS-SECTIONS: describe the profile shape at key heights
 - Think about PROPORTIONS: a helmet is roughly 200mm tall, a phone is ~150mm long, etc.
 - Think about what makes the object RECOGNIZABLE — which features are essential vs decorative
-- For organic shapes: plan by cross-section at multiple heights, then use loft or revolve
-- For mechanical parts: plan by feature (base → holes → slots → fillets)
-- Prefer approaches that are ROBUST in CadQuery (box+cylinder+booleans > complex lofts)
-- Reliability-first default: prefer "outer solid + inner subtract" for enclosures over `shell()` on lofted geometry
+- For organic shapes: describe cross-sections at multiple heights (shape and dimensions at each level)
+- For mechanical parts: describe features in order of size (base → large features → small details)
+- Prefer simple describable shapes (boxes, cylinders, cones) over complex freeform surfaces
+- For enclosures: describe outer dimensions, wall thickness, and cavity shape — NOT the construction method
 - Defer fillets/chamfers to optional last-step polish with fallback behavior
-- For enclosure-like objects, include BOTH:
-  1) a primary robust build path
-  2) a fallback build path if the primary fails
+- For enclosure-like objects, describe the hollow body as: outer dimensions, wall thickness per side, cavity dimensions, and which faces are open — NEVER use the word "shell" as a construction verb
+- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT specify CadQuery operations, construction methods, or API calls — the code generator picks the best approach from its pattern library
+- WRONG: "revolve a semi-circular arc around X-axis", "use loft between cross-sections", "boolean subtract a cylinder"
+- RIGHT: "dome shape on top, 7.5mm tall at center", "tapered tube from 20mm to 12mm diameter", "cylindrical hole, 8mm diameter, through the top face"
+- WRONG: "Shell the body from the bottom face with 1.8mm walls"
+- RIGHT: "The body is hollow with 1.8mm side walls and 1.5mm top wall, open at the bottom"
 - If the request is simple (e.g. "a box" or "a cylinder"), keep the plan brief — 2-3 lines is fine
 - NEVER write Python or CadQuery code — only describe geometry in plain English"#;
 
@@ -292,11 +278,11 @@ fn has_shell_operation(text: &str) -> bool {
     {
         return true;
     }
-    // Common CAD phrasing: "shell from bottom face", "shell with thickness 2mm", "shelling"
-    if Regex::new(r"\bshell\s+(?:from|with)\b")
+    // Common CAD phrasing: "shell from bottom face", "shelled from bottom", "shell with thickness 2mm", "shelling", "shelled"
+    if Regex::new(r"\bshell(?:ed)?\s+(?:from|with)\b")
         .unwrap()
         .is_match(&lower)
-        || Regex::new(r"\bshelling\b").unwrap().is_match(&lower)
+        || Regex::new(r"\bshell(?:ing|ed)\b").unwrap().is_match(&lower)
     {
         return true;
     }
@@ -561,7 +547,7 @@ fn sanitize_plan_text(plan_text: &str) -> String {
         n
     } else {
         let heading_re = Regex::new(
-            r"(?im)^#{2,3}\s+(object analysis|housing analysis|cadquery approach|modeling approach|cad approach|build plan|build plan structure|build steps|implementation steps|approximation notes)\s*$",
+            r"(?im)^#{2,3}\s+(object analysis|housing analysis|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan|build plan structure|build steps|implementation steps|approximation notes)\s*$",
         )
         .unwrap();
         if let Some(m) = heading_re.find(plan_text) {
@@ -724,7 +710,7 @@ fn canonicalize_plan_sections(plan_text: &str) -> String {
 fn normalize_section_labels(plan_text: &str) -> Option<String> {
     fn parse_section_label_line(line: &str) -> Option<(&'static str, String)> {
         let re = Regex::new(
-            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|housing analysis|cadquery approach|modeling approach|cad approach|build plan(?: structure)?|build steps|implementation steps|approximation notes)[*_`#\s]*:?\s*(.*)$",
+            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|housing analysis|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan(?: structure)?|build steps|implementation steps|approximation notes)[*_`#\s]*:?\s*(.*)$",
         )
         .unwrap();
         let caps = re.captures(line)?;
@@ -737,6 +723,7 @@ fn normalize_section_labels(plan_text: &str) -> Option<String> {
         let label = if raw_label == "object analysis" || raw_label == "housing analysis" {
             "Object Analysis"
         } else if raw_label == "cadquery approach"
+            || raw_label == "geometry breakdown"
             || raw_label == "modeling approach"
             || raw_label == "cad approach"
         {
@@ -845,6 +832,7 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
         ],
         "cadquery approach" => vec![
             "cadquery approach".to_string(),
+            "geometry breakdown".to_string(),
             "modeling approach".to_string(),
             "cad approach".to_string(),
         ],
@@ -961,6 +949,14 @@ pub fn validate_plan_with_profile(
 
     let mut risk: u32 = 0;
     let mut warnings: Vec<String> = Vec::new();
+
+    // Rule 0: shell verb in plan is always rejected — planner must describe geometry, not operations
+    if has_shell {
+        risk += 4;
+        warnings.push(
+            "plan uses 'shell' as a construction verb — describe the hollow geometry instead (wall thickness, cavity dimensions, open faces)".to_string()
+        );
+    }
 
     if negation_conflict {
         risk += 1;
@@ -1223,11 +1219,11 @@ pub fn build_rejection_feedback(validation: &PlanValidation) -> String {
 
     feedback.push_str(
         "**Instructions for revision:**\n\
-         - Use simpler operations where possible (prefer box+cylinder+booleans over complex lofts)\n\
+         - Describe shapes only — do NOT name operations (no 'shell', 'loft', 'revolve', 'sweep')\n\
          - For enclosure-type objects, include a primary robust path and a fallback path\n\
          - Use realistic, achievable dimensions\n\
          - Apply fillets and chamfers as the LAST operations\n\
-         - Output EXACTLY these headings: `### Object Analysis`, `### CadQuery Approach`, `### Build Plan`, `### Approximation Notes`\n\
+         - Output EXACTLY these headings: `### Object Analysis`, `### Geometry Breakdown`, `### Build Plan`, `### Approximation Notes`\n\
          - Include numbered steps in Build Plan (`1.`, `2.`, `3.`)\n\
          - Do NOT include any preamble text before `### Object Analysis`\n"
     );
@@ -1279,6 +1275,109 @@ pub async fn plan_geometry_with_feedback(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Prompt triage
+// ---------------------------------------------------------------------------
+
+const PROMPT_TRIAGE_SYSTEM: &str = r#"You are a CAD prompt triage assistant. Evaluate whether a user's request has enough detail to generate accurate CadQuery geometry.
+
+Return JSON only: {"clear": true/false, "questions": ["..."], "enriched_prompt": "..."}
+
+Mark as CLEAR (no questions needed) when:
+- Simple primitives with dimensions ("10mm cube", "cylinder 20mm diameter 50mm tall")
+- Requests with specific standards ("M8x30 hex bolt", "ISO 4762 M6x20")
+- Sufficient dimensions and shape description provided
+- Modifications to existing code ("make it taller", "add a hole")
+
+Mark as NEEDS CLARIFICATION when:
+- Part type is ambiguous ("make a bolt" — what size? what head type?)
+- No dimensions given for non-trivial geometry ("make a gear")
+- Missing critical parameters (thread pitch, wall thickness, tolerances)
+- Object could mean many different things ("make a bracket")
+
+Rules:
+- Ask 2-4 specific, concise questions maximum
+- Suggest sensible defaults in each question (e.g. "Thread size? (common: M6, M8, M10)")
+- If the prompt is even somewhat specific, lean toward CLEAR — don't over-ask
+- Never ask about material, color, or non-geometric properties
+- When clear, provide enriched_prompt with explicit dimensions/specs inferred from context
+- When not clear, set enriched_prompt to null and questions to a list of clarifying questions"#;
+
+/// Fast AI triage call that determines whether the user's prompt has enough
+/// detail for CadQuery code generation, or needs clarifying questions first.
+///
+/// On parse failure or AI error, defaults to `needs_clarification: false`
+/// so that triage failures never block the pipeline.
+pub async fn analyze_prompt_clarity(
+    provider: Box<dyn AiProvider>,
+    user_request: &str,
+) -> Result<PromptAnalysis, AppError> {
+    let messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: PROMPT_TRIAGE_SYSTEM.to_string(),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: user_request.to_string(),
+        },
+    ];
+
+    let result = provider.complete(&messages, Some(300)).await;
+
+    match result {
+        Ok((response, _usage)) => Ok(parse_triage_response(&response)),
+        Err(_) => {
+            // Graceful degradation: don't block on triage errors
+            Ok(PromptAnalysis {
+                needs_clarification: false,
+                questions: vec![],
+                enriched_prompt: None,
+            })
+        }
+    }
+}
+
+/// Parse the JSON response from the triage AI call.
+/// Falls back to "clear" on any parse error.
+fn parse_triage_response(response: &str) -> PromptAnalysis {
+    // Try to extract JSON from the response (may have markdown code fences)
+    let json_str = if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            &response[start..=end]
+        } else {
+            response
+        }
+    } else {
+        response
+    };
+
+    #[derive(Deserialize)]
+    struct TriageJson {
+        clear: bool,
+        #[serde(default)]
+        questions: Vec<String>,
+        enriched_prompt: Option<String>,
+    }
+
+    match serde_json::from_str::<TriageJson>(json_str) {
+        Ok(parsed) => PromptAnalysis {
+            needs_clarification: !parsed.clear,
+            questions: parsed.questions,
+            enriched_prompt: parsed.enriched_prompt,
+        },
+        Err(_) => PromptAnalysis {
+            needs_clarification: false,
+            questions: vec![],
+            enriched_prompt: None,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Geometry advisor
+// ---------------------------------------------------------------------------
+
 /// Call the AI to produce a geometry design plan for the user's request.
 ///
 /// This is the "design-first" phase that runs before code generation,
@@ -1327,7 +1426,7 @@ mod tests {
         assert!(GEOMETRY_ADVISOR_PROMPT.contains("geometry planner"));
         assert!(GEOMETRY_ADVISOR_PROMPT.contains("Build Plan"));
         assert!(GEOMETRY_ADVISOR_PROMPT.contains("Object Analysis"));
-        assert!(GEOMETRY_ADVISOR_PROMPT.contains("CadQuery Approach"));
+        assert!(GEOMETRY_ADVISOR_PROMPT.contains("Geometry Breakdown"));
         assert!(GEOMETRY_ADVISOR_PROMPT.contains("NEVER write Python"));
     }
 
@@ -2040,6 +2139,45 @@ overhangs:
             .warnings
             .iter()
             .any(|w| w.contains("ambiguous operation intent")));
+    }
+
+    #[test]
+    fn test_extract_operations_shelled_past_tense_detected() {
+        let text = "Shelled from bottom with side wall thickness=1.8mm";
+        let ops = extract_operations(text);
+        assert!(
+            ops.contains(&"shell".to_string()),
+            "'Shelled from bottom' (past tense) should be detected as shell operation"
+        );
+
+        let text2 = "The body was shelled to create a cavity.";
+        let ops2 = extract_operations(text2);
+        assert!(
+            ops2.contains(&"shell".to_string()),
+            "'shelled' (past tense standalone) should be detected as shell operation"
+        );
+    }
+
+    #[test]
+    fn test_shell_verb_in_plan_rejected_standalone() {
+        // Shell verb alone should add +4 risk, which combined with missing sections
+        // should cause rejection under Balanced profile (threshold 7)
+        let text = r#"### Object Analysis
+- An enclosure.
+### CadQuery Approach
+- Robust path.
+### Build Plan
+1. Extrude a 60x40x30mm box.
+2. Shell from bottom face with 1.8mm wall.
+### Approximation Notes
+- None."#;
+        let v = validate_plan_with_profile(text, &GenerationReliabilityProfile::Balanced);
+        assert!(
+            v.warnings.iter().any(|w| w.contains("plan uses 'shell' as a construction verb")),
+            "should warn about shell verb in plan: {:?}",
+            v.warnings
+        );
+        assert!(v.risk_score >= 4, "shell verb alone should add at least +4 risk, got {}", v.risk_score);
     }
 
     #[test]

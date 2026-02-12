@@ -92,13 +92,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub reviewer_mode: ReviewerMode,
     #[serde(default = "default_true")]
-    pub deterministic_fallback_enabled: bool,
-    #[serde(
-        default = "default_fallback_after_part_failures",
-        alias = "fallback_after_plan_failures"
-    )]
-    pub fallback_after_part_failures: u32,
-    #[serde(default = "default_true")]
     pub quality_gates_strict: bool,
     #[serde(default = "default_true")]
     pub allow_euler_override: bool,
@@ -154,10 +147,6 @@ fn default_max_generation_runtime_seconds() -> u32 {
     600
 }
 
-fn default_fallback_after_part_failures() -> u32 {
-    3
-}
-
 fn default_mechanism_cache_max_mb() -> u32 {
     512
 }
@@ -201,8 +190,6 @@ impl Default for AppConfig {
             max_generation_runtime_seconds: default_max_generation_runtime_seconds(),
             semantic_contract_strict: true,
             reviewer_mode: ReviewerMode::default(),
-            deterministic_fallback_enabled: true,
-            fallback_after_part_failures: default_fallback_after_part_failures(),
             quality_gates_strict: true,
             allow_euler_override: true,
             semantic_bbox_mode: SemanticBboxMode::default(),

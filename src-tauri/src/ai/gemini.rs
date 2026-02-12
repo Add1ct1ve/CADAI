@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
+use crate::ai::retry;
 use crate::ai::streaming::parse_sse_events;
 use crate::error::AppError;
 
@@ -168,26 +169,17 @@ impl AiProvider for GeminiProvider {
     ) -> Result<(String, Option<TokenUsage>), AppError> {
         let body = self.build_request(messages);
 
-        let response = self
-            .client
-            .post(&self.generate_endpoint())
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Gemini API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(&self.generate_endpoint())
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            },
+            "Gemini",
+            3,
+        )
+        .await?;
 
         let resp: GeminiResponse = response
             .json()
@@ -229,26 +221,17 @@ impl AiProvider for GeminiProvider {
     ) -> Result<Option<TokenUsage>, AppError> {
         let body = self.build_request(messages);
 
-        let response = self
-            .client
-            .post(&self.stream_endpoint())
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Gemini API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(&self.stream_endpoint())
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            },
+            "Gemini",
+            3,
+        )
+        .await?;
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();

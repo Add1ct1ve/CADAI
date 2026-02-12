@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
+use crate::ai::retry;
 use crate::error::AppError;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
@@ -119,26 +120,17 @@ impl AiProvider for OllamaProvider {
             options,
         };
 
-        let response = self
-            .client
-            .post(&self.chat_endpoint())
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Ollama API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(&self.chat_endpoint())
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            },
+            "Ollama",
+            3,
+        )
+        .await?;
 
         let resp: OllamaResponse = response
             .json()
@@ -184,26 +176,17 @@ impl AiProvider for OllamaProvider {
             options,
         };
 
-        let response = self
-            .client
-            .post(&self.chat_endpoint())
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Ollama API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(&self.chat_endpoint())
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            },
+            "Ollama",
+            3,
+        )
+        .await?;
 
         // Ollama uses NDJSON: each line is a complete JSON object.
         let mut byte_stream = response.bytes_stream();
