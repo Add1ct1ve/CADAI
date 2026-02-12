@@ -431,7 +431,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
   "parts": [
     {
       "name": "snake_case_name",
-      "description": "Detailed geometric description in mm. Include all critical dimensions, wall thicknesses, operation sequence, and mating surface specs. Must be self-contained.",
+      "description": "Detailed geometric description in mm. Include all critical dimensions, wall thicknesses, and mating surface specs. Must be self-contained.",
       "position": [x, y, z],
       "constraints": ["any constraints like 'inner diameter must match outer diameter of part X'"]
     }
@@ -451,8 +451,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 ## Part description requirements (multi mode only)
 - Include all dimensions in mm
 - Include geometric detail from the design plan: profiles, cross-sections, radii
-- Use reliability-first phrasing for the primary path (prefer extrude + cut/union + explicit intermediates)
-- Mention shell+loft only as optional fallback when absolutely required
+- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT include build sequences, construction steps, CadQuery operations, or implementation methods. The code generator will determine the best construction approach.
 - Each part description must be self-contained (another AI must be able to build it without seeing other parts)
 - Include ALL dimensions (length, width, height, wall thickness, radii, hole diameters)
 - Specify mating surface dimensions explicitly (e.g. "inner bore 42mm to receive part X's 42mm OD")
@@ -466,6 +465,7 @@ Rules:
 - Part names must be valid Python identifiers (snake_case)
 - Positions are in mm, relative to origin [0,0,0]
 - Do NOT decompose decorative features, fillets, or chamfers into separate parts
+- Do NOT include these words/phrases in your output: Build sequence, Extrude, subtract, intersect, union, shell, boolean, cut
 
 Keep your response as short as possible. For single mode, return ONLY {"mode":"single"} with no other text."#;
 

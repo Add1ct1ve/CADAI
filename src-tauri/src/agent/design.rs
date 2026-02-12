@@ -6,6 +6,14 @@ use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::config::GenerationReliabilityProfile;
 use crate::error::AppError;
 
+/// Result of prompt triage before plan generation.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptClarityAnalysis {
+    pub needs_clarification: bool,
+    pub questions: Vec<String>,
+    pub enriched_prompt: Option<String>,
+}
+
 /// The geometry design plan produced by the advisor before code generation.
 #[derive(Debug, Clone)]
 pub struct DesignPlan {
@@ -31,6 +39,26 @@ pub struct PlanRiskSignals {
     pub fatal_combo: bool,
     pub negation_conflict: bool,
     pub repair_sensitive_ops: Vec<String>,
+}
+
+/// Fast prompt triage. Currently conservative: only flags empty prompts.
+pub async fn analyze_prompt_clarity(
+    _provider: Box<dyn AiProvider>,
+    message: &str,
+) -> Result<PromptClarityAnalysis, AppError> {
+    if message.trim().is_empty() {
+        return Ok(PromptClarityAnalysis {
+            needs_clarification: true,
+            questions: vec!["What should the object be?".to_string()],
+            enriched_prompt: None,
+        });
+    }
+
+    Ok(PromptClarityAnalysis {
+        needs_clarification: false,
+        questions: vec![],
+        enriched_prompt: None,
+    })
 }
 
 const GEOMETRY_ADVISOR_PROMPT: &str = r#"You are a CAD geometry planner. Your job is to analyze a user's request and produce a detailed geometric build plan BEFORE any code is written.

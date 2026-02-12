@@ -111,7 +111,9 @@ fn parse_dims_line(description: &str) -> Option<[f64; 3]> {
         match key.as_str() {
             "length" | "len" | "total_length" | "overall_length" | "outer_length" => length = Some(val),
             "width" | "total_width" | "overall_width" | "outer_width" => width = Some(val),
-            "height" | "total_height" | "overall_height" | "outer_height" | "envelope_height" => height = Some(val),
+            "height" | "total_height" | "overall_height" | "outer_height" | "envelope_height" | "thickness" => {
+                height = Some(val)
+            }
             "depth" | "total_depth" | "overall_depth" => {
                 // "depth" can map to any missing dimension
                 if height.is_none() { height = Some(val); }
@@ -189,8 +191,9 @@ fn parse_named_dimension(description: &str, labels: &[&str]) -> Option<f64> {
 
 pub fn infer_envelope_dimensions_mm(description: &str) -> Option<[f64; 3]> {
     // 1. Structured Dims: line (highest priority — explicit key=value format)
-    if let Some(dims) = parse_dims_line(description) {
-        return Some(dims);
+    // If a Dims line is present, it is authoritative; do not fall back to other parsing.
+    if description.to_lowercase().contains("dims:") {
+        return parse_dims_line(description);
     }
 
     // 2. Compact NxNxN format (e.g. "42x28x7.5mm")
@@ -572,6 +575,21 @@ mod tests {
                      Dims: length=42mm, width=28mm, height=7.5mm";
         let dims = infer_envelope_dimensions_mm(desc).expect("should parse Dims line");
         assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn test_parse_dims_line_thickness_alias_and_ignores_subfeatures() {
+        let desc = "Dims: length=28.1mm, width=24.1mm, thickness=1.5mm, \
+                    lip_height=1.20mm, snap_tolerance=0.15mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse Dims line");
+        assert_eq!(dims, [28.1, 24.1, 1.5]);
+    }
+
+    #[test]
+    fn test_dims_line_incomplete_disables_fallback() {
+        let desc = "Dims: length=30mm, width=24mm. Lip height 1.2mm. Height 10mm.";
+        let dims = infer_envelope_dimensions_mm(desc);
+        assert!(dims.is_none(), "Dims line present but incomplete should return None");
     }
 
     #[test]
