@@ -1047,6 +1047,25 @@
               backendValidationSucceeded = event.success;
               backendDoneError = event.error ?? null;
             }
+
+            if (isMultiPart && event.error) {
+              let changed = false;
+              partProgress = partProgress.map((p) => {
+                if (p.status === 'pending' || p.status === 'generating') {
+                  changed = true;
+                  return {
+                    ...p,
+                    status: 'failed',
+                    error: p.error ?? event.error ?? 'Generation aborted before part completion.',
+                  };
+                }
+                return p;
+              });
+              if (changed) {
+                chatStore.updateLastMessage(formatPartProgress(partProgress));
+              }
+            }
+
             tryQueueMultipartAssemblyImport();
             break;
         }
@@ -1132,6 +1151,24 @@
           );
           await executeAndHandleGeneratedCode(assembled, myGen, 'Assembly executed (unvalidated).');
           return;
+        }
+      }
+
+      if (isMultiPart) {
+        let changed = false;
+        partProgress = partProgress.map((p) => {
+          if (p.status === 'pending' || p.status === 'generating') {
+            changed = true;
+            return {
+              ...p,
+              status: 'failed',
+              error: p.error ?? `${err}`,
+            };
+          }
+          return p;
+        });
+        if (changed) {
+          chatStore.updateLastMessage(formatPartProgress(partProgress));
         }
       }
 
