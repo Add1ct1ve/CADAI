@@ -94,6 +94,14 @@ fn parse_dims_line(description: &str) -> Option<[f64; 3]> {
     let mut width = None;
     let mut height = None;
 
+    const NON_ENVELOPE_KEYS: &[&str] = &[
+        "wall", "thickness", "radius", "fillet", "chamfer",
+        "tolerance", "clearance", "gap", "offset", "slot",
+        "groove", "lip", "ridge", "rib", "boss", "tab",
+    ];
+
+    let mut unmatched: Vec<f64> = Vec::new();
+
     for cap in kv_re.captures_iter(dims_line) {
         let key = cap[1].to_lowercase();
         let val: f64 = cap[2].parse().ok()?;
@@ -101,11 +109,30 @@ fn parse_dims_line(description: &str) -> Option<[f64; 3]> {
             continue;
         }
         match key.as_str() {
-            "length" | "len" => length = Some(val),
-            "width" => width = Some(val),
-            "height" => height = Some(val),
-            _ => {} // skip "wall", "thickness", etc.
+            "length" | "len" | "total_length" | "overall_length" | "outer_length" => length = Some(val),
+            "width" | "total_width" | "overall_width" | "outer_width" => width = Some(val),
+            "height" | "total_height" | "overall_height" | "outer_height" | "envelope_height" => height = Some(val),
+            "depth" | "total_depth" | "overall_depth" => {
+                // "depth" can map to any missing dimension
+                if height.is_none() { height = Some(val); }
+                else if width.is_none() { width = Some(val); }
+                else if length.is_none() { length = Some(val); }
+            }
+            other => {
+                if !NON_ENVELOPE_KEYS.iter().any(|k| other.contains(k)) {
+                    unmatched.push(val);
+                }
+            }
         }
+    }
+
+    // Fallback: if 2-of-3 are assigned, fill the missing slot from unmatched values
+    if length.is_none() && width.is_some() && height.is_some() {
+        if let Some(&v) = unmatched.first() { length = Some(v); }
+    } else if width.is_none() && length.is_some() && height.is_some() {
+        if let Some(&v) = unmatched.first() { width = Some(v); }
+    } else if height.is_none() && length.is_some() && width.is_some() {
+        if let Some(&v) = unmatched.first() { height = Some(v); }
     }
 
     match (length, width, height) {
@@ -586,5 +613,34 @@ mod tests {
             "Lip height 1.2mm, slot width 5mm",
         );
         assert!(dims.is_none(), "sub-feature-only description should return None, got: {:?}", dims);
+    }
+
+    #[test]
+    fn test_parse_dims_line_total_height_variant() {
+        let desc = "o-ring ridge height=0.50mm. Dims: total_height=2.7mm, length=42mm, width=28mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse Dims line with total_height");
+        assert_eq!(dims, [42.0, 28.0, 2.7]);
+    }
+
+    #[test]
+    fn test_parse_dims_line_overall_variants() {
+        let desc = "Dims: overall_length=50mm, overall_width=30mm, overall_height=10mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse overall_ prefixed keys");
+        assert_eq!(dims, [50.0, 30.0, 10.0]);
+    }
+
+    #[test]
+    fn test_parse_dims_line_depth_fills_missing() {
+        let desc = "Dims: length=42mm, width=28mm, depth=7.5mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse depth as width/length");
+        assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn test_parse_dims_line_2of3_fallback() {
+        // A novel key name that doesn't match any known pattern
+        let desc = "Dims: length=42mm, width=28mm, z_extent=5mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should use 2-of-3 fallback for unknown key");
+        assert_eq!(dims, [42.0, 28.0, 5.0]);
     }
 }
