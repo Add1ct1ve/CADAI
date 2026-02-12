@@ -155,32 +155,9 @@ pub async fn execute_with_timeout(
     }
 }
 
-fn parse_dimensions_from_text(text: &str) -> Vec<f64> {
-    let mut out = Vec::new();
-    let re = Regex::new(r"(?i)(\d+(?:\.\d+)?)\s*(?:mm|millimeter|millimeters)\b").unwrap();
-    for cap in re.captures_iter(text) {
-        if let Ok(v) = cap[1].parse::<f64>() {
-            out.push(v);
-        }
-    }
-
-    let compact =
-        Regex::new(r"(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)")
-            .unwrap();
-    for cap in compact.captures_iter(text) {
-        for i in 1..=3 {
-            if let Ok(v) = cap[i].parse::<f64>() {
-                out.push(v);
-            }
-        }
-    }
-
-    out.retain(|v| *v > 0.0 && *v <= 10000.0);
-    out
-}
 
 fn should_retry_from_post_geometry(report: &PostGeometryValidationReport) -> bool {
-    !report.manifold || !report.bbox_ok
+    !report.manifold || !report.bbox_ok || report.component_count > 1
 }
 
 fn compute_manifold_status(
@@ -796,8 +773,10 @@ fn run_post_geometry_checks(
     let code_file_s = code_file.to_string_lossy().to_string();
     let args: Vec<&str> = vec!["mesh_check", &code_file_s];
 
-    let script_result = runner::execute_python_script(&ctx.venv_dir, &script, &args)
-        .map_err(|e| format!("post-check execution failed: {}", e));
+    const POST_CHECK_TIMEOUT_MS: u64 = 30_000;
+    let script_result =
+        runner::execute_python_script_with_timeout(&ctx.venv_dir, &script, &args, POST_CHECK_TIMEOUT_MS)
+            .map_err(|e| format!("post-check execution failed: {}", e));
 
     let _ = std::fs::remove_file(&code_file);
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -857,14 +836,11 @@ fn run_post_geometry_checks(
                         let dz = bounds_max[2] - bounds_min[2];
                         let bbox_max = dx.max(dy).max(dz).abs();
 
-                        let expected = parse_dimensions_from_text(req);
-                        if let Some(expected_max) = expected
-                            .iter()
-                            .copied()
-                            .filter(|v| *v > 0.0)
-                            .reduce(f64::max)
-                        {
-                            if bbox_max > expected_max * 8.0 || bbox_max < expected_max * 0.05 {
+                        if let Some(dims) = crate::agent::semantic_validate::infer_envelope_dimensions_mm(req) {
+                            let expected_max = dims[0].max(dims[1]).max(dims[2]);
+                            if expected_max > 0.0
+                                && (bbox_max > expected_max * 8.0 || bbox_max < expected_max * 0.05)
+                            {
                                 bbox_ok = false;
                                 warnings.push(format!(
                                     "Bounding box sanity check failed: max extent {:.2}mm is inconsistent with requested size {:.2}mm",
@@ -982,13 +958,34 @@ pub async fn validate_and_retry(
                         });
 
                         if should_retry_from_post_geometry(&post_report) {
-                            let err = if post_report.warnings.is_empty() {
-                                "Post-geometry validation failed".to_string()
+                            let mut feedback_parts: Vec<String> = Vec::new();
+                            if post_report.component_count > 1 {
+                                feedback_parts.push(format!(
+                                    "Your code produced {} disconnected solids instead of 1. Ensure union() calls have volumetric overlap (0.2mm+). Fix to produce exactly 1 solid.",
+                                    post_report.component_count
+                                ));
+                            }
+                            if !post_report.bbox_ok {
+                                feedback_parts.push(
+                                    "Bounding box is wildly off — re-check your dimensions.".to_string()
+                                );
+                            }
+                            if !post_report.manifold {
+                                feedback_parts.push(
+                                    "Mesh is not manifold — avoid shell() and use explicit inner-solid subtraction instead.".to_string()
+                                );
+                            }
+                            let err = if feedback_parts.is_empty() {
+                                if post_report.warnings.is_empty() {
+                                    "Post-geometry validation failed".to_string()
+                                } else {
+                                    format!(
+                                        "Post-geometry validation failed:\n{}",
+                                        post_report.warnings.join("\n")
+                                    )
+                                }
                             } else {
-                                format!(
-                                    "Post-geometry validation failed:\n{}",
-                                    post_report.warnings.join("\n")
-                                )
+                                format!("Post-geometry validation failed:\n{}", feedback_parts.join("\n"))
                             };
 
                             let will_retry = attempt < max_attempts;
@@ -1012,6 +1009,55 @@ pub async fn validate_and_retry(
                                     post_check_warning: None,
                                     retry_ladder_stage_reached,
                                 });
+                            }
+
+                            // Build a post-geometry retry prompt with specific feedback
+                            let retry_prompt = format!(
+                                "Your CadQuery code executed successfully but produced invalid geometry.\n\n\
+                                 Post-geometry issues:\n{}\n\n\
+                                 Original code:\n```python\n{}\n```\n\n\
+                                 Fix the code and return the corrected version. \
+                                 Wrap the code in <CODE>...</CODE> tags. \
+                                 The result variable must contain exactly one connected solid.",
+                                feedback_parts.join("\n"),
+                                current_code
+                            );
+
+                            let provider = create_provider(&ctx.config)?;
+                            let messages = vec![
+                                ChatMessage {
+                                    role: "system".to_string(),
+                                    content: system_prompt.to_string(),
+                                },
+                                ChatMessage {
+                                    role: "user".to_string(),
+                                    content: retry_prompt,
+                                },
+                            ];
+
+                            let (ai_response, usage) = provider.complete(&messages, None).await?;
+                            if let Some(ref u) = usage {
+                                retry_usage.add(u);
+                            }
+
+                            match crate::agent::extract::extract_code(&ai_response) {
+                                Some(new_code) => {
+                                    current_code = new_code;
+                                }
+                                None => {
+                                    return Ok(ValidationResult {
+                                        code: current_code,
+                                        stl_base64: None,
+                                        success: false,
+                                        attempts: attempt,
+                                        error: Some("AI retry for post-geometry issues did not produce extractable code".to_string()),
+                                        retry_usage,
+                                        static_findings: static_findings_accum,
+                                        post_geometry_report: Some(post_report),
+                                        post_check_warning: None,
+                                        retry_ladder_stage_reached,
+                                    });
+                                }
                             }
                         } else {
                             let stl_base64 = base64::engine::general_purpose::STANDARD
@@ -1259,12 +1305,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dimensions_from_text() {
-        let dims = parse_dimensions_from_text("make a box 42x28x7.5mm with 1.8mm walls");
-        assert!(dims.contains(&42.0));
-        assert!(dims.contains(&28.0));
-        assert!(dims.contains(&7.5));
-        assert!(dims.contains(&1.8));
+    fn test_infer_envelope_dims_ignores_sub_feature() {
+        // infer_envelope_dimensions_mm should pick up envelope dims, not sub-feature params
+        let dims = crate::agent::semantic_validate::infer_envelope_dimensions_mm(
+            "make a box 42x28x7.5mm with snap_interference=0.15mm",
+        );
+        let dims = dims.expect("should parse envelope dims");
+        let max = dims[0].max(dims[1]).max(dims[2]);
+        assert!(max >= 7.5, "envelope max should be >= 7.5, got {}", max);
+        assert!(max <= 42.0, "envelope max should be <= 42, got {}", max);
     }
 
     #[test]
@@ -1287,9 +1336,15 @@ mod tests {
         let bad = PostGeometryValidationReport {
             manifold: false,
             warnings: vec!["bad".to_string()],
-            ..good
+            ..good.clone()
         };
         assert!(should_retry_from_post_geometry(&bad));
+
+        let multi_body = PostGeometryValidationReport {
+            component_count: 2,
+            ..good
+        };
+        assert!(should_retry_from_post_geometry(&multi_body));
     }
 
     #[test]
