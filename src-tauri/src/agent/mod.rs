@@ -4,7 +4,6 @@ pub mod context;
 pub mod design;
 pub mod executor;
 pub mod extract;
-pub mod fallback_templates;
 pub mod iterative;
 pub mod memory;
 pub mod modify;

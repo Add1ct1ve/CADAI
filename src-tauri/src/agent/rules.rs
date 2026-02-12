@@ -404,10 +404,10 @@ mod tests {
     // ── Anti-Patterns ─────────────────────────────────────────────────
 
     #[test]
-    fn test_default_anti_patterns_has_11_entries() {
+    fn test_default_anti_patterns_has_12_entries() {
         let rules = AgentRules::from_preset(None).unwrap();
         let ap = rules.anti_patterns.as_ref().unwrap();
-        assert_eq!(ap.len(), 11, "default should have 11 anti-patterns");
+        assert_eq!(ap.len(), 12, "default should have 12 anti-patterns");
     }
 
     #[test]

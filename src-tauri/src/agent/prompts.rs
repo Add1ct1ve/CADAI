@@ -519,8 +519,10 @@ pub fn build_system_prompt_for_preset(
     build_system_prompt(&rules, cq_version)
 }
 
-/// Build a compact prompt with core constraints only.
-/// Retrieval-selected snippets should be appended separately.
+/// Compact system prompt for multi-part generation.
+/// Omits bulky reference sections (cookbook, patterns, anti-patterns, few-shot,
+/// dimension tables, etc.) that are covered by the retrieval system.
+/// Single-part generation keeps the full prompt via `build_system_prompt`.
 pub fn build_compact_system_prompt_for_preset(
     preset_name: Option<&str>,
     cq_version: Option<&str>,
@@ -530,81 +532,277 @@ pub fn build_compact_system_prompt_for_preset(
     });
 
     let mut prompt = String::new();
-    prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code.\\n\\n");
 
-    prompt.push_str("## Hard Requirements\\n");
-    prompt.push_str("- Always import cadquery as cq\\n");
-    prompt.push_str("- Assign final geometry to variable named `result`\\n");
-    prompt.push_str("- Use millimeters\\n");
-    prompt.push_str("- Do not use file I/O, network calls, GUI/display calls, or subprocesses\\n");
-    prompt.push_str("- Return complete executable CadQuery script\\n\\n");
+    // -- Persona (same as full prompt) --
+    prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code. ");
+    prompt.push_str("You create 3D models based on user descriptions.\n\n");
 
-    prompt.push_str("## CadQuery Version Notes\\n");
+    // -- Code requirements --
+    prompt.push_str("## Code Requirements\n");
+    prompt.push_str("- Always import cadquery as cq\n");
+    prompt.push_str("- The final result MUST be assigned to a variable named 'result'\n");
+    prompt.push_str("- All dimensions are in millimeters\n");
+    prompt.push_str("- Use CadQuery's fluent API (method chaining)\n");
+    prompt.push_str("- Do NOT use show_object(), display(), or any GUI calls\n");
+    prompt.push_str("- Do NOT read/write files or use any external resources\n\n");
+
+    // -- CadQuery Version Notes --
+    prompt.push_str("## CadQuery Version Notes\n");
     match cq_version {
         Some(ver) => {
-            prompt.push_str(&format!("- Installed CadQuery version: {}\\n", ver));
+            prompt.push_str(&format!("Installed CadQuery version: {}\n", ver));
             if !version_gte(ver, "2.3.0") {
-                prompt.push_str("- `.tag()` is unavailable in this version\\n");
+                prompt.push_str("- WARNING: `.tag()` is NOT available in this version.\n");
+                prompt.push_str("- WARNING: `.transformed()` with `rotate` parameter is NOT available.\n");
             }
             if !version_gte(ver, "2.4.0") {
-                prompt.push_str("- `cq.Sketch()` is unavailable in this version\\n");
+                prompt.push_str("- WARNING: `cq.Sketch()` API is NOT available in this version.\n");
+            }
+            if version_gte(ver, "2.4.0") {
+                prompt.push_str("- All CadQuery features are available including `.tag()`, `cq.Sketch()`, and `.transformed()`.\n");
             }
         }
         None => {
-            prompt.push_str(
-                "- CadQuery version unknown; avoid newer version-specific APIs unless necessary\\n",
-            );
+            prompt.push_str("- CadQuery version unknown. Avoid version-specific features unless requested.\n");
         }
     }
     prompt.push('\n');
 
+    // -- YAML mandatory/forbidden rules --
+    if let Some(ref reqs) = rules.code_requirements {
+        if let Some(ref mandatory) = reqs.mandatory {
+            prompt.push_str("### Mandatory\n");
+            for rule in mandatory {
+                prompt.push_str(&format!("- {}\n", rule));
+            }
+            prompt.push('\n');
+        }
+        if let Some(ref forbidden) = reqs.forbidden {
+            prompt.push_str("### Forbidden\n");
+            for rule in forbidden {
+                prompt.push_str(&format!("- {}\n", rule));
+            }
+            prompt.push('\n');
+        }
+    }
+
+    // -- Coordinate System --
     if let Some(ref cs) = rules.coordinate_system {
-        prompt.push_str("## Coordinate System\\n");
+        prompt.push_str("## Coordinate System\n");
         if let Some(ref desc) = cs.description {
-            prompt.push_str(&format!("- {}\\n", desc));
+            prompt.push_str(&format!("{}\n", desc));
         }
         if let Some(ref x) = cs.x {
             if let (Some(ref dir), Some(ref pos)) = (&x.direction, &x.positive) {
-                prompt.push_str(&format!("- X axis: {} (positive {})\\n", dir, pos));
+                prompt.push_str(&format!("- X axis: {} (positive = {})\n", dir, pos));
             }
         }
         if let Some(ref y) = cs.y {
             if let (Some(ref dir), Some(ref pos)) = (&y.direction, &y.positive) {
-                prompt.push_str(&format!("- Y axis: {} (positive {})\\n", dir, pos));
+                prompt.push_str(&format!("- Y axis: {} (positive = {})\n", dir, pos));
             }
         }
         if let Some(ref z) = cs.z {
             if let (Some(ref dir), Some(ref pos)) = (&z.direction, &z.positive) {
-                prompt.push_str(&format!("- Z axis: {} (positive {})\\n", dir, pos));
+                prompt.push_str(&format!("- Z axis: {} (positive = {})\n", dir, pos));
             }
         }
         if let Some(ref origin) = cs.origin {
-            prompt.push_str(&format!("- Origin: {}\\n", origin));
+            prompt.push_str(&format!("- Origin: {}\n", origin));
         }
         prompt.push('\n');
     }
 
+    // -- Spatial Rules (critical for correct geometry) --
     if let Some(ref sr) = rules.spatial_rules {
-        prompt.push_str("## Critical Spatial Rules\\n");
-        for (category, items) in sr {
-            if category == "natural_language_to_axis"
-                || category == "splitting_and_halving"
-                || category == "face_selectors"
-                || category == "boolean_cut"
-                || category == "sketch_placement"
-            {
-                prompt.push_str(&format!("### {}\\n", format_category_name(category)));
-                for item in items.iter().take(8) {
-                    prompt.push_str(&format!("- {}\\n", item));
-                }
+        prompt.push_str("## Spatial Rules\n");
+        for (category, rules_list) in sr {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for rule in rules_list {
+                prompt.push_str(&format!("- {}\n", rule));
             }
         }
         prompt.push('\n');
     }
 
-    prompt.push_str("## Output Structure\\n");
-    prompt.push_str("Return your final code wrapped in <CODE>...</CODE> tags.\\n");
-    prompt.push_str("Use only one complete final script.\\n");
+    // -- Code Style --
+    if let Some(ref style) = rules.code_style {
+        prompt.push_str("## Code Style\n");
+        if let Some(ref naming) = style.naming {
+            prompt.push_str("### Naming\n");
+            for n in naming {
+                prompt.push_str(&format!("- {}\n", n));
+            }
+        }
+        if let Some(ref comments) = style.comments {
+            prompt.push_str("### Comments\n");
+            for c in comments {
+                prompt.push_str(&format!("- {}\n", c));
+            }
+        }
+        if let Some(ref organization) = style.organization {
+            prompt.push_str("### Organization\n");
+            for o in organization {
+                prompt.push_str(&format!("- {}\n", o));
+            }
+        }
+        // Skip code_style.example — not needed for multi-part
+    }
+
+    // -- Operation Interactions (critical for ordering) --
+    if let Some(ref interactions) = rules.operation_interactions {
+        prompt.push_str("## Operation Interactions\n");
+        for (pair_name, rules_list) in interactions {
+            prompt.push_str(&format!("### {}\n", format_category_name(pair_name)));
+            for rule in rules_list {
+                prompt.push_str(&format!("- {}\n", rule));
+            }
+            prompt.push('\n');
+        }
+    }
+
+    // -- CadQuery Quick Reference (code examples for common pitfalls) --
+    prompt.push_str("## CadQuery Quick Reference\n\n");
+
+    prompt.push_str("### Stack: Sketch vs Solid\n");
+    prompt.push_str("After `.rect()`/`.circle()` you have a *sketch* (2D). After `.extrude()` you have a *solid* (3D).\n");
+    prompt.push_str("WRONG: `cq.Workplane('XY').rect(10,10).fillet(2)` — fillet needs a solid\n");
+    prompt.push_str("RIGHT: `cq.Workplane('XY').rect(10,10).extrude(5).edges('|Z').fillet(2)`\n\n");
+
+    prompt.push_str("### Face Selectors\n");
+    prompt.push_str("- `>Z` = topmost face, `<Z` = bottom, `>Y` = front, `<Y` = back, `>X` = right, `<X` = left\n");
+    prompt.push_str("- `|Z` = faces perpendicular to Z (vertical side faces)\n");
+    prompt.push_str("- WARNING: face indices change after shell/cut/fillet. Re-select by direction, not index.\n\n");
+
+    prompt.push_str("### Operation Order\n");
+    prompt.push_str("1. Base shape (rect/circle → extrude)\n");
+    prompt.push_str("2. Additive features (union, bosses, lips)\n");
+    prompt.push_str("3. Main cavity (boolean subtract — NOT shell)\n");
+    prompt.push_str("4. Large cuts (slots, pockets, through-holes)\n");
+    prompt.push_str("5. Small cuts (grooves, channels)\n");
+    prompt.push_str("6. Holes (.hole() or circle+cutBlind — drill last)\n");
+    prompt.push_str("7. Fillets/chamfers LAST (ALWAYS wrap in try/except)\n\n");
+
+    prompt.push_str("### Shell Ban\n");
+    prompt.push_str("Do NOT use `.shell()`. It fails on non-trivial geometry and produces non-manifold meshes.\n");
+    prompt.push_str("Instead, create outer solid, create smaller inner solid offset by wall thickness, use `.cut()`:\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("outer = cq.Workplane('XY').rect(L, W).extrude(H)\n");
+    prompt.push_str("inner = cq.Workplane('XY').rect(L-2*wall, W-2*wall).extrude(H-top).translate((0, 0, bot))\n");
+    prompt.push_str("result = outer.cut(inner)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### Workplane Switches\n");
+    prompt.push_str("After switching workplanes, you MUST draw a new sketch. The previous sketch does NOT carry over.\n");
+    prompt.push_str("WRONG: `base.faces('>Z').workplane().extrude(10)` — no sketch on new workplane\n");
+    prompt.push_str("RIGHT: `base.faces('>Z').workplane().rect(5, 5).extrude(10)`\n\n");
+
+    prompt.push_str("### Fillet Safety\n");
+    prompt.push_str("- Fillet radius MUST be < 0.4× shortest adjacent edge. Exceeding this causes BRep failures.\n");
+    prompt.push_str("- ALWAYS wrap in try/except with graceful fallback (smaller radius or skip).\n");
+    prompt.push_str("- Prefer selective edge fillet (`edges(\">Z\").fillet(r)`) over blanket `.fillet(r)` on the whole solid.\n\n");
+
+    prompt.push_str("### Boolean & Single-Body Rules\n");
+    prompt.push_str("- Cut tools MUST extend 0.01–0.1 mm beyond the target surface for clean booleans.\n");
+    prompt.push_str("- After EVERY .cut(), assert `result.solids().size() == 1` — if >1, your cut split the body (reduce depth or widen wall)\n");
+    prompt.push_str("- Always union additive features before cutting subtractive features.\n\n");
+
+    prompt.push_str("### Sketch Closure\n");
+    prompt.push_str("- ALWAYS call `.close()` when using `.lineTo()` / `.sagittaArc()` / `.spline()` to build a wire.\n");
+    prompt.push_str("- Open sketches silently fail on `.extrude()` — no error, just no geometry.\n\n");
+
+    prompt.push_str("### Common API Mistakes\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("# WRONG — roundedRect doesn't exist in CadQuery\n");
+    prompt.push_str(".roundedRect(w, h, r)\n");
+    prompt.push_str("# RIGHT — use rect then fillet edges after extrude\n");
+    prompt.push_str(".rect(w, h).extrude(z).edges('|Z').fillet(r)\n");
+    prompt.push_str("\n");
+    prompt.push_str("# WRONG — vertices() for fillet\n");
+    prompt.push_str("result.fillet(r, result.vertices())\n");
+    prompt.push_str("# RIGHT — edges() for fillet\n");
+    prompt.push_str("result.edges().fillet(r)\n");
+    prompt.push_str("```\n\n");
+
+    // -- Reusable Patterns (building-block snippets) --
+    prompt.push_str("## Reusable Patterns\n\n");
+
+    prompt.push_str("### 1. Hollow Box (replaces shell)\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("outer = cq.Workplane('XY').rect(L, W).extrude(H, centered=(True, True, False))\n");
+    prompt.push_str("inner = cq.Workplane('XY').rect(L-2*t, W-2*t).extrude(H-t, centered=(True, True, False)).translate((0,0,t))\n");
+    prompt.push_str("result = outer.cut(inner)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### 2. Through-Slot\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("base = cq.Workplane('XY').rect(60, 40).extrude(10)\n");
+    prompt.push_str("slot = cq.Workplane('XY').rect(30, 8).extrude(10).translate((0, 0, 0))\n");
+    prompt.push_str("result = base.cut(slot)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### 3. Internal Ledge (shelf/lip inside a hollow box)\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("# Creates a thin ring-shaped shelf inside the hollow box at height Z.\n");
+    prompt.push_str("# ledge = full-width slab filling the cavity; lip = smaller cutout → ring remains.\n");
+    prompt.push_str("ledge = cq.Workplane('XY').rect(L-2*t, W-2*t).extrude(ledge_h, centered=(True, True, False)).translate((0,0,Z))\n");
+    prompt.push_str("lip = cq.Workplane('XY').rect(L-2*t-2*lip_w, W-2*t-2*lip_w).extrude(ledge_h, centered=(True, True, False)).translate((0,0,Z))\n");
+    prompt.push_str("shelf = ledge.cut(lip)  # ring-shaped shelf, not a solid plate\n");
+    prompt.push_str("result = hollow_box.union(shelf)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### 4. Groove / Channel\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("base = cq.Workplane('XY').rect(60, 40).extrude(10)\n");
+    prompt.push_str("groove = cq.Workplane('XY').center(0, 10).rect(50, 3).extrude(2).translate((0, 0, 8))\n");
+    prompt.push_str("result = base.cut(groove)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### 5. Face Feature (hole/pocket on a specific face)\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("base = cq.Workplane('XY').rect(40, 30).extrude(20)\n");
+    prompt.push_str("result = base.faces('>Y').workplane().center(0, 0).rect(10, 8).cutBlind(-5)\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("### 6. Dome / Barrel-Vault Top\n");
+    prompt.push_str("```python\n");
+    prompt.push_str("# Curved top on a rectangular box using cylinder intersection.\n");
+    prompt.push_str("# half_L = L/2, dome_rise = how far the dome rises above H_box.\n");
+    prompt.push_str("half_L = L / 2\n");
+    prompt.push_str("R = (half_L**2 + dome_rise**2) / (2 * dome_rise)  # radius from chord geometry\n");
+    prompt.push_str("box = cq.Workplane('XY').rect(L, W).extrude(H_box, centered=(True, True, False))\n");
+    prompt.push_str("dome_cyl = (\n");
+    prompt.push_str("    cq.Workplane('XZ')\n");
+    prompt.push_str("    .center(0, H_box + dome_rise - R)\n");
+    prompt.push_str("    .circle(R)\n");
+    prompt.push_str("    .extrude(W / 2, both=True)\n");
+    prompt.push_str(")\n");
+    prompt.push_str("result = box.union(dome_cyl)\n");
+    prompt.push_str("# Trim anything below Z=0\n");
+    prompt.push_str("trim = cq.Workplane('XY').box(L*3, W*3, 100, centered=(True, True, False)).translate((0, 0, -100))\n");
+    prompt.push_str("result = result.cut(trim)\n");
+    prompt.push_str("```\n\n");
+
+    // -- Response Format --
+    prompt.push_str("## Response Format\n");
+    if let Some(ref rf) = rules.response_format {
+        for (category, items) in rf {
+            prompt.push_str(&format!("### {}\n", format_category_name(category)));
+            for item in items {
+                prompt.push_str(&format!("- {}\n", item));
+            }
+        }
+    } else {
+        prompt.push_str("When generating code, wrap it in a ```python code block.\n");
+    }
+
+    // -- Output Structure --
+    prompt.push_str("\n## Output Structure\n");
+    prompt.push_str("When generating CadQuery code, wrap it in XML-style tags:\n\n");
+    prompt
+        .push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
+    prompt.push_str("You may also use ```python fences inside or outside the tags.\n");
+    prompt.push_str("The <CODE> tags help the system reliably extract your code.\n");
 
     prompt
 }

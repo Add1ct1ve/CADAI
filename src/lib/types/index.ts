@@ -39,8 +39,6 @@ export interface AppConfig {
   max_generation_runtime_seconds: number;
   semantic_contract_strict: boolean;
   reviewer_mode: 'advisory_only' | 'rewrite_allowed';
-  deterministic_fallback_enabled: boolean;
-  fallback_after_part_failures: number;
   quality_gates_strict: boolean;
   allow_euler_override: boolean;
   semantic_bbox_mode: 'semantic_aware' | 'legacy';
@@ -197,7 +195,6 @@ export type MultiPartEvent =
     }
   | { kind: 'PostGeometryValidationWarning'; message: string }
   | { kind: 'SemanticValidationReport'; part_name: string; passed: boolean; findings: string[] }
-  | { kind: 'FallbackActivated'; reason: string; template_id: string }
   | { kind: 'RetrievalStatus'; message: string; items: { source: string; id: string; title: string; score: number }[]; used_embeddings: boolean; lexical_fallback: boolean }
   | { kind: 'IterativeStart'; total_steps: number; steps: { index: number; name: string; description: string; operations: string[] }[] }
   | { kind: 'IterativeStepStarted'; step_index: number; step_name: string; description: string }
@@ -210,6 +207,7 @@ export type MultiPartEvent =
   | { kind: 'ConsensusStarted'; candidate_count: number }
   | { kind: 'ConsensusCandidate'; label: string; temperature: number; status: string; has_code?: boolean; execution_success?: boolean }
   | { kind: 'ConsensusWinner'; label: string; score: number; reason: string }
+  | { kind: 'ClarificationNeeded'; questions: string[] }
   | { kind: 'TokenUsage'; phase: string; input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number | null }
   | { kind: 'Done'; success: boolean; error?: string; validated?: boolean };
 
@@ -252,6 +250,7 @@ export interface DesignPlanResult {
   risk_score: number;
   warnings: string[];
   is_valid: boolean;
+  clarification_questions?: string[];
 }
 
 export interface GenerationEntry {

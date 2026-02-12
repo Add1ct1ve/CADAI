@@ -12,6 +12,7 @@ pub enum TopologySubKind {
     LoftFailure,
     SweepFailure,
     RevolveFailure,
+    MissingSolid,
     General,
 }
 
@@ -73,7 +74,7 @@ fn classify_ocp_error(message: &str, full_stderr: &str) -> ErrorCategory {
     if combined.contains("cannot find a solid on the stack")
         || combined.contains("cannot find a solid in the parent chain")
     {
-        return ErrorCategory::Topology(TopologySubKind::FilletFailure);
+        return ErrorCategory::Topology(TopologySubKind::MissingSolid);
     }
     if combined.contains("stdfail_notdone")
         || combined.contains("brep_api: command not done")
@@ -154,7 +155,7 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
             } else if lower.contains("cannot find a solid on the stack")
                 || lower.contains("cannot find a solid in the parent chain")
             {
-                ErrorCategory::Topology(TopologySubKind::FilletFailure)
+                ErrorCategory::Topology(TopologySubKind::MissingSolid)
             } else if lower.contains("multiple objects selected") && lower.contains("planar faces")
             {
                 ErrorCategory::ApiMisuse
@@ -358,6 +359,11 @@ fn generate_suggestion(
 ) -> Option<String> {
     // Category-specific suggestions take priority for topology errors
     match category {
+        ErrorCategory::Topology(TopologySubKind::MissingSolid) => {
+            return Some(
+                "A 3D operation was called on a 2D sketch that was never extruded. Add .extrude()/.revolve()/.sweep()/.loft() after 2D sketch operations before calling .cut()/.fillet()/.shell()/.hole().".to_string(),
+            );
+        }
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
             return Some(
                 "Fillet radius is too large for the geometry. Reduce the radius or apply fillets before boolean operations.".to_string(),
@@ -445,6 +451,9 @@ pub fn extract_python_code(response: &str) -> Option<String> {
 /// Determine the matching anti-pattern title based on error category and message.
 fn match_anti_pattern(error: &StructuredError, code: Option<&str>) -> Option<String> {
     match &error.category {
+        ErrorCategory::Topology(TopologySubKind::MissingSolid) => {
+            Some("3D operation on 2D sketch (no solid on stack)".to_string())
+        }
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
             // Check if code uses blanket .edges().fillet() pattern
             let is_blanket = code
@@ -544,6 +553,14 @@ pub fn get_retry_strategy(
                  Check for missing colons, brackets, parentheses, or incorrect indentation.",
                 line_hint, msg
             ),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::MissingSolid) => (
+            "You called a 3D operation (.cut, .fillet, .chamfer, .shell, .hole) on a 2D sketch \
+             that was never extruded into a solid. Find the .rect()/.circle()/.polyline() that \
+             is missing its .extrude()/.revolve()/.sweep()/.loft() and add it. Primitive \
+             constructors like .box() and .sphere() already produce solids."
+                .to_string(),
             vec![],
         ),
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
@@ -1037,7 +1054,7 @@ OCP.OCP.StdFail.StdFail_NotDone: BRep_API: command not done"#;
                 "Cannot find a solid on the stack or in the parent chain",
                 "result = body.edges().fillet(1.0)"
             ),
-            ErrorCategory::Topology(TopologySubKind::FilletFailure)
+            ErrorCategory::Topology(TopologySubKind::MissingSolid)
         );
     }
 

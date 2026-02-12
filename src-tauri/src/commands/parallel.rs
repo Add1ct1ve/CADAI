@@ -633,13 +633,18 @@ fn build_part_prompt(
         Active reliability policy: {}\n\
         Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\n\
         ## CadQuery Construction Rules (MANDATORY)\n\
+        Operation order: 1) Base shape 2) Additive features (union/bosses/lips) 3) Main cavity (boolean subtract) \
+        4) Large cuts (slots/pockets/through-holes) 5) Small cuts (grooves/channels) 6) Holes (drill last) \
+        7) Fillets/chamfers LAST (always try/except)\n\
         - ALWAYS use `centered=(True, True, False)` so the base sits at Z=0\n\
-        - shell() is allowed but MUST follow these rules:\n\
-          (1) Always use NEGATIVE thickness: .shell(-WALL) hollows INWARD\n\
-          (2) Apply shell BEFORE boolean operations and fillets — never after\n\
-          (3) The selected face (.faces('>Z').shell()) is the face REMOVED (opened)\n\
-          (4) After shell, verify result is a thin-walled body, not a solid block\n\
-          (5) If shell fails on complex geometry, fall back to manual boolean subtraction: cut a slightly smaller inner solid from the outer\n\
+        - Do NOT use .shell() for hollowing. It fails on non-trivial geometry and produces non-manifold meshes. \
+          Instead: create outer solid, create smaller inner solid offset by wall thickness, use .cut(). \
+          Example: outer = cq.Workplane('XY').rect(L,W).extrude(H, centered=(True,True,False)); \
+          inner = cq.Workplane('XY').rect(L-2*wall,W-2*wall).extrude(H-top, centered=(True,True,False)).translate((0,0,bot)); \
+          result = outer.cut(inner)\n\
+        - Fillet radius MUST be < 0.4× shortest adjacent edge; always try/except with smaller fallback\n\
+        - Cut tools MUST extend 0.01–0.1 mm beyond target surface for clean booleans\n\
+        - After each boolean, verify single body: `assert result.solids().size() == 1`\n\
         - Wrap ALL fillet/chamfer/loft in try/except with graceful fallback\n\
         - union() calls MUST have volumetric overlap (0.2mm+), not just face-touching\n\
         - Result MUST be a single connected solid\n\
@@ -647,7 +652,9 @@ fn build_part_prompt(
         - For hollow frames (lips, ridges): build as outer.cut(inner), overlap with base before union\n\
         - After .rect()/.circle()/.polyline(): MUST .extrude()/.revolve()/.sweep()/.loft() to create a solid BEFORE .cut()/.fillet()/.shell()/.hole()\n\
         - After switching workplanes (.faces().workplane(), .workplane(offset=...), .transformed()), you MUST create a new sketch (rect, circle, polyline, etc.) before calling .extrude(). The previous sketch does NOT carry over to new workplanes.\n\
-        - Use named intermediates, not one giant chain\n\n\
+        - ALWAYS call .close() when using .lineTo()/.sagittaArc()/.spline() — open sketches silently fail\n\
+        - Use named intermediates, not one giant chain\n\
+        - Failure recovery priority: simplify geometry → increase tolerances → reorder operations → use boolean subtract → split complex cuts\n\n\
         STRICT OUTPUT CONTRACT:\n\
         - Return code only (no prose).\n\
         - Wrap code in <CODE>...</CODE> tags.\n\
@@ -665,6 +672,34 @@ fn build_part_prompt(
         reliability_policy_text(&config.generation_reliability_profile),
         part.name,
     )
+}
+
+/// Build a structured retry hint from a CadQuery error, using the validation
+/// module's error parsing and retry strategy logic.
+fn build_error_retry_hint(error_text: &str) -> String {
+    use crate::agent::validate;
+
+    let structured = validate::parse_traceback(error_text);
+    let strategy = validate::get_retry_strategy(&structured, 1, None);
+
+    let mut hint = String::new();
+    hint.push_str("## RETRY CONTEXT\n");
+    hint.push_str("Previous attempt FAILED with error:\n```\n");
+    hint.extend(error_text.chars().take(1500));
+    hint.push_str("\n```\n\n");
+    hint.push_str("### What went wrong\n");
+    hint.push_str(&strategy.fix_instruction);
+    hint.push('\n');
+    if !strategy.forbidden_operations.is_empty() {
+        hint.push_str(&format!(
+            "\nDo NOT use: {}\n",
+            strategy.forbidden_operations.join(", ")
+        ));
+    }
+    hint.push_str(
+        "\nGeneral: prefer box/cylinder primitives + boolean cut/union. Do NOT use .shell().\n",
+    );
+    hint
 }
 
 async fn request_code_only_part_retry(
@@ -2166,17 +2201,12 @@ async fn run_generation_pipeline(
                             .cloned()
                             .unwrap_or_else(|| "unknown error".to_string());
 
+                        let error_hint = build_error_retry_hint(&first_error);
                         let sibling_summary = build_sibling_dimensions_summary(&plan, &part_spec.name);
                         let retry_prompt = format!(
-                            "{}\n\n\
-                            ## RETRY CONTEXT\n\
-                            A previous attempt to generate this part FAILED with error:\n\
-                            ```\n{}\n```\n\n\
-                            Use simpler, more robust CadQuery operations. Avoid shell(), loft(), \
-                            and blanket fillet(). Prefer box/cylinder primitives with boolean cut/union.\n\n\
-                            {}",
+                            "{}\n\n{}\n\n{}",
                             system_prompt,
-                            first_error.chars().take(1500).collect::<String>(),
+                            error_hint,
                             build_part_prompt("", part_spec, plan_text, config, &sibling_summary)
                         );
 
@@ -3304,21 +3334,23 @@ async fn evaluate_part_acceptance(
 
     let mut semantic_findings = Vec::new();
     if ctx.config.quality_gates_strict && ctx.config.semantic_contract_strict {
-        let report = validation.post_geometry_report.as_ref().ok_or_else(|| {
-            "semantic validation unavailable: post-geometry report missing".to_string()
-        })?;
-        let contract = semantic_contract
-            .cloned()
-            .unwrap_or_else(|| semantic_validate::build_default_contract(part_name, part_request));
-        let semantic =
-            semantic_validate::validate_part_semantics(&contract, report, &validation.code);
-        semantic_findings = semantic.findings.clone();
-        if !semantic.passed {
-            return Err(format!(
-                "semantic validation failed: {}",
-                semantic.findings.join("; ")
-            ));
+        if let Some(report) = validation.post_geometry_report.as_ref() {
+            let contract = semantic_contract
+                .cloned()
+                .unwrap_or_else(|| semantic_validate::build_default_contract(part_name, part_request));
+            let semantic =
+                semantic_validate::validate_part_semantics(&contract, report, &validation.code);
+            semantic_findings = semantic.findings.clone();
+            if !semantic.passed {
+                return Err(format!(
+                    "semantic validation failed: {}",
+                    semantic.findings.join("; ")
+                ));
+            }
         }
+        // When report is None (post-check soft-fail), semantic validation is
+        // skipped — the part still passes on its execution success.
+        // The post_check_warning field already carries the warning for logging/UI.
     }
 
     Ok(PartAcceptanceArtifact {

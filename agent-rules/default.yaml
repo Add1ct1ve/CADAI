@@ -87,6 +87,7 @@ code_requirements:
     - "Final result MUST be assigned to variable named 'result'"
     - "Use CadQuery's fluent API (method chaining)"
     - "All dimensions in millimeters"
+    - "After any 2D sketch (.rect(), .circle(), .polyline(), .moveTo()/.lineTo()), MUST call .extrude()/.revolve()/.sweep()/.loft() to create a 3D solid BEFORE calling .cut(), .fillet(), .chamfer(), or .hole()"
 
   forbidden:
     - "Do NOT use show_object() or display()"
@@ -211,7 +212,7 @@ capabilities:
     - "Profile-based modeling: sketch 2D shape, then extrude/revolve/sweep/loft"
     - "Boolean operations to build complex shapes from simple primitives"
     - "Patterned features: arrays, mirrors, circular patterns"
-    - "Shelling, filleting, chamfering with precise control"
+    - "Filleting, chamfering with precise control; hollowing via boolean subtraction"
   limitations:
     - "CANNOT create true organic/sculpted surfaces (faces, characters, animals)"
     - "CANNOT do freeform NURBS surface modeling"
@@ -239,11 +240,11 @@ advanced_techniques:
     - "Rounded bodies: loft between roundedRect profiles at different heights"
     - "Smooth transitions: large-radius fillets after boolean unions"
     - "Teardrop/egg shapes: revolve a spline profile"
-    - "Complex enclosures: loft + shell"
+    - "Complex enclosures: loft outer + loft inner + boolean subtract"
     - "Helmet-like shapes: hemisphere + cylinder extensions + boolean cuts for openings"
   common_pitfalls:
     - "Fillet radius larger than edge length causes crash - use smaller radius"
-    - "Shell on body with thin features causes crash - simplify first"
+    - "Do NOT use .shell() — create inner solid and use .cut() to hollow"
     - "Boolean operations on non-overlapping bodies do nothing (no error, no effect)"
     - "Revolve profile must be entirely on one side of the axis"
     - "Sweep path must be a Wire object (.wire()), not just edges"
@@ -302,18 +303,19 @@ response_format:
 # Each recipe is a self-contained working example.
 
 cookbook:
-  - title: "Hollow box (shell operation)"
-    description: "Create a box and shell it to make a container with uniform wall thickness"
+  - title: "Hollow box (boolean subtraction)"
+    description: "Create a hollow container by subtracting an inner solid from an outer solid"
     code: |
       import cadquery as cq
       W, D, H = 60.0, 40.0, 30.0
       WALL = 2.0
-      result = (
+      outer = cq.Workplane("XY").box(W, D, H)
+      inner = (
           cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .shell(-WALL)
+          .box(W - 2*WALL, D - 2*WALL, H - WALL)
+          .translate((0, 0, WALL / 2))
       )
+      result = outer.cut(inner)
 
   - title: "Through-cut slot on a wall face"
     description: "Select a specific face and cut a slot that goes all the way through"
@@ -1676,6 +1678,20 @@ anti_patterns:
           .hole(5.0)
       )
 
+  - title: "3D operation on 2D sketch (no solid on stack)"
+    wrong_code: |
+      import cadquery as cq
+      plate = cq.Workplane("XY").rect(40, 20)
+      cutter = cq.Workplane("XY").rect(10, 5).extrude(5)
+      result = plate.cut(cutter)
+    error_message: "ValueError: Cannot find a solid on the stack or in the parent chain"
+    explanation: "After .rect(), .circle(), .polyline(), or .moveTo()/.lineTo(), CadQuery's stack holds 2D wires, NOT a solid. You MUST call .extrude(), .revolve(), .sweep(), or .loft() to produce a 3D solid BEFORE calling .cut(), .fillet(), .chamfer(), .shell(), or .hole(). Primitive constructors like .box() and .sphere() already produce solids."
+    correct_code: |
+      import cadquery as cq
+      plate = cq.Workplane("XY").rect(40, 20).extrude(5)
+      cutter = cq.Workplane("XY").rect(10, 5).extrude(10)
+      result = plate.cut(cutter)
+
 # =============================================================================
 # CADQUERY API QUICK-REFERENCE
 # =============================================================================
@@ -1924,6 +1940,7 @@ failure_prevention:
     - "If a boolean cut produces no visible change, the cutting tool does not intersect the target body — check position and size"
     - "If sweep() fails, the path is probably not a valid Wire — ensure .wire() is called and path does not self-intersect"
     - "If chamfer() fails after multiple booleans, OpenCascade cannot resolve edge topology — apply chamfer earlier or use fillet instead"
+    - "If error says 'Cannot find a solid on the stack' or 'no pending wires': you called a 3D operation (.cut, .fillet, .shell, .hole) on a 2D sketch that was never extruded. Add the missing .extrude()/.revolve()/.sweep()/.loft() call. Also check for cq.Workplane() calls that accidentally create a fresh 2D context instead of continuing from the existing solid."
 
   preemptive_warnings:
     - "If you are about to use shell() after more than 3 boolean operations, STOP — simplify by reducing booleans, or apply shell() before the cuts"
@@ -1959,6 +1976,7 @@ failure_prevention:
     - "Before outputting code, verify: If using revolve(), is the profile entirely on one side of the rotation axis?"
     - "Before outputting code, verify: Are fillets and chamfers applied as the LAST operations (after all booleans)?"
     - "Before outputting code, verify: If using .edges().fillet() after loft/shell/multiple booleans, is it wrapped in try/except?"
+    - "Before outputting code, verify: Does every 2D sketch (.rect, .circle, .polyline) get extruded/revolved/swept/lofted into a 3D solid BEFORE any .cut(), .fillet(), .chamfer(), .shell(), or .hole() is called on it?"
 
 # =============================================================================
 # FEW-SHOT EXAMPLES: Design-to-Code Workflow
@@ -2471,14 +2489,13 @@ operation_interactions:
     - "For complex geometry, prefer selective edge fillet (e.g. .edges('>Z').fillet(r)) over blanket .edges().fillet(r)"
 
   shell_after_fillet:
-    - "Shell on a filleted body frequently fails — always perform shell() BEFORE fillet()"
-    - "Fillet creates curved blend surfaces that the shell algorithm struggles to offset correctly"
-    - "If you must hollow a filleted body, use manual boolean subtraction (cut a slightly smaller solid from inside) instead of shell()"
+    - "Do NOT use .shell() — it fails on complex geometry and produces non-manifold meshes"
+    - "Instead: create outer solid, create smaller inner solid offset by wall thickness, use .cut()"
+    - "This boolean-subtraction approach works reliably on filleted, lofted, and swept bodies"
 
   loft_then_shell:
-    - "Lofted bodies often have thin regions where cross-sections taper — verify that the minimum wall cross-section is greater than 2× the shell thickness"
-    - "Shell on lofted geometry fails if the wall thickness varies below the requested shell amount at any point"
-    - "Alternative: loft two separate profiles (an outer and an inner shape) and boolean-subtract the inner from the outer to create a hollow lofted body"
+    - "Do NOT use .shell() on lofted bodies — lofted geometry has variable wall thickness that breaks the shell algorithm"
+    - "Instead: loft both an outer and an inner profile set, then boolean-subtract the inner from the outer"
 
   boolean_chain_limit:
     - "After 5+ consecutive boolean operations, geometric tolerances accumulate and later operations may fail — union intermediate results in groups of 2-3 first"
@@ -2491,7 +2508,7 @@ operation_interactions:
     - "Tag key working faces during construction with .tag('top_face'), then re-select them reliably with .faces(tag='top_face')"
 
   sweep_with_boolean:
-    - "Swept bodies have complex underlying topology — avoid applying shell() or fillet() directly to sweep results"
+    - "Swept bodies have complex underlying topology — avoid applying fillet() directly to sweep results; to hollow, use boolean subtraction"
     - "Boolean cuts on swept geometry can fail due to the complex curved surface representation"
     - "If you need to cut a swept body, keep the cuts simple (through-holes or straight cutBlind) — avoid pockets or complex cut profiles on swept surfaces"
 
@@ -2503,5 +2520,10 @@ operation_interactions:
   operation_ordering:
     - "General safe operation order: base shape → additive features (boss, pad) → subtractive features (holes, pockets) → fillets/chamfers"
     - "Never fillet before boolean operations — always apply fillets as the LAST modeling step"
-    - "Never shell after fillet — perform shell early in the sequence or use manual hollowing via boolean subtraction"
+    - "Never use .shell() — always hollow via boolean subtraction (outer.cut(inner))"
     - "If sweep or loft is needed, perform it early in the build sequence before any boolean operations"
+
+  cut_body_integrity:
+    - "After EVERY .cut() operation, assert result.solids().size() == 1. If it is >1, your cut went through a wall and split the body — reduce cut depth or widen the body before cutting"
+    - "Grooves, ledges, and o-ring channels are common culprits — ensure cut depth < wall thickness at that point"
+    - "If building a hollow box first, verify wall thickness is sufficient BEFORE cutting features into walls"

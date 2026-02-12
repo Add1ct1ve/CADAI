@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::ai::message::ChatMessage;
 use crate::ai::provider::{AiProvider, StreamDelta, TokenUsage};
+use crate::ai::retry;
 use crate::ai::streaming::parse_sse_events;
 use crate::error::AppError;
 
@@ -152,28 +153,19 @@ impl AiProvider for ClaudeProvider {
             temperature: self.temperature,
         };
 
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Anthropic API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(ANTHROPIC_API_URL)
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("content-type", "application/json")
+                    .json(&body)
+            },
+            "Anthropic",
+            3,
+        )
+        .await?;
 
         let resp: ClaudeResponse = response
             .json()
@@ -219,28 +211,19 @@ impl AiProvider for ClaudeProvider {
             temperature: self.temperature,
         };
 
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProviderError(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "could not read body".into());
-            return Err(AppError::AiProviderError(format!(
-                "Anthropic API error ({}): {}",
-                status, text
-            )));
-        }
+        let response = retry::send_with_retry(
+            || {
+                self.client
+                    .post(ANTHROPIC_API_URL)
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("content-type", "application/json")
+                    .json(&body)
+            },
+            "Anthropic",
+            3,
+        )
+        .await?;
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();

@@ -1763,7 +1763,11 @@
         if (chatStore.generationId !== myGen) return;
 
         // Post-generation execution for modification path
-        const importedMultipart = isMultiPart && (multipartImportQueued || tryQueueMultipartAssemblyImport(true));
+        const importedMultipart = isMultiPart && (
+          multipartImportQueued ||
+          tryQueueMultipartAssemblyImport(true) ||
+          tryQueueMultipartAssemblyImport(false)  // Try partial import too
+        );
         if (importedMultipart) {
           chatStore.addMessage({
             id: generateId(),
@@ -1777,13 +1781,6 @@
           // Iterative completed (possibly with skipped steps), code already set via FinalCode
         } else if (validatedStl) {
           viewportStore.setPendingStl(validatedStl);
-        } else if (isMultiPart && tryQueueMultipartAssemblyImport(false)) {
-          chatStore.addMessage({
-            id: generateId(),
-            role: 'system',
-            content: 'Imported accepted parts as partial editable assembly.',
-            timestamp: Date.now(),
-          });
         } else if (isMultiPart && previewFirstAvailablePart()) {
           chatStore.addMessage({
             id: generateId(),

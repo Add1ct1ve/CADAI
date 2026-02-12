@@ -28,8 +28,6 @@ const defaultConfig: AppConfig = {
   max_generation_runtime_seconds: 600,
   semantic_contract_strict: true,
   reviewer_mode: 'advisory_only',
-  deterministic_fallback_enabled: true,
-  fallback_after_part_failures: 1,
   quality_gates_strict: true,
   allow_euler_override: true,
   semantic_bbox_mode: 'semantic_aware',
