@@ -731,6 +731,13 @@ fn emit_usage(
     });
 }
 
+fn effective_generation_timeout_seconds(config: &crate::config::AppConfig) -> u64 {
+    // Guardrail: very low manual timeout values can frequently terminate multipart
+    // generation before review/validation completes. Keep a practical floor.
+    const MIN_EFFECTIVE_TIMEOUT_SECONDS: u64 = 600;
+    (config.max_generation_runtime_seconds as u64).max(MIN_EFFECTIVE_TIMEOUT_SECONDS)
+}
+
 fn forward_validation_event(on_event: &Channel<MultiPartEvent>, evt: executor::ValidationEvent) {
     match evt {
         executor::ValidationEvent::Attempt {
@@ -2525,7 +2532,8 @@ pub async fn generate_parallel(
     // -----------------------------------------------------------------------
     // Phase 1+: Generation pipeline (planner, code gen, review, validation)
     // -----------------------------------------------------------------------
-    let generation_timeout = Duration::from_secs(config.max_generation_runtime_seconds as u64);
+    let effective_timeout = effective_generation_timeout_seconds(&config);
+    let generation_timeout = Duration::from_secs(effective_timeout);
     let outcome = match timeout(
         generation_timeout,
         run_generation_pipeline(
@@ -2546,8 +2554,8 @@ pub async fn generate_parallel(
         Ok(outcome) => outcome?,
         Err(_) => {
             let msg = format!(
-                "Generation runtime exceeded {} seconds",
-                config.max_generation_runtime_seconds
+                "Generation runtime exceeded {} seconds (effective timeout; increase timeout in Settings for complex assemblies)",
+                effective_timeout
             );
             let _ = on_event.send(MultiPartEvent::Done {
                 success: false,
@@ -2676,7 +2684,8 @@ pub async fn generate_from_plan(
         }
     };
 
-    let generation_timeout = Duration::from_secs(config.max_generation_runtime_seconds as u64);
+    let effective_timeout = effective_generation_timeout_seconds(&config);
+    let generation_timeout = Duration::from_secs(effective_timeout);
     let outcome = match timeout(
         generation_timeout,
         run_generation_pipeline(
@@ -2697,8 +2706,8 @@ pub async fn generate_from_plan(
         Ok(outcome) => outcome?,
         Err(_) => {
             let msg = format!(
-                "Generation runtime exceeded {} seconds",
-                config.max_generation_runtime_seconds
+                "Generation runtime exceeded {} seconds (effective timeout; increase timeout in Settings for complex assemblies)",
+                effective_timeout
             );
             let _ = on_event.send(MultiPartEvent::Done {
                 success: false,
