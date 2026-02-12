@@ -62,6 +62,10 @@
   let pendingUserRequest = $state('');
   let pendingHistory = $state<RustChatMessage[]>([]);
 
+  // Prompt triage clarification state
+  let awaitingClarification = $state(false);
+  let clarificationOriginalPrompt = $state('');
+
   function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   }
@@ -97,6 +101,37 @@
     return messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role, content: m.content }));
+  }
+
+  /**
+   * Client-side assembly fallback: mirrors Rust's assemble_parts() logic.
+   * Used when the backend times out after parts complete but before FinalCode is emitted.
+   */
+  function assemblePartsClientSide(
+    parts: PartProgress[],
+    planParts: PartSpec[],
+  ): string {
+    let code = 'import cadquery as cq\n\n';
+    for (const part of parts) {
+      const varName = `part_${part.name}`;
+      const cleaned = part.code!
+        .split('\n')
+        .filter((line) => {
+          const t = line.trim();
+          return !t.startsWith('import cadquery') && !t.startsWith('from cadquery');
+        })
+        .join('\n')
+        .replace(/\bresult\b/g, varName);
+      code += `# --- ${part.name} ---\n${cleaned}\n\n`;
+    }
+    code += '# --- Assembly ---\nassy = cq.Assembly()\n';
+    for (const part of parts) {
+      const varName = `part_${part.name}`;
+      const pos = planParts.find((p) => p.name === part.name)?.position ?? [0, 0, 0];
+      code += `assy.add(${varName}, name="${part.name}", loc=cq.Location((${pos[0]}, ${pos[1]}, ${pos[2]})))\n`;
+    }
+    code += 'result = assy.toCompound()\n';
+    return code;
   }
 
   /**
@@ -893,15 +928,6 @@
             }
             break;
 
-          case 'FallbackActivated':
-            {
-              const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-              chatStore.updateLastMessage(
-                `${last}\nDeterministic fallback activated (${event.template_id}): ${event.reason}`
-              );
-            }
-            break;
-
           case 'IterativeStart':
             isIterative = true;
             generationType = 'iterative';
@@ -1028,7 +1054,7 @@
 
       if (chatStore.generationId !== myGen) return;
 
-      const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport(true);
+      const importedMultipart = isMultiPart && (multipartImportQueued || tryQueueMultipartAssemblyImport(true));
       if (importedMultipart) {
         chatStore.addMessage({
           id: generateId(),
@@ -1089,6 +1115,26 @@
     } catch (err) {
       lastGenerationSuccess = false;
       lastGenerationError = `${err}`;
+
+      // Timeout recovery: if parts completed, assemble what we have
+      const isTimeout = `${err}`.includes('runtime exceeded');
+      if (isTimeout && isMultiPart) {
+        const completedParts = partProgress.filter((p) => p.status === 'complete' && p.code);
+        if (completedParts.length > 0 && !lastGeneratedCode) {
+          const assembled = assemblePartsClientSide(completedParts, multiPartPlanParts);
+          project.setCode(assembled);
+          lastGeneratedCode = assembled;
+          lastGenerationSuccess = true;
+          lastGenerationError = undefined;
+          chatStore.updateLastMessage(
+            'Generation timed out during validation, but parts were assembled successfully. ' +
+            'The code may not be fully validated — review before use.',
+          );
+          await executeAndHandleGeneratedCode(assembled, myGen, 'Assembly executed (unvalidated).');
+          return;
+        }
+      }
+
       if (streamingContent.length === 0 && !isMultiPart) {
         chatStore.updateLastMessage(`Error: ${err}`);
       } else {
@@ -1231,8 +1277,15 @@
   }
 
   async function handleSend() {
-    const text = inputText.trim();
+    let text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
+
+    // If we're awaiting clarification, combine original prompt with user's answers
+    if (awaitingClarification && clarificationOriginalPrompt) {
+      text = `${clarificationOriginalPrompt}\n\nUser clarifications:\n${text}`;
+      awaitingClarification = false;
+      clarificationOriginalPrompt = '';
+    }
 
     const myGen = chatStore.generationId;
     isMultiPart = false;
@@ -1529,15 +1582,6 @@
               }
               break;
 
-            case 'FallbackActivated':
-              {
-                const last = chatStore.messages[chatStore.messages.length - 1]?.content || '';
-                chatStore.updateLastMessage(
-                  `${last}\nDeterministic fallback activated (${event.template_id}): ${event.reason}`
-                );
-              }
-              break;
-
             case 'IterativeStart':
               isIterative = true;
               generationType = 'iterative';
@@ -1682,7 +1726,7 @@
         if (chatStore.generationId !== myGen) return;
 
         // Post-generation execution for modification path
-        const importedMultipart = isMultiPart && tryQueueMultipartAssemblyImport(true);
+        const importedMultipart = isMultiPart && (multipartImportQueued || tryQueueMultipartAssemblyImport(true));
         if (importedMultipart) {
           chatStore.addMessage({
             id: generateId(),
@@ -1797,6 +1841,10 @@
               };
               break;
 
+            case 'ClarificationNeeded':
+              // Will be handled after await returns
+              break;
+
             case 'TokenUsage':
               if (event.phase === 'total') {
                 tokenUsageSummary = {
@@ -1816,6 +1864,20 @@
           planTimerInterval = null;
         }
 
+        // Check if triage needs clarification before showing plan editor
+        if (planResult.clarification_questions?.length) {
+          const questionsText = planResult.clarification_questions
+            .map((q: string, i: number) => `${i + 1}. ${q}`)
+            .join('\n');
+          chatStore.updateLastMessage(
+            `I need a few more details before designing this:\n\n${questionsText}\n\nPlease answer and I'll generate the design plan.`
+          );
+          chatStore.setStreaming(false);
+          awaitingClarification = true;
+          clarificationOriginalPrompt = text;
+          return;
+        }
+
         if (settingsStore.config.auto_approve_plan) {
           // Auto-approve: immediately proceed to code generation
           chatStore.updateLastMessage('Plan approved (auto). Generating code...');
@@ -1832,6 +1894,26 @@
     } catch (err) {
       lastGenerationSuccess = false;
       lastGenerationError = `${err}`;
+
+      // Timeout recovery: if parts completed, assemble what we have
+      const isTimeout = `${err}`.includes('runtime exceeded');
+      if (isTimeout && isMultiPart) {
+        const completedParts = partProgress.filter((p) => p.status === 'complete' && p.code);
+        if (completedParts.length > 0 && !lastGeneratedCode) {
+          const assembled = assemblePartsClientSide(completedParts, multiPartPlanParts);
+          project.setCode(assembled);
+          lastGeneratedCode = assembled;
+          lastGenerationSuccess = true;
+          lastGenerationError = undefined;
+          chatStore.updateLastMessage(
+            'Generation timed out during validation, but parts were assembled successfully. ' +
+            'The code may not be fully validated — review before use.',
+          );
+          await executeAndHandleGeneratedCode(assembled, myGen, 'Assembly executed (unvalidated).');
+          return;
+        }
+      }
+
       if (streamingContent.length === 0 && !isMultiPart) {
         chatStore.updateLastMessage(`Error: ${err}`);
       } else {
