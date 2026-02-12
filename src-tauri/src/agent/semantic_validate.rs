@@ -13,6 +13,9 @@ pub enum OrientationPolicy {
 pub struct ExpectedBboxMm {
     pub sorted_extents_mm: [f64; 3],
     pub tolerance_ratio: f64,
+    /// Wider tolerance for the smallest sorted extent when additive features are present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_extent_tolerance_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,26 +61,112 @@ fn is_back_plate_like_part(part_name: &str) -> bool {
         || contains_token(&tokens, "back") && contains_token(&tokens, "plate")
 }
 
+fn description_has_additive_features(description: &str) -> bool {
+    let lower = description.to_lowercase();
+    let tokens = tokenize_words(&lower);
+    const ADDITIVE_TOKENS: &[&str] = &[
+        "lip", "ridge", "boss", "tab", "flange", "snap", "clip",
+        "rim", "ledge", "step", "protrusion", "rib", "oring",
+        "raised", "bump",
+    ];
+    let token_match = ADDITIVE_TOKENS.iter().any(|kw| tokens.iter().any(|t| t == kw));
+    // Also check hyphenated forms that tokenize_words splits
+    let phrase_match = lower.contains("o-ring");
+    token_match || phrase_match
+}
+
+const SUB_FEATURE_QUALIFIERS: &[&str] = &[
+    "slot", "band", "groove", "channel", "notch",
+    "lip", "ridge", "rib", "boss", "tab", "flange",
+    "snap", "clip", "rim", "ledge", "step", "protrusion",
+    "bump", "raised", "oring", "clearance", "tolerance",
+    "internal", "inner", "wall", "fillet", "chamfer",
+];
+
+fn parse_dims_line(description: &str) -> Option<[f64; 3]> {
+    let lower = description.to_lowercase();
+    let dims_start = lower.find("dims:")?;
+    let dims_text = &description[dims_start..];
+    let dims_line = dims_text.lines().next().unwrap_or(dims_text);
+
+    let kv_re = Regex::new(r"(?i)(\w+)\s*=\s*(\d+(?:\.\d+)?)\s*mm").ok()?;
+    let mut length = None;
+    let mut width = None;
+    let mut height = None;
+
+    for cap in kv_re.captures_iter(dims_line) {
+        let key = cap[1].to_lowercase();
+        let val: f64 = cap[2].parse().ok()?;
+        if val <= 0.0 {
+            continue;
+        }
+        match key.as_str() {
+            "length" | "len" => length = Some(val),
+            "width" => width = Some(val),
+            "height" => height = Some(val),
+            _ => {} // skip "wall", "thickness", etc.
+        }
+    }
+
+    match (length, width, height) {
+        (Some(l), Some(w), Some(h)) => Some([l, w, h]),
+        _ => None,
+    }
+}
+
+fn parse_footprint_plus_height(description: &str) -> Option<[f64; 3]> {
+    let fp_re = Regex::new(
+        r"(?i)footprint\s+(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?",
+    )
+    .ok()?;
+    let cap = fp_re.captures(description)?;
+    let a: f64 = cap.get(1)?.as_str().parse().ok().filter(|v: &f64| *v > 0.0)?;
+    let b: f64 = cap.get(2)?.as_str().parse().ok().filter(|v: &f64| *v > 0.0)?;
+    let height = parse_named_dimension(
+        description,
+        &["overall height", "outer height", "envelope height", "height"],
+    )?;
+    Some([a, b, height])
+}
+
 fn parse_named_dimension(description: &str, labels: &[&str]) -> Option<f64> {
     for label in labels {
         let pat = format!(
             r"(?i)\b{}\b[^0-9-]*(-?\d+(?:\.\d+)?)\s*mm",
             regex::escape(label)
         );
-        if let Some(val) = Regex::new(&pat)
-            .ok()
-            .and_then(|re| re.captures(description))
-            .and_then(|c| c.get(1))
-            .and_then(|m| m.as_str().parse::<f64>().ok())
-            .filter(|v| *v > 0.0)
-        {
-            return Some(val);
+        let re = Regex::new(&pat).ok()?;
+
+        for cap in re.captures_iter(description) {
+            let val: f64 = match cap.get(1).and_then(|m| m.as_str().parse().ok()) {
+                Some(v) if v > 0.0 => v,
+                _ => continue,
+            };
+
+            // Check preceding word for sub-feature qualifier
+            let match_start = cap.get(0).unwrap().start();
+            let prefix = &description[..match_start].to_lowercase();
+            let last_word = prefix.split_whitespace().last().unwrap_or("");
+            let is_sub_feature = SUB_FEATURE_QUALIFIERS
+                .iter()
+                .any(|q| last_word == *q || last_word.ends_with(q));
+
+            if !is_sub_feature {
+                return Some(val); // First non-sub-feature match wins
+            }
+            // Don't store sub-feature matches as fallback — they cause false rejections
         }
     }
     None
 }
 
 pub fn infer_envelope_dimensions_mm(description: &str) -> Option<[f64; 3]> {
+    // 1. Structured Dims: line (highest priority — explicit key=value format)
+    if let Some(dims) = parse_dims_line(description) {
+        return Some(dims);
+    }
+
+    // 2. Compact NxNxN format (e.g. "42x28x7.5mm")
     let compact = Regex::new(
         r"(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?",
     )
@@ -95,9 +184,12 @@ pub fn infer_envelope_dimensions_mm(description: &str) -> Option<[f64; 3]> {
         }
     }
 
-    // Semantic-aware envelope extraction:
-    // - Prefer explicit outer/envelope dimensions.
-    // - Do not use feature values like thickness/depth as a fake third axis.
+    // 3. Footprint NxN + separate height (e.g. "Footprint 42x28mm ... height 7.5mm")
+    if let Some(dims) = parse_footprint_plus_height(description) {
+        return Some(dims);
+    }
+
+    // 4. Named dimension parsing (fallback, with sub-feature filtering)
     let length = parse_named_dimension(description, &["overall length", "outer length", "length"]);
     let width = parse_named_dimension(description, &["overall width", "outer width", "width"]);
     let height = parse_named_dimension(
@@ -151,9 +243,15 @@ fn infer_required_feature_hints(part_name: &str, description: &str) -> Vec<Strin
 pub fn build_default_contract(part_name: &str, description: &str) -> SemanticPartContract {
     let expected_bbox_mm = infer_envelope_dimensions_mm(description).map(|mut dims| {
         dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let min_extent_tolerance = if description_has_additive_features(description) {
+            Some(1.50)
+        } else {
+            None
+        };
         ExpectedBboxMm {
             sorted_extents_mm: dims,
             tolerance_ratio: 0.70,
+            min_extent_tolerance_ratio: min_extent_tolerance,
         }
     });
 
@@ -169,7 +267,7 @@ pub fn build_default_contract(part_name: &str, description: &str) -> SemanticPar
 pub fn validate_part_semantics(
     contract: &SemanticPartContract,
     report: &PostGeometryValidationReport,
-    code: &str,
+    _code: &str,
 ) -> SemanticValidationResult {
     let mut findings = Vec::new();
 
@@ -191,8 +289,13 @@ pub fn validate_part_semantics(
         actual.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
         for (idx, expected) in expected_bbox.sorted_extents_mm.iter().enumerate() {
-            let min_allowed = expected * (1.0 - expected_bbox.tolerance_ratio);
-            let max_allowed = expected * (1.0 + expected_bbox.tolerance_ratio);
+            let effective_tolerance = if idx == 2 {
+                expected_bbox.min_extent_tolerance_ratio.unwrap_or(expected_bbox.tolerance_ratio)
+            } else {
+                expected_bbox.tolerance_ratio
+            };
+            let min_allowed = expected * (1.0 - effective_tolerance);
+            let max_allowed = expected * (1.0 + effective_tolerance);
             let got = actual[idx];
             if got < min_allowed || got > max_allowed {
                 findings.push(format!(
@@ -219,15 +322,9 @@ pub fn validate_part_semantics(
         }
     }
 
-    let code_lower = code.to_lowercase();
-    for hint in &contract.required_feature_hints {
-        if !code_lower.contains(hint) {
-            findings.push(format!(
-                "required feature hint '{}' not reflected in generated code.",
-                hint
-            ));
-        }
-    }
+    // Feature hints are advisory — the AI may implement features using different
+    // naming conventions. Remaining validations (component count, bbox, orientation)
+    // are objective geometric checks that correctly catch broken geometry.
 
     SemanticValidationResult {
         passed: findings.is_empty(),
@@ -394,5 +491,100 @@ mod tests {
         )
         .expect("should infer envelope dimensions");
         assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn backplate_with_lip_uses_wider_tolerance() {
+        let contract = build_default_contract(
+            "back_plate",
+            "Single editable back plate solid. Base length 30mm width 24mm height 1.5mm. Add insertion lip.",
+        );
+        let bbox = contract.expected_bbox_mm.expect("should have bbox");
+        assert_eq!(
+            bbox.min_extent_tolerance_ratio,
+            Some(1.50),
+            "additive feature 'lip' should trigger wider tolerance"
+        );
+    }
+
+    #[test]
+    fn backplate_with_lip_accepts_taller_geometry() {
+        // Base thickness 1.5mm + lip 1.2mm = 2.7mm total
+        let contract = build_default_contract(
+            "back_plate",
+            "Single editable back plate solid. Base length 30mm width 24mm height 1.5mm. Add insertion lip.",
+        );
+        let mut report = base_report();
+        report.bounds_min = [-15.0, -12.0, 0.0];
+        report.bounds_max = [15.0, 12.0, 2.7];
+        report.component_count = 1;
+        let result = validate_part_semantics(&contract, &report, "result = back_plate");
+        assert!(
+            result.passed,
+            "backplate with lip (2.7mm actual vs 1.5mm stated) should pass with wider tolerance, findings: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn housing_without_features_uses_base_tolerance() {
+        let contract = build_default_contract(
+            "housing",
+            "Single editable housing solid. Base length 42mm width 28mm height 7.5mm.",
+        );
+        let bbox = contract.expected_bbox_mm.expect("should have bbox");
+        assert_eq!(
+            bbox.min_extent_tolerance_ratio, None,
+            "plain description should not trigger wider tolerance"
+        );
+    }
+
+    #[test]
+    fn test_parse_dims_line_extracts_overall() {
+        let desc = "Housing with band slot width 20mm and internal cavity. \
+                     Dims: length=42mm, width=28mm, height=7.5mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse Dims line");
+        assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn test_parse_dims_line_ignores_wall() {
+        let desc = "Dims: length=42mm, width=28mm, height=7.5mm, wall=1.8mm";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse Dims line");
+        assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn test_footprint_plus_height_extraction() {
+        let desc = "Single editable housing solid. Footprint 42x28mm, height 7.5mm, wall 1.8mm.";
+        let dims = infer_envelope_dimensions_mm(desc).expect("should parse footprint + height");
+        assert_eq!(dims, [42.0, 28.0, 7.5]);
+    }
+
+    #[test]
+    fn test_named_dimension_skips_sub_feature_width() {
+        let val = parse_named_dimension(
+            "Band slot width 20mm. Overall width 28mm.",
+            &["overall width", "width"],
+        );
+        assert_eq!(val, Some(28.0), "should skip sub-feature 'slot width' and find 'Overall width'");
+    }
+
+    #[test]
+    fn test_named_dimension_skips_lip_height() {
+        let val = parse_named_dimension(
+            "Lip height 1.2mm. Total height 3.2mm.",
+            &["overall height", "height"],
+        );
+        assert_eq!(val, Some(3.2), "should skip sub-feature 'Lip height' and find 'Total height'");
+    }
+
+    #[test]
+    fn test_sub_feature_only_returns_none() {
+        // When only sub-feature dimensions exist, return None rather than a wrong contract
+        let dims = infer_envelope_dimensions_mm(
+            "Lip height 1.2mm, slot width 5mm",
+        );
+        assert!(dims.is_none(), "sub-feature-only description should return None, got: {:?}", dims);
     }
 }

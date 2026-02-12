@@ -456,6 +456,10 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 - Include ALL dimensions (length, width, height, wall thickness, radii, hole diameters)
 - Specify mating surface dimensions explicitly (e.g. "inner bore 42mm to receive part X's 42mm OD")
 - Aim for 2-4 sentences per part; do not truncate critical dimensions
+- End each description with an explicit dimension summary of the OVERALL bounding box:
+  Dims: length=Xmm, width=Xmm, height=Xmm, wall=Xmm [additional dims as needed]
+- The Dims line must reflect the OVERALL part bounding box, NOT sub-feature measurements
+- The dimension summary MUST include all mating surface dimensions with numeric values
 
 Rules:
 - Part names must be valid Python identifiers (snake_case)
@@ -502,11 +506,89 @@ fn extract_dimensional_dependencies(constraints: &[String]) -> String {
     section
 }
 
+/// Resolve cross-references in constraints by looking up sibling part dimensions.
+/// For constraints that reference another part name but contain no numeric dimension,
+/// appends the referenced part's dimensions for context.
+fn resolve_cross_references(plan: &mut GenerationPlan) {
+    let dim_re = Regex::new(r"\d+(?:\.\d+)?\s*mm").unwrap();
+    let ref_re = Regex::new(r"(?:of|from|match)\s+(\w+)").unwrap();
+
+    // Build lookup: part_name → description
+    let lookup: std::collections::HashMap<String, String> = plan
+        .parts
+        .iter()
+        .map(|p| (p.name.clone(), p.description.clone()))
+        .collect();
+
+    for part in &mut plan.parts {
+        for constraint in &mut part.constraints {
+            // Skip constraints that already have numeric dimensions
+            if dim_re.is_match(constraint) {
+                continue;
+            }
+
+            // Try to find a referenced part name
+            if let Some(cap) = ref_re.captures(constraint) {
+                let ref_name = cap.get(1).unwrap().as_str();
+                if let Some(ref_desc) = lookup.get(ref_name) {
+                    let dims: Vec<String> = dim_re
+                        .find_iter(ref_desc)
+                        .map(|m| m.as_str().to_string())
+                        .collect();
+                    if !dims.is_empty() {
+                        constraint.push_str(&format!(
+                            " (reference: {} has dimensions: {})",
+                            ref_name,
+                            dims.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn build_sibling_dimensions_summary(plan: &GenerationPlan, current_part_name: &str) -> String {
+    let dim_re = Regex::new(r"(\d+(?:\.\d+)?)\s*mm").unwrap();
+    let mut summary = String::new();
+
+    for part in &plan.parts {
+        if part.name == current_part_name {
+            continue;
+        }
+
+        let dims: Vec<String> = dim_re
+            .find_iter(&part.description)
+            .map(|m| m.as_str().to_string())
+            .collect();
+
+        summary.push_str(&format!("### Sibling part: {}\n", part.name));
+        summary.push_str(&format!("Description: {}\n", part.description));
+        if !dims.is_empty() {
+            summary.push_str(&format!("Dimensions found: {}\n", dims.join(", ")));
+        }
+        if !part.constraints.is_empty() {
+            summary.push_str("Constraints:\n");
+            for c in &part.constraints {
+                summary.push_str(&format!("- {}\n", c));
+            }
+        }
+        summary.push('\n');
+    }
+
+    if summary.is_empty() {
+        return String::new();
+    }
+
+    format!("## Sibling Parts (for dimensional reference — do NOT generate these)\n{}", summary)
+}
+
 fn build_part_prompt(
     system_prompt: &str,
     part: &PartSpec,
     design_context: &str,
     config: &crate::config::AppConfig,
+    sibling_summary: &str,
 ) -> String {
     let constraints_text = part.constraints
         .iter()
@@ -515,9 +597,16 @@ fn build_part_prompt(
         .join("\n");
     let mating_dims = extract_dimensional_dependencies(&part.constraints);
 
+    let sibling_section = if sibling_summary.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", sibling_summary)
+    };
+
     format!(
         "{}\n\n\
-        ## Geometry Design Context\n{}\n\n\
+        ## Geometry Design Context\n{}\n\
+        {}\n\n\
         ## IMPORTANT: You are generating ONE SPECIFIC PART of a multi-part assembly.\n\n\
         Generate ONLY this part: **{}**\n\n\
         Description: {}\n\n\
@@ -535,6 +624,7 @@ fn build_part_prompt(
         - Result MUST be a single connected solid\n\
         - Use rect().extrude() + edges(\"|Z\").fillet(R) for rounded rectangles\n\
         - For hollow frames (lips, ridges): build as outer.cut(inner), overlap with base before union\n\
+        - After .rect()/.circle()/.polyline(): MUST .extrude()/.revolve()/.sweep()/.loft() to create a solid BEFORE .cut()/.fillet()/.shell()/.hole()\n\
         - Use named intermediates, not one giant chain\n\n\
         STRICT OUTPUT CONTRACT:\n\
         - Return code only (no prose).\n\
@@ -543,6 +633,7 @@ fn build_part_prompt(
         - Keep repair-friendly structure (named intermediates over one giant chain).",
         system_prompt,
         design_context,
+        sibling_section,
         part.name,
         part.description,
         constraints_text,
@@ -567,7 +658,7 @@ async fn request_code_only_part_retry(
         - No prose, no markdown explanation, no bullets.\n\
         - Must assign final geometry to variable named result.\n\
         - Generate ONLY the '{}' part.",
-        build_part_prompt(system_prompt, part, design_context, config),
+        build_part_prompt(system_prompt, part, design_context, config, ""),
         part.name
     );
 
@@ -761,6 +852,9 @@ fn emit_usage(
         cost_usd,
     });
 }
+
+/// Per-part timeout for failed-part retry loop (seconds).
+const PER_PART_RETRY_TIMEOUT_SECS: u64 = 120;
 
 fn effective_generation_timeout_seconds(config: &crate::config::AppConfig) -> u64 {
     // Guardrail: very low manual timeout values can frequently terminate multipart
@@ -1104,7 +1198,9 @@ async fn run_generation_pipeline(
         } else {
             let retry_instruction = format!(
                 "Your previous response could not be parsed as JSON ({:?}). Return ONLY valid compact JSON now. \
-                 Include all critical dimensions in each part description. No markdown, no prose.\n\nPrevious response:\n{}",
+                 Include all critical dimensions in each part description. End each part description with \
+                 'Dims: length=Xmm, width=Xmm, height=Xmm, wall=Xmm' including all mating surface dimensions. \
+                 No markdown, no prose.\n\nPrevious response:\n{}",
                 last_parse_err,
                 planner_response.chars().take(2500).collect::<String>()
             );
@@ -1133,9 +1229,29 @@ async fn run_generation_pipeline(
             emit_usage(on_event, "plan", u, provider_id, model_id);
         }
 
+        // Guard: empty planner response is a provider issue, not a JSON parse issue
+        if plan_json.trim().is_empty() {
+            last_parse_err = Some(format!(
+                "Planner returned empty response (attempt {}). Check AI provider connectivity and model settings.",
+                attempt
+            ));
+            planner_parse_failures = planner_parse_failures.saturating_add(1);
+            if attempt < MAX_PLANNER_PARSE_ATTEMPTS {
+                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                    message: format!(
+                        "Planner returned empty response (attempt {}/{}), retrying...",
+                        attempt, MAX_PLANNER_PARSE_ATTEMPTS
+                    ),
+                });
+            }
+            continue;
+        }
+
         match parse_plan(&plan_json) {
             Ok(parsed) => {
-                plan = Some(parsed);
+                let mut p = parsed;
+                resolve_cross_references(&mut p);
+                plan = Some(p);
                 break;
             }
             Err(parse_err) => {
@@ -1160,9 +1276,10 @@ async fn run_generation_pipeline(
                 let parse_err = last_parse_err
                     .clone()
                     .unwrap_or_else(|| "unknown planner parse error".to_string());
+                let response_preview: String = planner_response.chars().take(200).collect();
                 return Err(AppError::AiProviderError(format!(
-                    "Planner failed to decompose parts after {} attempt(s): {}",
-                    planner_parse_failures, parse_err
+                    "Planner failed to decompose parts after {} attempt(s): {}. Last response: '{}'",
+                    planner_parse_failures, parse_err, response_preview
                 )));
             } else {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
@@ -1712,7 +1829,8 @@ async fn run_generation_pipeline(
 
     for (idx, part) in plan.parts.iter().enumerate() {
         let part_provider = create_provider(config)?;
-        let part_prompt = build_part_prompt(system_prompt, part, plan_text, config);
+        let sibling_summary = build_sibling_dimensions_summary(&plan, &part.name);
+        let part_prompt = build_part_prompt(system_prompt, part, plan_text, config, &sibling_summary);
         let part_name = part.name.clone();
         let event_channel = on_event.clone();
 
@@ -1723,7 +1841,10 @@ async fn run_generation_pipeline(
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: format!("Generate the CadQuery code for: {}", part.description),
+                content: format!(
+                    "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
+                    user_request, part.name, part.description
+                ),
             },
         ];
 
@@ -1965,145 +2086,164 @@ async fn run_generation_pipeline(
 
             for &failed_idx in &failed_indices {
                 let part_spec = &plan.parts[failed_idx];
-                let first_error = part_failure_signatures
-                    .get(failed_idx)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown error".to_string());
+                let part_name_for_timeout = part_spec.name.clone();
 
-                let retry_prompt = format!(
-                    "{}\n\n\
-                    ## RETRY CONTEXT\n\
-                    A previous attempt to generate this part FAILED with error:\n\
-                    ```\n{}\n```\n\n\
-                    Use simpler, more robust CadQuery operations. Avoid shell(), loft(), \
-                    and blanket fillet(). Prefer box/cylinder primitives with boolean cut/union.\n\n\
-                    {}",
-                    system_prompt,
-                    first_error.chars().take(1500).collect::<String>(),
-                    build_part_prompt("", part_spec, plan_text, config)
-                );
+                let retry_result = timeout(
+                    Duration::from_secs(PER_PART_RETRY_TIMEOUT_SECS),
+                    async {
+                        let first_error = part_failure_signatures
+                            .get(failed_idx)
+                            .cloned()
+                            .unwrap_or_else(|| "unknown error".to_string());
 
-                let retry_messages = vec![
-                    ChatMessage {
-                        role: "system".to_string(),
-                        content: retry_prompt,
-                    },
-                    ChatMessage {
-                        role: "user".to_string(),
-                        content: format!(
-                            "Generate the CadQuery code for: {}. \
-                            Use only robust primitives and boolean operations.",
-                            part_spec.description
-                        ),
-                    },
-                ];
+                        let sibling_summary = build_sibling_dimensions_summary(&plan, &part_spec.name);
+                        let retry_prompt = format!(
+                            "{}\n\n\
+                            ## RETRY CONTEXT\n\
+                            A previous attempt to generate this part FAILED with error:\n\
+                            ```\n{}\n```\n\n\
+                            Use simpler, more robust CadQuery operations. Avoid shell(), loft(), \
+                            and blanket fillet(). Prefer box/cylinder primitives with boolean cut/union.\n\n\
+                            {}",
+                            system_prompt,
+                            first_error.chars().take(1500).collect::<String>(),
+                            build_part_prompt("", part_spec, plan_text, config, &sibling_summary)
+                        );
 
-                let retry_provider = match create_provider(config) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
+                        let retry_messages = vec![
+                            ChatMessage {
+                                role: "system".to_string(),
+                                content: retry_prompt,
+                            },
+                            ChatMessage {
+                                role: "user".to_string(),
+                                content: format!(
+                                    "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}. \
+                                    Use only robust primitives and boolean operations.",
+                                    user_request, part_spec.name, part_spec.description
+                                ),
+                            },
+                        ];
 
-                let _ = on_event.send(MultiPartEvent::PlanStatus {
-                    message: format!("Retry-generating part '{}'...", part_spec.name),
-                });
+                        let retry_provider = match create_provider(config) {
+                            Ok(p) => p,
+                            Err(_) => return,
+                        };
 
-                match retry_provider.complete(&retry_messages, None).await {
-                    Ok((response, usage)) => {
-                        if let Some(ref u) = usage {
-                            total_usage.add(u);
-                        }
-                        if let Some(code) = extract_code_from_response(&response) {
-                            let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
-                                part_index: failed_idx,
-                                part_name: part_spec.name.clone(),
-                                code: code.clone(),
-                            });
+                        let _ = on_event.send(MultiPartEvent::PlanStatus {
+                            message: format!("Retry-generating part '{}'...", part_spec.name),
+                        });
 
-                            let part_request = part_spec.description.clone();
-                            let semantic_contract =
-                                semantic_validate::build_default_contract(&part_spec.name, &part_request);
-                            let preview_ctx = executor::ExecutionContext {
-                                venv_dir: ctx.venv_dir.clone(),
-                                runner_script: ctx.runner_script.clone(),
-                                config: config.clone(),
-                            };
-
-                            match evaluate_part_acceptance(
-                                &code,
-                                &preview_ctx,
-                                system_prompt,
-                                &part_request,
-                                &part_spec.name,
-                                Some(&semantic_contract),
-                            )
-                            .await
-                            {
-                                Ok(artifact) => {
-                                    let _ = on_event.send(MultiPartEvent::SemanticValidationReport {
+                        match retry_provider.complete(&retry_messages, None).await {
+                            Ok((response, usage)) => {
+                                if let Some(ref u) = usage {
+                                    total_usage.add(u);
+                                }
+                                if let Some(code) = extract_code_from_response(&response) {
+                                    let _ = on_event.send(MultiPartEvent::PartCodeExtracted {
+                                        part_index: failed_idx,
                                         part_name: part_spec.name.clone(),
-                                        passed: true,
-                                        findings: artifact.semantic_findings.clone(),
+                                        code: code.clone(),
                                     });
-                                    if let Some(stage) = artifact.retry_ladder_stage_reached {
-                                        accepted_retry_stage = Some(
-                                            accepted_retry_stage.map(|s| s.max(stage)).unwrap_or(stage),
-                                        );
-                                    }
-                                    if let Some(ref report) = artifact.post_geometry_report {
-                                        let _ = on_event.send(
-                                            MultiPartEvent::PostGeometryValidationReport {
-                                                report: report.clone(),
-                                            },
-                                        );
-                                    }
-                                    if config.preview_on_partial_failure {
-                                        if let Some(stl_base64) = artifact.stl_base64.clone() {
-                                            partial_preview_available = true;
-                                            let _ = on_event.send(MultiPartEvent::PartStlReady {
+
+                                    let part_request = part_spec.description.clone();
+                                    let semantic_contract =
+                                        semantic_validate::build_default_contract(&part_spec.name, &part_request);
+                                    let mut retry_config = config.clone();
+                                    retry_config.max_validation_attempts = retry_config.max_validation_attempts.min(2);
+                                    let preview_ctx = executor::ExecutionContext {
+                                        venv_dir: ctx.venv_dir.clone(),
+                                        runner_script: ctx.runner_script.clone(),
+                                        config: retry_config,
+                                    };
+
+                                    match evaluate_part_acceptance(
+                                        &code,
+                                        &preview_ctx,
+                                        system_prompt,
+                                        &part_request,
+                                        &part_spec.name,
+                                        Some(&semantic_contract),
+                                    )
+                                    .await
+                                    {
+                                        Ok(artifact) => {
+                                            let _ = on_event.send(MultiPartEvent::SemanticValidationReport {
+                                                part_name: part_spec.name.clone(),
+                                                passed: true,
+                                                findings: artifact.semantic_findings.clone(),
+                                            });
+                                            if let Some(stage) = artifact.retry_ladder_stage_reached {
+                                                accepted_retry_stage = Some(
+                                                    accepted_retry_stage.map(|s| s.max(stage)).unwrap_or(stage),
+                                                );
+                                            }
+                                            if let Some(ref report) = artifact.post_geometry_report {
+                                                let _ = on_event.send(
+                                                    MultiPartEvent::PostGeometryValidationReport {
+                                                        report: report.clone(),
+                                                    },
+                                                );
+                                            }
+                                            if config.preview_on_partial_failure {
+                                                if let Some(stl_base64) = artifact.stl_base64.clone() {
+                                                    partial_preview_available = true;
+                                                    let _ = on_event.send(MultiPartEvent::PartStlReady {
+                                                        part_index: failed_idx,
+                                                        part_name: part_spec.name.clone(),
+                                                        stl_base64,
+                                                    });
+                                                }
+                                            }
+                                            let position = part_spec.position;
+                                            part_codes[failed_idx] = Some((
+                                                part_spec.name.clone(),
+                                                artifact.code.clone(),
+                                                position,
+                                            ));
+                                            accepted_parts.push((
+                                                part_spec.name.clone(),
+                                                artifact.code,
+                                                position,
+                                            ));
+                                            any_success = true;
+                                            let _ = on_event.send(MultiPartEvent::PartComplete {
                                                 part_index: failed_idx,
                                                 part_name: part_spec.name.clone(),
-                                                stl_base64,
+                                                success: true,
+                                                error: None,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = on_event.send(MultiPartEvent::PlanStatus {
+                                                message: format!(
+                                                    "Retry for '{}' also failed acceptance: {}",
+                                                    part_spec.name, e
+                                                ),
                                             });
                                         }
                                     }
-                                    let position = part_spec.position;
-                                    part_codes[failed_idx] = Some((
-                                        part_spec.name.clone(),
-                                        artifact.code.clone(),
-                                        position,
-                                    ));
-                                    accepted_parts.push((
-                                        part_spec.name.clone(),
-                                        artifact.code,
-                                        position,
-                                    ));
-                                    any_success = true;
-                                    let _ = on_event.send(MultiPartEvent::PartComplete {
-                                        part_index: failed_idx,
-                                        part_name: part_spec.name.clone(),
-                                        success: true,
-                                        error: None,
-                                    });
                                 }
-                                Err(e) => {
-                                    let _ = on_event.send(MultiPartEvent::PlanStatus {
-                                        message: format!(
-                                            "Retry for '{}' also failed acceptance: {}",
-                                            part_spec.name, e
-                                        ),
-                                    });
-                                }
+                            }
+                            Err(e) => {
+                                let _ = on_event.send(MultiPartEvent::PlanStatus {
+                                    message: format!(
+                                        "Retry generation for '{}' failed: {}",
+                                        part_spec.name, e
+                                    ),
+                                });
                             }
                         }
                     }
-                    Err(e) => {
-                        let _ = on_event.send(MultiPartEvent::PlanStatus {
-                            message: format!(
-                                "Retry generation for '{}' failed: {}",
-                                part_spec.name, e
-                            ),
-                        });
-                    }
+                ).await;
+
+                if retry_result.is_err() {
+                    let _ = on_event.send(MultiPartEvent::PlanStatus {
+                        message: format!(
+                            "Retry for '{}' timed out after {}s, skipping to next part.",
+                            part_name_for_timeout, PER_PART_RETRY_TIMEOUT_SECS
+                        ),
+                    });
                 }
             }
         }
@@ -3146,8 +3286,8 @@ async fn build_part_preview_stl_with_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_assembly_bbox_hint, parse_plan, request_requires_multipart_contract,
-        GenerationPlan, PartSpec,
+        build_assembly_bbox_hint, build_part_prompt, build_sibling_dimensions_summary, parse_plan,
+        request_requires_multipart_contract, resolve_cross_references, GenerationPlan, PartSpec,
     };
 
     #[test]
@@ -3364,6 +3504,129 @@ That should work."#;
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Sibling dimensions & cross-reference resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_sibling_dimensions_summary() {
+        let plan = GenerationPlan {
+            mode: "multi".to_string(),
+            description: Some("Two parts".to_string()),
+            parts: vec![
+                PartSpec {
+                    name: "housing".to_string(),
+                    description: "Main shell 42x28x7.5mm with wall 1.8mm".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec!["inner bore 40mm".to_string()],
+                },
+                PartSpec {
+                    name: "back_plate".to_string(),
+                    description: "Cover plate 40x26x1.5mm".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec!["must match housing inner bore".to_string()],
+                },
+            ],
+        };
+
+        let summary = build_sibling_dimensions_summary(&plan, "back_plate");
+        assert!(summary.contains("housing"), "should contain sibling part name");
+        assert!(summary.contains("42"), "should contain sibling dims");
+        assert!(summary.contains("28"), "should contain sibling dims");
+        assert!(summary.contains("7.5mm"), "should contain sibling dims");
+        assert!(!summary.contains("### Sibling part: back_plate"), "should exclude current part");
+    }
+
+    #[test]
+    fn test_resolve_cross_references_adds_dimensions() {
+        let mut plan = GenerationPlan {
+            mode: "multi".to_string(),
+            description: Some("Two parts".to_string()),
+            parts: vec![
+                PartSpec {
+                    name: "housing".to_string(),
+                    description: "Main shell 42mm wide, 28mm deep, 7.5mm tall".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![],
+                },
+                PartSpec {
+                    name: "back_plate".to_string(),
+                    description: "Cover plate".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec!["must match housing inner bore".to_string()],
+                },
+            ],
+        };
+
+        resolve_cross_references(&mut plan);
+
+        let back_plate_constraint = &plan.parts[1].constraints[0];
+        assert!(
+            back_plate_constraint.contains("42mm"),
+            "resolved constraint should contain housing dimensions, got: {}",
+            back_plate_constraint
+        );
+        assert!(
+            back_plate_constraint.contains("reference: housing"),
+            "resolved constraint should reference housing, got: {}",
+            back_plate_constraint
+        );
+    }
+
+    #[test]
+    fn test_resolve_cross_references_preserves_existing() {
+        let mut plan = GenerationPlan {
+            mode: "multi".to_string(),
+            description: Some("Two parts".to_string()),
+            parts: vec![
+                PartSpec {
+                    name: "housing".to_string(),
+                    description: "Main shell 42mm wide".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![],
+                },
+                PartSpec {
+                    name: "back_plate".to_string(),
+                    description: "Cover plate".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec!["inner bore 42mm to match housing".to_string()],
+                },
+            ],
+        };
+
+        let original = plan.parts[1].constraints[0].clone();
+        resolve_cross_references(&mut plan);
+
+        assert_eq!(
+            plan.parts[1].constraints[0], original,
+            "constraint with existing dimension should be left unchanged"
+        );
+    }
+
+    #[test]
+    fn test_build_part_prompt_includes_sibling_summary() {
+        let part = PartSpec {
+            name: "back_plate".to_string(),
+            description: "Cover plate 40x26x1.5mm".to_string(),
+            position: [0.0, 0.0, 0.0],
+            constraints: vec![],
+        };
+
+        let sibling_text = "## Sibling Parts (for dimensional reference)\n### Sibling part: housing\nDescription: Main shell 42x28x7.5mm\nDimensions found: 42mm, 28mm, 7.5mm\n";
+
+        let config = crate::config::AppConfig::default();
+        let prompt = build_part_prompt("system", &part, "design context", &config, sibling_text);
+
+        assert!(
+            prompt.contains("Sibling Parts"),
+            "prompt should include sibling summary section"
+        );
+        assert!(
+            prompt.contains("42"),
+            "prompt should include sibling dimensions"
+        );
+    }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -3543,7 +3806,7 @@ pub async fn retry_part(
     part_index: usize,
     part_spec: PartSpec,
     design_plan_text: String,
-    _user_request: String,
+    user_request: String,
     on_event: Channel<MultiPartEvent>,
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
@@ -3571,7 +3834,7 @@ pub async fn retry_part(
     }
 
     // Build part prompt
-    let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text, &config);
+    let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text, &config, "");
 
     let part_messages = vec![
         ChatMessage {
@@ -3580,7 +3843,10 @@ pub async fn retry_part(
         },
         ChatMessage {
             role: "user".to_string(),
-            content: format!("Generate the CadQuery code for: {}", part_spec.description),
+            content: format!(
+                "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
+                user_request, part_spec.name, part_spec.description
+            ),
         },
     ];
 
