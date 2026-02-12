@@ -34,6 +34,7 @@
   let enableCodeReview = $state(true);
   let enableConsensus = $state(false);
   let autoApprovePlan = $state(false);
+  let generationTimeout = $state(600);
 
   // New settings
   let theme = $state<ThemeId>('dark');
@@ -70,6 +71,7 @@
       enableCodeReview = settings.config.enable_code_review ?? true;
       enableConsensus = settings.config.enable_consensus ?? false;
       autoApprovePlan = settings.config.auto_approve_plan ?? false;
+      generationTimeout = settings.config.max_generation_runtime_seconds ?? 600;
       theme = (settings.config.theme as ThemeId) || 'dark';
       displayUnits = settings.config.display_units || 'mm';
       gridSize = settings.config.grid_size ?? 500;
@@ -142,6 +144,7 @@
       enable_code_review: enableCodeReview,
       enable_consensus: enableConsensus,
       auto_approve_plan: autoApprovePlan,
+      max_generation_runtime_seconds: generationTimeout,
       theme,
       display_units: displayUnits,
       grid_size: gridSize,
@@ -445,6 +448,13 @@
             Auto-approve design plan
           </label>
           <span class="form-hint">Skip the plan editor and generate code immediately. Faster but no chance to review the plan.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="timeout-input">Generation timeout (seconds)</label>
+          <input id="timeout-input" class="form-input" type="number"
+            min="60" max="1800" step="60" bind:value={generationTimeout} />
+          <span class="form-hint">Max time for multipart generation. Increase for complex assemblies.</span>
         </div>
       </div>
 
