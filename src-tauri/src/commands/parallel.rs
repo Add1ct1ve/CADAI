@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -557,21 +558,35 @@ fn build_sibling_dimensions_summary(plan: &GenerationPlan, current_part_name: &s
             continue;
         }
 
-        let dims: Vec<String> = dim_re
+        // Extract dimensions from both description and constraints
+        let desc_dims: Vec<String> = dim_re
             .find_iter(&part.description)
             .map(|m| m.as_str().to_string())
             .collect();
+        let constraint_dims: Vec<String> = part.constraints.iter()
+            .flat_map(|c| dim_re.find_iter(c).map(|m| m.as_str().to_string()))
+            .collect();
 
-        summary.push_str(&format!("### Sibling part: {}\n", part.name));
-        summary.push_str(&format!("Description: {}\n", part.description));
-        if !dims.is_empty() {
-            summary.push_str(&format!("Dimensions found: {}\n", dims.join(", ")));
+        let mut all_dims = desc_dims;
+        all_dims.extend(constraint_dims);
+        all_dims.sort();
+        all_dims.dedup();
+
+        summary.push_str(&format!("- **{}**", part.name));
+        if !all_dims.is_empty() {
+            summary.push_str(&format!(": dimensions [{}]", all_dims.join(", ")));
         }
-        if !part.constraints.is_empty() {
-            summary.push_str("Constraints:\n");
-            for c in &part.constraints {
-                summary.push_str(&format!("- {}\n", c));
-            }
+        // Include only mating-interface constraints (not full description)
+        let mating_constraints: Vec<&String> = part.constraints.iter()
+            .filter(|c| {
+                let lower = c.to_lowercase();
+                lower.contains("mate") || lower.contains("align") || lower.contains("flush")
+                    || lower.contains("interface") || lower.contains("match")
+                    || lower.contains("attach") || lower.contains("connect")
+            })
+            .collect();
+        if !mating_constraints.is_empty() {
+            summary.push_str(&format!(" | mating: {}", mating_constraints.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("; ")));
         }
         summary.push('\n');
     }
@@ -580,7 +595,7 @@ fn build_sibling_dimensions_summary(plan: &GenerationPlan, current_part_name: &s
         return String::new();
     }
 
-    format!("## Sibling Parts (for dimensional reference — do NOT generate these)\n{}", summary)
+    format!("## Sibling Parts (dimensional reference only — do NOT generate these)\n{}", summary)
 }
 
 fn build_part_prompt(
@@ -604,33 +619,42 @@ fn build_part_prompt(
     };
 
     format!(
-        "{}\n\n\
+        "## ⚠ CRITICAL: SINGLE-PART GENERATION MODE\n\
+        You are generating ONE SPECIFIC PART: **{}**\n\
+        Do NOT generate any other parts. Do NOT create an assembly.\n\
+        The final `result` variable MUST contain ONLY this single part.\n\n\
+        {}\n\n\
         ## Geometry Design Context\n{}\n\
         {}\n\n\
-        ## IMPORTANT: You are generating ONE SPECIFIC PART of a multi-part assembly.\n\n\
-        Generate ONLY this part: **{}**\n\n\
+        ## Part Specification: {}\n\n\
         Description: {}\n\n\
         Constraints:\n{}\n\
         {}\n\n\
         Active reliability policy: {}\n\
-        Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\
-        The final result variable MUST contain ONLY this single part.\n\
-        Do NOT generate any other parts. Do NOT create an assembly.\n\n\
+        Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\n\
         ## CadQuery Construction Rules (MANDATORY)\n\
         - ALWAYS use `centered=(True, True, False)` so the base sits at Z=0\n\
-        - NEVER use shell() — subtract an explicit inner solid instead\n\
+        - shell() is allowed but MUST follow these rules:\n\
+          (1) Always use NEGATIVE thickness: .shell(-WALL) hollows INWARD\n\
+          (2) Apply shell BEFORE boolean operations and fillets — never after\n\
+          (3) The selected face (.faces('>Z').shell()) is the face REMOVED (opened)\n\
+          (4) After shell, verify result is a thin-walled body, not a solid block\n\
+          (5) If shell fails on complex geometry, fall back to manual boolean subtraction: cut a slightly smaller inner solid from the outer\n\
         - Wrap ALL fillet/chamfer/loft in try/except with graceful fallback\n\
         - union() calls MUST have volumetric overlap (0.2mm+), not just face-touching\n\
         - Result MUST be a single connected solid\n\
         - Use rect().extrude() + edges(\"|Z\").fillet(R) for rounded rectangles\n\
         - For hollow frames (lips, ridges): build as outer.cut(inner), overlap with base before union\n\
         - After .rect()/.circle()/.polyline(): MUST .extrude()/.revolve()/.sweep()/.loft() to create a solid BEFORE .cut()/.fillet()/.shell()/.hole()\n\
+        - After switching workplanes (.faces().workplane(), .workplane(offset=...), .transformed()), you MUST create a new sketch (rect, circle, polyline, etc.) before calling .extrude(). The previous sketch does NOT carry over to new workplanes.\n\
         - Use named intermediates, not one giant chain\n\n\
         STRICT OUTPUT CONTRACT:\n\
         - Return code only (no prose).\n\
         - Wrap code in <CODE>...</CODE> tags.\n\
         - Must assign final geometry to variable `result`.\n\
-        - Keep repair-friendly structure (named intermediates over one giant chain).",
+        - Keep repair-friendly structure (named intermediates over one giant chain).\n\n\
+        ## ⚠ REMINDER: Generate ONLY part '{}'. No other parts. No assembly.",
+        part.name,
         system_prompt,
         design_context,
         sibling_section,
@@ -639,6 +663,7 @@ fn build_part_prompt(
         constraints_text,
         mating_dims,
         reliability_policy_text(&config.generation_reliability_profile),
+        part.name,
     )
 }
 
@@ -910,11 +935,19 @@ async fn build_system_prompt_with_retrieval(
     query: &str,
     session_context: Option<String>,
     on_event: &Channel<MultiPartEvent>,
+    compact: bool,
 ) -> (String, retrieval::RetrievalResult) {
-    let base = prompts::build_system_prompt_for_preset(
-        config.agent_rules_preset.as_deref(),
-        cq_version,
-    );
+    let base = if compact {
+        prompts::build_compact_system_prompt_for_preset(
+            config.agent_rules_preset.as_deref(),
+            cq_version,
+        )
+    } else {
+        prompts::build_system_prompt_for_preset(
+            config.agent_rules_preset.as_deref(),
+            cq_version,
+        )
+    };
 
     let _ = on_event.send(MultiPartEvent::RetrievalStatus {
         message: "Retrieving CAD guidance...".to_string(),
@@ -1827,12 +1860,51 @@ async fn run_generation_pipeline(
 
     let mut handles = Vec::new();
 
+    // Write prompt debug log to file for inspection
+    let debug_log_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("multipart_debug.log");
+    let mut debug_log = std::fs::File::create(&debug_log_path).ok();
+    if let Some(ref mut f) = debug_log {
+        let _ = writeln!(f, "╔══════════════════════════════════════════════════════════════════╗");
+        let _ = writeln!(f, "║  MULTI-PART DISPATCH: {} API calls for {} parts", plan.parts.len(), plan.parts.len());
+        let _ = writeln!(f, "║  Parts: {:?}", plan.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+        let _ = writeln!(f, "║  Timestamp: {:?}", std::time::SystemTime::now());
+        let _ = writeln!(f, "╚══════════════════════════════════════════════════════════════════╝");
+        let _ = writeln!(f);
+    }
+    eprintln!("[multipart] Debug log: {}", debug_log_path.display());
+
     for (idx, part) in plan.parts.iter().enumerate() {
         let part_provider = create_provider(config)?;
         let sibling_summary = build_sibling_dimensions_summary(&plan, &part.name);
         let part_prompt = build_part_prompt(system_prompt, part, plan_text, config, &sibling_summary);
         let part_name = part.name.clone();
         let event_channel = on_event.clone();
+
+        let user_content = format!(
+            "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
+            user_request, part.name, part.description
+        );
+
+        // ── Prompt debug logging to file ──────────────────────────────────
+        if let Some(ref mut f) = debug_log {
+            let _ = writeln!(f, "┌─── PART {}/{}: '{}' ───────────────────────────────────────", idx + 1, plan.parts.len(), part.name);
+            let _ = writeln!(f, "│ SYSTEM MESSAGE ({} chars):", part_prompt.len());
+            for line in part_prompt.lines() {
+                let _ = writeln!(f, "│   {}", line);
+            }
+            let _ = writeln!(f, "│");
+            let _ = writeln!(f, "│ USER MESSAGE ({} chars):", user_content.len());
+            for line in user_content.lines() {
+                let _ = writeln!(f, "│   {}", line);
+            }
+            let _ = writeln!(f, "└─── END PART {} ─────────────────────────────────────────────", idx + 1);
+            let _ = writeln!(f);
+            let _ = f.flush();
+        }
+        // ── End prompt debug logging ──────────────────────────────────────
 
         let part_messages = vec![
             ChatMessage {
@@ -1841,10 +1913,7 @@ async fn run_generation_pipeline(
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: format!(
-                    "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
-                    user_request, part.name, part.description
-                ),
+                content: user_content,
             },
         ];
 
@@ -2022,7 +2091,8 @@ async fn run_generation_pipeline(
                                 message: warning.clone(),
                             });
                         }
-                        if config.preview_on_partial_failure {
+                        {
+                            // Always emit individual part STLs for assembly import
                             if let Some(stl_base64) = artifact.stl_base64.clone() {
                                 partial_preview_available = true;
                                 let _ = on_event.send(MultiPartEvent::PartStlReady {
@@ -2185,7 +2255,8 @@ async fn run_generation_pipeline(
                                                     },
                                                 );
                                             }
-                                            if config.preview_on_partial_failure {
+                                            {
+                                                // Always emit individual part STLs for assembly import
                                                 if let Some(stl_base64) = artifact.stl_base64.clone() {
                                                     partial_preview_available = true;
                                                     let _ = on_event.send(MultiPartEvent::PartStlReady {
@@ -2556,6 +2627,7 @@ pub async fn generate_parallel(
         &message,
         session_ctx,
         &on_event,
+        true, // compact prompt for multi-part
     )
     .await;
 
@@ -2995,6 +3067,7 @@ pub async fn generate_from_plan(
         &retrieval_query,
         session_ctx,
         &on_event,
+        true, // compact prompt for multi-part
     )
     .await;
     let provider_id = config.ai_provider.clone();
@@ -3531,10 +3604,14 @@ That should work."#;
 
         let summary = build_sibling_dimensions_summary(&plan, "back_plate");
         assert!(summary.contains("housing"), "should contain sibling part name");
-        assert!(summary.contains("42"), "should contain sibling dims");
-        assert!(summary.contains("28"), "should contain sibling dims");
-        assert!(summary.contains("7.5mm"), "should contain sibling dims");
-        assert!(!summary.contains("### Sibling part: back_plate"), "should exclude current part");
+        // Compact format extracts only Nmm-formatted dimensions (7.5mm, 1.8mm)
+        // — not bare numbers like "42x28x" which lack a mm suffix
+        assert!(summary.contains("7.5mm"), "should contain regex-matched sibling dims");
+        assert!(summary.contains("1.8mm"), "should contain regex-matched wall dim");
+        assert!(summary.contains("40mm"), "should contain constraint dim");
+        assert!(!summary.contains("back_plate"), "should exclude current part");
+        // Compact format: no full description text
+        assert!(!summary.contains("Main shell"), "should not contain full description text");
     }
 
     #[test]
@@ -3812,7 +3889,8 @@ pub async fn retry_part(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.cadquery_version.lock().unwrap().clone();
-    let mut system_prompt = prompts::build_system_prompt_for_preset(
+    // Use compact prompt for part retries (multi-part context)
+    let mut system_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
     );
