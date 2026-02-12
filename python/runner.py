@@ -94,6 +94,73 @@ def _extract_exportables(result):
     return found, invalid
 
 
+def _count_solids(shape):
+    """Count solid sub-shapes using OCP topology explorer."""
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    wrapped = shape.wrapped if hasattr(shape, "wrapped") else shape
+    explorer = TopExp_Explorer(wrapped, TopAbs_SOLID)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    return count
+
+
+def _ensure_single_solid(normalized, cq):
+    """
+    Verify result is a single solid body.
+    If multiple solids found, attempt OCP-level fuse.
+    Exit code 5 if unfixable.
+    """
+    try:
+        count = _count_solids(normalized)
+        if count <= 1:
+            return normalized
+
+        # Try fusing touching/overlapping solids
+        from OCP.TopAbs import TopAbs_SOLID
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+
+        wrapped = normalized.wrapped if hasattr(normalized, "wrapped") else normalized
+        explorer = TopExp_Explorer(wrapped, TopAbs_SOLID)
+        solids = []
+        while explorer.More():
+            solids.append(explorer.Current())
+            explorer.Next()
+
+        fused = solids[0]
+        for s in solids[1:]:
+            op = BRepAlgoAPI_Fuse(fused, s)
+            if op.IsDone():
+                fused = op.Shape()
+            else:
+                print(
+                    f"SPLIT_BODY: result has {count} disconnected solids (fuse failed)",
+                    file=sys.stderr,
+                )
+                sys.exit(5)
+
+        fused_shape = cq.Shape(fused)
+        if _count_solids(fused_shape) == 1:
+            print(f"FUSED: {count} solids merged into 1", file=sys.stderr)
+            return fused_shape
+
+        print(
+            f"SPLIT_BODY: result has {count} disconnected solids after fuse attempt",
+            file=sys.stderr,
+        )
+        sys.exit(5)
+    except SystemExit:
+        raise  # re-raise sys.exit
+    except Exception as e:
+        # Don't block export if the check itself errors
+        print(f"Warning: solid count check skipped: {e}", file=sys.stderr)
+        return normalized
+
+
 def _normalize_result_for_export(result, cq):
     exportables, invalid = _extract_exportables(result)
     if not exportables:
@@ -149,6 +216,7 @@ def main():
     try:
         import cadquery as cq
         normalized = _normalize_result_for_export(result, cq)
+        normalized = _ensure_single_solid(normalized, cq)
         ext = os.path.splitext(output_file)[1].lower()
         if ext in ('.step', '.stp'):
             cq.exporters.export(normalized, output_file, cq.exporters.ExportTypes.STEP)

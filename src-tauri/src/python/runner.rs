@@ -38,6 +38,7 @@ fn map_runner_error(exit_code: i32, stderr: &str, export_error_label: &str) -> A
         2 => format!("CadQuery execution error:\n{}", stderr),
         3 => "Code must assign final geometry to 'result' variable.".to_string(),
         4 => format!("{export_error_label}:\n{}", stderr),
+        5 => "Result contains multiple disconnected solids — a cut likely went through a wall and split the body. Reduce cut depth or increase wall thickness.".to_string(),
         _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
     };
     AppError::CadQueryError(error_msg)
@@ -188,6 +189,78 @@ pub fn execute_python_script(
         stderr,
         exit_code,
     })
+}
+
+/// Execute an arbitrary Python script with a timeout (in milliseconds).
+/// Kills the subprocess if it exceeds the timeout.
+/// Uses the same poll-based approach as `run_runner_with_timeout`.
+pub fn execute_python_script_with_timeout(
+    venv_dir: &Path,
+    script: &Path,
+    args: &[&str],
+    timeout_ms: u64,
+) -> Result<ScriptResult, AppError> {
+    let python = venv::get_venv_python(venv_dir);
+    if !python.exists() {
+        return Err(AppError::PythonNotFound);
+    }
+
+    let mut cmd_args: Vec<String> = vec![script.to_string_lossy().to_string()];
+    for arg in args {
+        cmd_args.push(arg.to_string());
+    }
+
+    let mut child = Command::new(&python)
+        .args(&cmd_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let start = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms.max(1));
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut r| {
+                        let mut s = String::new();
+                        std::io::Read::read_to_string(&mut r, &mut s).ok();
+                        s
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut r| {
+                        let mut s = String::new();
+                        std::io::Read::read_to_string(&mut r, &mut s).ok();
+                        s
+                    })
+                    .unwrap_or_default();
+                let exit_code = status.code().unwrap_or(-1);
+                return Ok(ScriptResult {
+                    stdout,
+                    stderr,
+                    exit_code,
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(AppError::CadQueryError(format!(
+                        "Script timed out after {:.1}s",
+                        timeout_ms as f64 / 1000.0
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+            }
+            Err(e) => return Err(AppError::from(e)),
+        }
+    }
 }
 
 /// Execute CadQuery Python code in an isolated temp subdirectory.
