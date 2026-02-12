@@ -1,6 +1,5 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -11,7 +10,6 @@ use crate::agent::confidence;
 use crate::agent::consensus;
 use crate::agent::design;
 use crate::agent::executor;
-use crate::agent::fallback_templates;
 use crate::agent::iterative;
 use crate::agent::memory;
 use crate::agent::modify;
@@ -174,10 +172,6 @@ pub enum MultiPartEvent {
         passed: bool,
         findings: Vec<String>,
     },
-    FallbackActivated {
-        reason: String,
-        template_id: String,
-    },
     IterativeStart {
         total_steps: usize,
         steps: Vec<iterative::BuildStep>,
@@ -232,6 +226,10 @@ pub enum MultiPartEvent {
         score: u32,
         reason: String,
     },
+    /// Prompt triage determined the request needs clarifying questions.
+    ClarificationNeeded {
+        questions: Vec<String>,
+    },
     Done {
         success: bool,
         error: Option<String>,
@@ -245,6 +243,7 @@ pub struct DesignPlanResult {
     pub risk_score: u32,
     pub warnings: Vec<String>,
     pub is_valid: bool,
+    pub clarification_questions: Option<Vec<String>>,
 }
 
 /// Outcome from the generation pipeline, used for session memory recording.
@@ -493,7 +492,16 @@ fn build_part_prompt(
         Active reliability policy: {}\n\
         Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\
         The final result variable MUST contain ONLY this single part.\n\
-        Do NOT generate any other parts. Do NOT create an assembly.\n\
+        Do NOT generate any other parts. Do NOT create an assembly.\n\n\
+        ## CadQuery Construction Rules (MANDATORY)\n\
+        - ALWAYS use `centered=(True, True, False)` so the base sits at Z=0\n\
+        - NEVER use shell() — subtract an explicit inner solid instead\n\
+        - Wrap ALL fillet/chamfer/loft in try/except with graceful fallback\n\
+        - union() calls MUST have volumetric overlap (0.2mm+), not just face-touching\n\
+        - Result MUST be a single connected solid\n\
+        - Use rect().extrude() + edges(\"|Z\").fillet(R) for rounded rectangles\n\
+        - For hollow frames (lips, ridges): build as outer.cut(inner), overlap with base before union\n\
+        - Use named intermediates, not one giant chain\n\n\
         STRICT OUTPUT CONTRACT:\n\
         - Return code only (no prose).\n\
         - Wrap code in <CODE>...</CODE> tags.\n\
@@ -700,14 +708,6 @@ fn build_assembly_bbox_hint(
             }
         }
     }
-}
-
-fn should_activate_part_fallback(
-    deterministic_fallback_enabled: bool,
-    part_failure_count: u32,
-    threshold: u32,
-) -> bool {
-    deterministic_fallback_enabled && part_failure_count >= threshold.max(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -961,32 +961,6 @@ async fn run_design_plan_phase(
         attempts += 1;
     }
 
-    if !validation.is_valid
-        && config.deterministic_fallback_enabled
-        && attempts >= config.fallback_after_part_failures as usize
-    {
-        if let Some(fallback_plan) = fallback_templates::maybe_fallback_plan(message) {
-            let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                reason: fallback_plan.reason.clone(),
-                template_id: fallback_plan.template_id.to_string(),
-            });
-            design_plan.text = fallback_plan.plan_text;
-            validation = design::validate_plan_with_profile(
-                &design_plan.text,
-                &config.generation_reliability_profile,
-            );
-            let _ = on_event.send(MultiPartEvent::PlanValidation {
-                risk_score: validation.risk_score,
-                warnings: validation.warnings.clone(),
-                is_valid: validation.is_valid,
-                rejected_reason: validation.rejected_reason.clone(),
-                fatal_combo: validation.risk_signals.fatal_combo,
-                negation_conflict: validation.risk_signals.negation_conflict,
-                repair_sensitive_ops: validation.risk_signals.repair_sensitive_ops.clone(),
-            });
-        }
-    }
-
     let final_risk_score = validation.risk_score;
     let final_warnings = validation.warnings.clone();
     let final_is_valid = validation.is_valid;
@@ -1034,6 +1008,7 @@ async fn run_design_plan_phase(
         risk_score: final_risk_score,
         warnings: final_warnings,
         is_valid: final_is_valid,
+        clarification_questions: None,
     };
 
     Ok((design_plan, result))
@@ -1140,45 +1115,17 @@ async fn run_generation_pipeline(
         }
     }
 
-    let mut plan: GenerationPlan = match plan {
+    let plan: GenerationPlan = match plan {
         Some(p) => p,
         None => {
             if requires_multipart_contract {
                 let parse_err = last_parse_err
                     .clone()
                     .unwrap_or_else(|| "unknown planner parse error".to_string());
-                let threshold = config.fallback_after_part_failures.max(1);
-                let should_use_fallback =
-                    config.deterministic_fallback_enabled && planner_parse_failures >= threshold;
-
-                if should_use_fallback {
-                    let fallback_plan =
-                        deterministic_multipart_fallback_plan(user_request, plan_text)
-                            .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
-                    let template_id = if fallback_plan
-                        .description
-                        .as_deref()
-                        .unwrap_or_default()
-                        .contains("Generic multipart fallback")
-                    {
-                        "planner_generic_multipart_fallback"
-                    } else {
-                        "planner_multipart_fallback"
-                    };
-                    let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                        reason: format!(
-                            "Planner JSON remained invalid ({} parse failures, threshold {}, last error: {}); using deterministic multipart fallback.",
-                            planner_parse_failures, threshold, parse_err
-                        ),
-                        template_id: template_id.to_string(),
-                    });
-                    fallback_plan
-                } else {
-                    return Err(AppError::AiProviderError(format!(
-                        "Planner failed to return valid multipart JSON after {} parse failure(s) (threshold {}): {}",
-                        planner_parse_failures, threshold, parse_err
-                    )));
-                }
+                return Err(AppError::AiProviderError(format!(
+                    "Planner failed to decompose parts after {} attempt(s): {}",
+                    planner_parse_failures, parse_err
+                )));
             } else {
                 let _ = on_event.send(MultiPartEvent::PlanStatus {
                     message:
@@ -1195,24 +1142,9 @@ async fn run_generation_pipeline(
     };
 
     if requires_multipart_contract && (plan.mode != "multi" || plan.parts.len() < 2) {
-        let fallback = deterministic_multipart_fallback_plan(user_request, plan_text)
-            .unwrap_or_else(|| generic_multipart_fallback_plan(user_request));
-        let _ = on_event.send(MultiPartEvent::FallbackActivated {
-            reason:
-                "Strict multipart contract not satisfied by planner output; replacing with fallback multipart split."
-                    .to_string(),
-            template_id: if fallback
-                .description
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Generic multipart fallback")
-            {
-                "contract_generic_multipart_fallback".to_string()
-            } else {
-                "contract_multipart_fallback".to_string()
-            },
-        });
-        plan = fallback;
+        return Err(AppError::AiProviderError(
+            "Planner failed to produce a valid multipart decomposition — the plan did not contain at least 2 parts.".to_string(),
+        ));
     }
     let _ = on_event.send(MultiPartEvent::PlanResult { plan: plan.clone() });
 
@@ -1887,7 +1819,6 @@ async fn run_generation_pipeline(
     let mut accepted_retry_stage: Option<u32> = None;
     let mut part_failure_signatures: Vec<String> = Vec::new();
     let mut partial_preview_available = false;
-    let mut part_acceptance_failures: HashMap<String, u32> = HashMap::new();
 
     if let Some(ctx) = execution_ctx {
         for (part_idx, part_entry) in part_codes.iter_mut().enumerate() {
@@ -1901,7 +1832,7 @@ async fn run_generation_pipeline(
                     config: config.clone(),
                 };
 
-                let mut artifact_result = evaluate_part_acceptance(
+                let artifact_result = evaluate_part_acceptance(
                     &code,
                     &preview_ctx,
                     system_prompt,
@@ -1910,44 +1841,6 @@ async fn run_generation_pipeline(
                     Some(&semantic_contract),
                 )
                 .await;
-
-                if artifact_result.is_err() {
-                    let entry = part_acceptance_failures.entry(name.clone()).or_insert(0);
-                    *entry = entry.saturating_add(1);
-                }
-
-                let failure_count = *part_acceptance_failures.get(&name).unwrap_or(&0);
-                let threshold = config.fallback_after_part_failures.max(1);
-                let should_try_fallback = artifact_result.is_err()
-                    && should_activate_part_fallback(
-                        config.deterministic_fallback_enabled,
-                        failure_count,
-                        threshold,
-                    );
-                if should_try_fallback {
-                    if let Some(template) =
-                        fallback_templates::maybe_template_for_part(&name, &part_request)
-                    {
-                        part_failure_signatures
-                            .push(format!("fallback_activated:{}", template.template_id));
-                        let _ = on_event.send(MultiPartEvent::FallbackActivated {
-                            reason: format!(
-                                "{} (part='{}', acceptance_failures={}, threshold={})",
-                                template.reason, name, failure_count, threshold
-                            ),
-                            template_id: template.template_id.to_string(),
-                        });
-                        artifact_result = evaluate_part_acceptance(
-                            &template.code,
-                            &preview_ctx,
-                            system_prompt,
-                            &part_request,
-                            &name,
-                            Some(&semantic_contract),
-                        )
-                        .await;
-                    }
-                }
 
                 match artifact_result {
                     Ok(artifact) => {
@@ -2070,6 +1963,13 @@ async fn run_generation_pipeline(
 
     match assemble_parts(&successful_parts) {
         Ok(code) => {
+            // Emit assembled code early — if the pipeline times out during
+            // review/validation, the frontend still has usable code.
+            let _ = on_event.send(MultiPartEvent::FinalCode {
+                code: code.clone(),
+                stl_base64: None,
+            });
+
             let final_code = if config.enable_code_review {
                 let _ = on_event.send(MultiPartEvent::ReviewStatus {
                     message: "Reviewing assembled code...".to_string(),
@@ -2694,8 +2594,31 @@ pub async fn generate_design_plan(
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
 
+    // Fast prompt triage — ask clarifying questions if the request is vague
+    let triage_provider = create_provider(&config)?;
+    let analysis = design::analyze_prompt_clarity(triage_provider, &message).await?;
+
+    if analysis.needs_clarification {
+        let _ = on_event.send(MultiPartEvent::ClarificationNeeded {
+            questions: analysis.questions.clone(),
+        });
+        return Ok(DesignPlanResult {
+            plan_text: String::new(),
+            risk_score: 0,
+            warnings: vec![],
+            is_valid: false,
+            clarification_questions: Some(analysis.questions),
+        });
+    }
+
+    // If triage returned an enriched prompt, use it for better plan quality
+    let effective_message = analysis
+        .enriched_prompt
+        .as_deref()
+        .unwrap_or(&message);
+
     let (_design_plan, plan_result) = run_design_plan_phase(
-        &message,
+        effective_message,
         &config,
         &on_event,
         &mut total_usage,
@@ -2926,150 +2849,6 @@ fn extract_code_from_response(response: &str) -> Option<String> {
     crate::agent::extract::extract_code(response)
 }
 
-fn extract_numeric_param(text: &str, name: &str, default_value: f64) -> f64 {
-    let pat = format!(
-        r"(?im)(?:^|[\*\-\s]){}\s*=\s*(-?\d+(?:\.\d+)?)",
-        regex::escape(name)
-    );
-    Regex::new(&pat)
-        .ok()
-        .and_then(|re| re.captures(text))
-        .and_then(|c| c.get(1))
-        .and_then(|m| m.as_str().parse::<f64>().ok())
-        .filter(|v| *v > 0.0)
-        .unwrap_or(default_value)
-}
-
-fn deterministic_multipart_fallback_plan(
-    user_request: &str,
-    plan_text: &str,
-) -> Option<GenerationPlan> {
-    let lower = format!("{} {}", user_request, plan_text).to_lowercase();
-    let has_housing = lower.contains("housing")
-        || lower.contains("enclosure")
-        || lower.contains("case")
-        || lower.contains("body");
-    let has_backplate = lower.contains("back plate")
-        || lower.contains("backplate")
-        || lower.contains("cover")
-        || lower.contains("lid");
-
-    if has_housing && has_backplate {
-        let housing_length = extract_numeric_param(plan_text, "housing_length", 42.0);
-        let housing_width = extract_numeric_param(plan_text, "housing_width", 28.0);
-        let height_center = extract_numeric_param(plan_text, "height_center", 7.5);
-        let height_ends = extract_numeric_param(plan_text, "height_ends", 5.0);
-        let wall = extract_numeric_param(plan_text, "wall", 1.8);
-        let top_thk = extract_numeric_param(plan_text, "top_thk", 1.5);
-        let back_lip = extract_numeric_param(plan_text, "back_lip", 1.5);
-        let oring_width = extract_numeric_param(plan_text, "oring_width", 1.2);
-        let oring_depth = extract_numeric_param(plan_text, "oring_depth", 0.8);
-        let band_slot_width = extract_numeric_param(plan_text, "band_slot_width", 20.0);
-        let band_slot_height = extract_numeric_param(plan_text, "band_slot_height", 2.5);
-        let band_slot_depth = extract_numeric_param(plan_text, "band_slot_depth", 5.0);
-        let button_length = extract_numeric_param(plan_text, "button_length", 12.0);
-        let button_width = extract_numeric_param(plan_text, "button_width", 4.0);
-        let button_offset = extract_numeric_param(plan_text, "button_offset", 6.0);
-        let snap_tolerance = extract_numeric_param(plan_text, "snap_tolerance", 0.15);
-        let back_plate_thk = extract_numeric_param(plan_text, "back_plate_thk", 1.5);
-        let bp_len =
-            (housing_length - 2.0 * band_slot_depth - 2.0 * wall - 2.0 * snap_tolerance).max(6.0);
-        let bp_wid = (housing_width - 2.0 * wall - 2.0 * snap_tolerance).max(6.0);
-
-        return Some(GenerationPlan {
-            mode: "multi".to_string(),
-            description: Some(
-                "Deterministic fallback multipart split: housing + back plate.".to_string(),
-            ),
-            parts: vec![
-                PartSpec {
-                    name: "housing".to_string(),
-                    description: format!(
-                        "Single editable housing solid. Footprint {:.2}x{:.2}mm, top {:.2}/{:.2}mm (center/ends), wall {:.2}mm, top {:.2}mm. Include ledge {:.2}mm, O-ring groove {:.2}x{:.2}mm, two end slots {:.2}x{:.2}x{:.2}mm, solid side button indicator {:.2}x{:.2}mm at +X offset {:.2}mm.",
-                        housing_length,
-                        housing_width,
-                        height_center,
-                        height_ends,
-                        wall,
-                        top_thk,
-                        back_lip,
-                        oring_width,
-                        oring_depth,
-                        band_slot_width,
-                        band_slot_height,
-                        band_slot_depth,
-                        button_length,
-                        button_width,
-                        button_offset
-                    ),
-                    position: [0.0, 0.0, 0.0],
-                    constraints: vec![
-                        "Keep as one editable solid; no split bodies.".to_string(),
-                        "Back-plate ledge and groove must mate with back_plate.".to_string(),
-                    ],
-                },
-                PartSpec {
-                    name: "back_plate".to_string(),
-                    description: format!(
-                        "Single editable back plate solid. Base {:.2}x{:.2}mm, thickness {:.2}mm. Add insertion lip (height {:.2}mm, thickness 1.5mm, inset 2mm) and O-ring ridge (width {:.2}mm, height 0.5mm) aligned to housing groove.",
-                        bp_len,
-                        bp_wid,
-                        back_plate_thk,
-                        (back_lip - 0.3).max(0.6),
-                        (oring_width - 0.2).max(0.6)
-                    ),
-                    position: [0.0, 0.0, 0.0],
-                    constraints: vec![
-                        "Must fit housing ledge with snap_tolerance clearance.".to_string(),
-                        "Keep as one editable solid; no split pieces.".to_string(),
-                    ],
-                },
-            ],
-        });
-    }
-
-    None
-}
-
-fn generic_multipart_fallback_plan(user_request: &str) -> GenerationPlan {
-    let lower = user_request.to_lowercase();
-    let (part_a_name, part_b_name) = if lower.contains("top") && lower.contains("bottom") {
-        ("top_part", "bottom_part")
-    } else if lower.contains("cover") || lower.contains("lid") {
-        ("main_body", "cover")
-    } else {
-        ("part_1", "part_2")
-    };
-
-    GenerationPlan {
-        mode: "multi".to_string(),
-        description: Some(
-            "Generic multipart fallback split: two separable editable solids.".to_string(),
-        ),
-        parts: vec![
-            PartSpec {
-                name: part_a_name.to_string(),
-                description: "Primary editable solid for the main geometry.".to_string(),
-                position: [0.0, 0.0, 0.0],
-                constraints: vec![
-                    "Keep as one editable solid; no split bodies.".to_string(),
-                    "Preserve global parameters and origin conventions from the request."
-                        .to_string(),
-                ],
-            },
-            PartSpec {
-                name: part_b_name.to_string(),
-                description: "Secondary editable mating solid separated from primary.".to_string(),
-                position: [0.0, 0.0, 0.0],
-                constraints: vec![
-                    "Must remain a single editable solid.".to_string(),
-                    "Maintain fit/clearance relationship with primary part.".to_string(),
-                ],
-            },
-        ],
-    }
-}
-
 struct PartAcceptanceArtifact {
     code: String,
     stl_base64: Option<String>,
@@ -3166,9 +2945,8 @@ async fn build_part_preview_stl_with_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_assembly_bbox_hint, deterministic_multipart_fallback_plan,
-        generic_multipart_fallback_plan, parse_plan, request_requires_multipart_contract,
-        should_activate_part_fallback,
+        build_assembly_bbox_hint, parse_plan, request_requires_multipart_contract,
+        GenerationPlan, PartSpec,
     };
 
     #[test]
@@ -3216,41 +2994,6 @@ mod tests {
         assert!(!request_requires_multipart_contract(user, ""));
     }
 
-    #[test]
-    fn deterministic_fallback_builds_housing_and_backplate_parts() {
-        let user = "Whoop-style housing with a separate back plate";
-        let plan_text = "housing_length=42\nhousing_width=28\nback_lip=1.5\n";
-        let plan = deterministic_multipart_fallback_plan(user, plan_text)
-            .expect("deterministic multipart fallback should be available");
-        assert_eq!(plan.mode, "multi");
-        assert_eq!(plan.parts.len(), 2);
-        assert_eq!(plan.parts[0].name, "housing");
-        assert_eq!(plan.parts[1].name, "back_plate");
-    }
-
-    #[test]
-    fn generic_fallback_always_builds_two_parts() {
-        let user = "Need two separate editable components for exploded view";
-        let plan = generic_multipart_fallback_plan(user);
-        assert_eq!(plan.mode, "multi");
-        assert_eq!(plan.parts.len(), 2);
-        assert!(plan
-            .description
-            .unwrap_or_default()
-            .contains("Generic multipart fallback"));
-        assert_eq!(plan.parts[0].name, "part_1");
-        assert_eq!(plan.parts[1].name, "part_2");
-    }
-
-    #[test]
-    fn generic_fallback_uses_cover_naming_hint() {
-        let user = "Create separate body and cover for this enclosure";
-        let plan = generic_multipart_fallback_plan(user);
-        assert_eq!(plan.parts.len(), 2);
-        assert_eq!(plan.parts[0].name, "main_body");
-        assert_eq!(plan.parts[1].name, "cover");
-    }
-
     // -----------------------------------------------------------------------
     // Whoop prompt integration tests
     // -----------------------------------------------------------------------
@@ -3288,78 +3031,25 @@ mod tests {
 
     #[test]
     fn whoop_prompt_triggers_multipart_contract_via_plan() {
-        // Also verify via plan_text path (design plan echoes the parameters)
         let plan_text = "housing_length=42\nhousing_width=28\nback plate ledge\nseparate bodies";
         assert!(request_requires_multipart_contract("", plan_text));
     }
 
     #[test]
-    fn deterministic_fallback_matches_whoop_prompt_full() {
-        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT)
-            .expect("Whoop prompt must produce a deterministic fallback plan");
-        assert_eq!(plan.mode, "multi");
-        assert_eq!(plan.parts.len(), 2);
-        assert_eq!(plan.parts[0].name, "housing");
-        assert_eq!(plan.parts[1].name, "back_plate");
-    }
-
-    #[test]
-    fn whoop_fallback_housing_spec_contains_dimensions() {
-        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
-        let housing = &plan.parts[0];
-        // Housing description must reference the key dimensions from the prompt
-        assert!(
-            housing.description.contains("42"),
-            "housing should mention length=42"
-        );
-        assert!(
-            housing.description.contains("28"),
-            "housing should mention width=28"
-        );
-        assert!(
-            housing.description.contains("7.5") || housing.description.contains("7.50"),
-            "housing should mention height_center=7.5"
-        );
-        assert!(
-            housing.description.contains("1.8") || housing.description.contains("1.80"),
-            "housing should mention wall=1.8"
-        );
-    }
-
-    #[test]
-    fn whoop_fallback_backplate_spec_has_clearance() {
-        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
-        let back_plate = &plan.parts[1];
-        // Back plate should be smaller than housing (clearance via snap_tolerance)
-        assert!(
-            back_plate.description.contains("1.5") || back_plate.description.contains("1.50"),
-            "back_plate should reference plate thickness"
-        );
-        // Constraints should mention fit/clearance
-        assert!(
-            back_plate
-                .constraints
-                .iter()
-                .any(|c| c.contains("clearance") || c.contains("fit")),
-            "back_plate constraints must mention clearance/fit"
-        );
-    }
-
-    #[test]
-    fn whoop_fallback_assembly_produces_valid_code() {
+    fn assembly_produces_valid_code() {
         use super::assemble_parts;
-        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
-
-        // Simulate successful part generation with mock code
-        let mock_parts: Vec<(String, String, [f64; 3])> = plan
-            .parts
-            .iter()
-            .map(|p| {
-                let code =
-                    format!("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",);
-                (p.name.clone(), code, p.position)
-            })
-            .collect();
+        let mock_parts: Vec<(String, String, [f64; 3])> = vec![
+            (
+                "housing".to_string(),
+                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                [0.0, 0.0, 0.0],
+            ),
+            (
+                "back_plate".to_string(),
+                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                [0.0, 0.0, 0.0],
+            ),
+        ];
 
         let assembled = assemble_parts(&mock_parts).expect("assembly should succeed");
         assert!(assembled.contains("cq.Assembly()"));
@@ -3369,19 +3059,20 @@ mod tests {
     }
 
     #[test]
-    fn assembly_contract_validates_whoop_assembly() {
+    fn assembly_contract_validates_assembly() {
         use super::{assemble_parts, assembly_contract_issues};
-        let plan = deterministic_multipart_fallback_plan(WHOOP_PROMPT, WHOOP_PROMPT).unwrap();
-
-        let mock_parts: Vec<(String, String, [f64; 3])> = plan
-            .parts
-            .iter()
-            .map(|p| {
-                let code =
-                    format!("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)",);
-                (p.name.clone(), code, p.position)
-            })
-            .collect();
+        let mock_parts: Vec<(String, String, [f64; 3])> = vec![
+            (
+                "housing".to_string(),
+                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                [0.0, 0.0, 0.0],
+            ),
+            (
+                "back_plate".to_string(),
+                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                [0.0, 0.0, 0.0],
+            ),
+        ];
 
         let assembled = assemble_parts(&mock_parts).unwrap();
         let issues = assembly_contract_issues(&assembled, &mock_parts);
@@ -3419,10 +3110,7 @@ That should work."#;
 
     #[test]
     fn parse_plan_repairs_truncated_multi_part() {
-        // Simulate truncation mid-way through the second part
         let truncated = r#"{"mode":"multi","description":"housing + plate","parts":[{"name":"housing","description":"main","position":[0,0,0],"constraints":[]},{"name":"back_plate","description":"cover","position":[0,0,0"#;
-        // Repair may or may not recover the structure depending on truncation depth,
-        // but the result must always be a meaningful parse outcome.
         let result = parse_plan(truncated);
         match result {
             Ok(plan) => {
@@ -3436,19 +3124,25 @@ That should work."#;
     }
 
     #[test]
-    fn part_fallback_activation_uses_runtime_failure_count() {
-        assert!(!should_activate_part_fallback(true, 1, 2));
-        assert!(should_activate_part_fallback(true, 2, 2));
-        assert!(!should_activate_part_fallback(false, 99, 2));
-    }
-
-    #[test]
     fn semantic_bbox_hint_prefers_envelope_dimensions() {
-        let mut plan = generic_multipart_fallback_plan("two parts");
-        plan.parts[0].description =
-            "Primary shell with outer dimensions 42x28x7.5mm and wall thickness 1.8mm.".to_string();
-        plan.parts[1].description =
-            "Cover plate outer dimensions 30x24x1.5mm with lip height 1.2mm.".to_string();
+        let plan = GenerationPlan {
+            mode: "multi".to_string(),
+            description: Some("Two parts".to_string()),
+            parts: vec![
+                PartSpec {
+                    name: "housing".to_string(),
+                    description: "Primary shell with outer dimensions 42x28x7.5mm and wall thickness 1.8mm.".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![],
+                },
+                PartSpec {
+                    name: "cover".to_string(),
+                    description: "Cover plate outer dimensions 30x24x1.5mm with lip height 1.2mm.".to_string(),
+                    position: [0.0, 0.0, 0.0],
+                    constraints: vec![],
+                },
+            ],
+        };
         let hint = build_assembly_bbox_hint(
             &plan,
             "wall 1.8mm and lip 1.2mm",
@@ -3469,16 +3163,6 @@ That should work."#;
         );
     }
 
-    #[test]
-    fn extract_numeric_param_reads_whoop_dimensions() {
-        use super::extract_numeric_param;
-        let text = "housing_length=42\nhousing_width=28\nwall=1.8";
-        assert_eq!(extract_numeric_param(text, "housing_length", 0.0), 42.0);
-        assert_eq!(extract_numeric_param(text, "housing_width", 0.0), 28.0);
-        assert_eq!(extract_numeric_param(text, "wall", 0.0), 1.8);
-        // Missing param should return default
-        assert_eq!(extract_numeric_param(text, "nonexistent", 99.0), 99.0);
-    }
 }
 
 // ---------------------------------------------------------------------------
