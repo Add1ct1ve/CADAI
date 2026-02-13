@@ -6,8 +6,8 @@ pub enum AppError {
     #[error("Python not found on system")]
     PythonNotFound,
 
-    #[error("CadQuery error: {0}")]
-    CadQueryError(String),
+    #[error("CAD error: {0}")]
+    CadError(String),
 
     #[error("AI provider error: {0}")]
     AiProviderError(String),

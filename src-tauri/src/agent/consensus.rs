@@ -12,27 +12,29 @@ use crate::error::AppError;
 const CONSERVATIVE_TEMP: f32 = 0.3;
 const CREATIVE_TEMP: f32 = 0.8;
 
-/// CadQuery operations used for scoring code complexity.
-const CADQUERY_OPS: &[&str] = &[
-    ".box(",
-    ".cylinder(",
-    ".sphere(",
-    ".fillet(",
-    ".chamfer(",
-    ".shell(",
-    ".cut(",
-    ".union(",
-    ".intersect(",
-    ".loft(",
-    ".sweep(",
-    ".revolve(",
-    ".extrude(",
-    ".hole(",
-    ".rect(",
-    ".circle(",
-    ".translate(",
-    ".rotate(",
-    ".mirror(",
+/// CAD operations used for scoring code complexity.
+/// Includes both standalone function calls (Build123d) and method-chain patterns.
+const CAD_OPS: &[&str] = &[
+    "Box(",
+    "Cylinder(",
+    "Sphere(",
+    "Cone(",
+    "fillet(",
+    "chamfer(",
+    "shell(",
+    "loft(",
+    "sweep(",
+    "revolve(",
+    "extrude(",
+    "Hole(",
+    "Rectangle(",
+    "Circle(",
+    "Pos(",
+    "Rot(",
+    "BuildPart(",
+    "BuildSketch(",
+    "Mode.SUBTRACT",
+    "mirror(",
 ];
 
 // ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ pub enum ConsensusEvent {
 
 pub fn score_code(code: &str) -> ScoreBreakdown {
     let lower = code.to_lowercase();
-    let op_count = CADQUERY_OPS
+    let op_count = CAD_OPS
         .iter()
         .filter(|op| lower.contains(&op.to_lowercase()))
         .count() as u32;
@@ -380,25 +382,24 @@ mod tests {
 
     #[test]
     fn test_score_simple_box() {
-        let code = "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 10)";
+        let code = "from build123d import *\nresult = Box(10, 10, 10)";
         let score = score_code(code);
-        assert_eq!(score.op_count, 1); // .box(
+        assert_eq!(score.op_count, 1); // Box(
         assert_eq!(score.line_count, 2);
     }
 
     #[test]
     fn test_score_complex_code() {
-        let code = r#"import cadquery as cq
-result = (
-    cq.Workplane("XY")
-    .box(50, 30, 20)
-    .fillet(2)
-    .cut(cq.Workplane("XY").cylinder(10, 100))
-    .translate((0, 0, 5))
-)
+        let code = r#"from build123d import *
+with BuildPart() as p:
+    Box(50, 30, 20)
+    fillet(p.edges(), radius=2)
+    with Locations((0, 0, 5)):
+        Cylinder(10, 100, mode=Mode.SUBTRACT)
+result = p.part
 "#;
         let score = score_code(code);
-        assert!(score.op_count >= 4); // box, fillet, cut, cylinder, translate
+        assert!(score.op_count >= 4); // Box, fillet, Cylinder, BuildPart, Mode.SUBTRACT
         assert!(score.line_count >= 6);
     }
 
@@ -411,7 +412,7 @@ result = (
 
     #[test]
     fn test_score_comments_excluded() {
-        let code = "# This is a comment\n# Another comment\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 10)";
+        let code = "# This is a comment\n# Another comment\nfrom build123d import *\nresult = Box(10, 10, 10)";
         let score = score_code(code);
         assert_eq!(score.line_count, 2); // comments excluded
     }

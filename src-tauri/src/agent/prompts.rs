@@ -77,40 +77,17 @@ fn render_yaml_value(prompt: &mut String, value: &serde_yaml::Value, depth: usiz
 pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> String {
     let mut prompt = String::new();
 
-    prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code. ");
+    prompt.push_str("You are a CAD AI assistant that generates Build123d (Python) code. ");
     prompt.push_str("You create 3D models based on user descriptions.\n\n");
 
     // -- Code requirements (hard-coded essentials + rules from YAML) --
     prompt.push_str("## Code Requirements\n");
-    prompt.push_str("- Always import cadquery as cq\n");
+    prompt.push_str("- Always use `from build123d import *`\n");
     prompt.push_str("- The final result MUST be assigned to a variable named 'result'\n");
     prompt.push_str("- All dimensions are in millimeters\n");
-    prompt.push_str("- Use CadQuery's fluent API (method chaining)\n");
+    prompt.push_str("- Use Build123d's builder-mode API with context managers\n");
     prompt.push_str("- Do NOT use show_object(), display(), or any GUI calls\n");
     prompt.push_str("- Do NOT read/write files or use any external resources\n\n");
-
-    // -- CadQuery Version Notes --
-    prompt.push_str("## CadQuery Version Notes\n");
-    match cq_version {
-        Some(ver) => {
-            prompt.push_str(&format!("Installed CadQuery version: {}\n", ver));
-            if !version_gte(ver, "2.3.0") {
-                prompt.push_str("- WARNING: `.tag()` is NOT available in this version (added in 2.3). Do NOT use `.tag()` or `.faces(tag=...)`.\n");
-                prompt.push_str("- WARNING: `.transformed()` with `rotate` parameter is NOT available. Use `.rotate()` separately.\n");
-            }
-            if !version_gte(ver, "2.4.0") {
-                prompt.push_str("- WARNING: `cq.Sketch()` API is NOT available in this version (added in 2.4). Use workplane-based 2D operations instead.\n");
-                prompt.push_str("- Consider upgrading CadQuery for access to newer features.\n");
-            }
-            if version_gte(ver, "2.4.0") {
-                prompt.push_str("- All CadQuery features are available including `.tag()`, `cq.Sketch()`, and `.transformed()`.\n");
-            }
-        }
-        None => {
-            prompt.push_str("- CadQuery version unknown. Avoid version-specific features like `cq.Sketch()` or `.tag()` unless requested.\n");
-        }
-    }
-    prompt.push('\n');
 
     if let Some(ref reqs) = rules.code_requirements {
         if let Some(ref mandatory) = reqs.mandatory {
@@ -290,8 +267,8 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
             })
             .collect();
 
-        prompt.push_str("## CadQuery Cookbook - Reference Patterns\n");
-        prompt.push_str("Use these as reference for correct CadQuery API usage.\n\n");
+        prompt.push_str("## Build123d Cookbook - Reference Patterns\n");
+        prompt.push_str("Use these as reference for correct Build123d API usage.\n\n");
         for (i, entry) in filtered.iter().enumerate() {
             prompt.push_str(&format!("### Recipe {}: {}\n", i + 1, entry.title));
             if let Some(ref desc) = entry.description {
@@ -342,7 +319,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
     // -- Anti-Patterns (common mistakes to avoid) --
     if let Some(ref anti_patterns) = rules.anti_patterns {
         prompt.push_str("## Common Anti-Patterns — Mistakes to Avoid\n");
-        prompt.push_str("These are common CadQuery mistakes. Study the wrong code, understand why it fails, and use the correct approach instead.\n\n");
+        prompt.push_str("These are common Build123d mistakes. Study the wrong code, understand why it fails, and use the correct approach instead.\n\n");
         for (i, entry) in anti_patterns.iter().enumerate() {
             prompt.push_str(&format!("### Anti-Pattern {}: {}\n", i + 1, entry.title));
             prompt.push_str("**Wrong:**\n```python\n");
@@ -365,7 +342,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
     // -- Operation Interactions (cross-operation reasoning rules) --
     if let Some(ref interactions) = rules.operation_interactions {
         prompt.push_str("## Operation Interactions — Cross-Operation Reasoning Rules\n");
-        prompt.push_str("CadQuery operations interact in subtle ways. ");
+        prompt.push_str("Build123d operations interact in subtle ways. ");
         prompt.push_str("Follow these rules when planning operation sequences.\n\n");
         for (pair_name, rules_list) in interactions {
             prompt.push_str(&format!("### {}\n", format_category_name(pair_name)));
@@ -378,7 +355,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
 
     // -- API Quick-Reference --
     if let Some(ref api_ref) = rules.api_reference {
-        prompt.push_str("## CadQuery API Quick-Reference\n");
+        prompt.push_str("## Build123d API Quick-Reference\n");
         prompt.push_str("Compact reference for error-prone operations.\n\n");
         for entry in api_ref {
             prompt.push_str(&format!("### `{}`\n", entry.operation));
@@ -446,7 +423,7 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
     if let Some(ref fp) = rules.failure_prevention {
         prompt.push_str("## Failure Prevention — Proactive Rules\n");
         prompt.push_str(
-            "Follow these rules BEFORE generating code to avoid common CadQuery failures.\n\n",
+            "Follow these rules BEFORE generating code to avoid common Build123d failures.\n\n",
         );
         for (category, items) in fp {
             prompt.push_str(&format!("### {}\n", format_category_name(category)));
@@ -500,9 +477,9 @@ pub fn build_system_prompt(rules: &AgentRules, cq_version: Option<&str>) -> Stri
 
     // -- Output structure (always present) --
     prompt.push_str("\n## Output Structure\n");
-    prompt.push_str("When generating CadQuery code, wrap it in XML-style tags:\n\n");
+    prompt.push_str("When generating Build123d code, wrap it in XML-style tags:\n\n");
     prompt
-        .push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
+        .push_str("<CODE>\nfrom build123d import *\n# ... your code ...\nresult = ...\n</CODE>\n\n");
     prompt.push_str("You may also use ```python fences inside or outside the tags.\n");
     prompt.push_str("The <CODE> tags help the system reliably extract your code.\n");
 
@@ -525,7 +502,7 @@ pub fn build_system_prompt_for_preset(
 /// Single-part generation keeps the full prompt via `build_system_prompt`.
 pub fn build_compact_system_prompt_for_preset(
     preset_name: Option<&str>,
-    cq_version: Option<&str>,
+    _cq_version: Option<&str>,
 ) -> String {
     let rules = AgentRules::from_preset(preset_name).unwrap_or_else(|_| {
         AgentRules::from_preset(None).unwrap_or_else(|_| AgentRules::default_empty())
@@ -534,39 +511,17 @@ pub fn build_compact_system_prompt_for_preset(
     let mut prompt = String::new();
 
     // -- Persona (same as full prompt) --
-    prompt.push_str("You are a CAD AI assistant that generates CadQuery (Python) code. ");
+    prompt.push_str("You are a CAD AI assistant that generates Build123d (Python) code. ");
     prompt.push_str("You create 3D models based on user descriptions.\n\n");
 
     // -- Code requirements --
     prompt.push_str("## Code Requirements\n");
-    prompt.push_str("- Always import cadquery as cq\n");
+    prompt.push_str("- Always use `from build123d import *`\n");
     prompt.push_str("- The final result MUST be assigned to a variable named 'result'\n");
     prompt.push_str("- All dimensions are in millimeters\n");
-    prompt.push_str("- Use CadQuery's fluent API (method chaining)\n");
+    prompt.push_str("- Use Build123d's builder-mode API with context managers\n");
     prompt.push_str("- Do NOT use show_object(), display(), or any GUI calls\n");
     prompt.push_str("- Do NOT read/write files or use any external resources\n\n");
-
-    // -- CadQuery Version Notes --
-    prompt.push_str("## CadQuery Version Notes\n");
-    match cq_version {
-        Some(ver) => {
-            prompt.push_str(&format!("Installed CadQuery version: {}\n", ver));
-            if !version_gte(ver, "2.3.0") {
-                prompt.push_str("- WARNING: `.tag()` is NOT available in this version.\n");
-                prompt.push_str("- WARNING: `.transformed()` with `rotate` parameter is NOT available.\n");
-            }
-            if !version_gte(ver, "2.4.0") {
-                prompt.push_str("- WARNING: `cq.Sketch()` API is NOT available in this version.\n");
-            }
-            if version_gte(ver, "2.4.0") {
-                prompt.push_str("- All CadQuery features are available including `.tag()`, `cq.Sketch()`, and `.transformed()`.\n");
-            }
-        }
-        None => {
-            prompt.push_str("- CadQuery version unknown. Avoid version-specific features unless requested.\n");
-        }
-    }
-    prompt.push('\n');
 
     // -- YAML mandatory/forbidden rules --
     if let Some(ref reqs) = rules.code_requirements {
@@ -661,67 +616,50 @@ pub fn build_compact_system_prompt_for_preset(
         }
     }
 
-    // -- CadQuery Quick Reference (code examples for common pitfalls) --
-    prompt.push_str("## CadQuery Quick Reference\n\n");
-
-    prompt.push_str("### Stack: Sketch vs Solid\n");
-    prompt.push_str("After `.rect()`/`.circle()` you have a *sketch* (2D). After `.extrude()` you have a *solid* (3D).\n");
-    prompt.push_str("WRONG: `cq.Workplane('XY').rect(10,10).fillet(2)` — fillet needs a solid\n");
-    prompt.push_str("RIGHT: `cq.Workplane('XY').rect(10,10).extrude(5).edges('|Z').fillet(2)`\n\n");
-
-    prompt.push_str("### Face Selectors\n");
-    prompt.push_str("- `>Z` = topmost face, `<Z` = bottom, `>Y` = front, `<Y` = back, `>X` = right, `<X` = left\n");
-    prompt.push_str("- `|Z` = faces perpendicular to Z (vertical side faces)\n");
-    prompt.push_str("- WARNING: face indices change after shell/cut/fillet. Re-select by direction, not index.\n\n");
+    // -- Build123d Quick Reference (code examples for common pitfalls) --
+    prompt.push_str("## Build123d Quick Reference\n\n");
 
     prompt.push_str("### Operation Order\n");
-    prompt.push_str("1. Base shape (rect/circle → extrude)\n");
-    prompt.push_str("2. Additive features (union, bosses, lips)\n");
-    prompt.push_str("3. Main cavity (boolean subtract — NOT shell)\n");
-    prompt.push_str("4. Large cuts (slots, pockets, through-holes)\n");
-    prompt.push_str("5. Small cuts (grooves, channels)\n");
-    prompt.push_str("6. Holes (.hole() or circle+cutBlind — drill last)\n");
-    prompt.push_str("7. Fillets/chamfers LAST (ALWAYS wrap in try/except)\n\n");
+    prompt.push_str("Inside `with BuildPart() as p:` context:\n");
+    prompt.push_str("1. Base shape (Box, Cylinder, or BuildSketch + extrude)\n");
+    prompt.push_str("2. Additive features (add geometry in builder context)\n");
+    prompt.push_str("3. Main cavity (boolean subtract with mode=Mode.SUBTRACT)\n");
+    prompt.push_str("4. Cuts (CounterBoreHole, CounterSinkHole, or geometry with Mode.SUBTRACT)\n");
+    prompt.push_str("5. Fillets/chamfers LAST (ALWAYS wrap in try/except)\n\n");
 
     prompt.push_str("### Shell Ban\n");
-    prompt.push_str("Do NOT use `.shell()`. It fails on non-trivial geometry and produces non-manifold meshes.\n");
-    prompt.push_str("Instead, create outer solid, create smaller inner solid offset by wall thickness, use `.cut()`:\n");
+    prompt.push_str("Avoid `offset_3d()` on complex geometry. It fails on non-trivial shapes.\n");
+    prompt.push_str("Instead, create outer solid, create smaller inner solid offset by wall thickness, subtract:\n");
     prompt.push_str("```python\n");
-    prompt.push_str("outer = cq.Workplane('XY').rect(L, W).extrude(H)\n");
-    prompt.push_str("inner = cq.Workplane('XY').rect(L-2*wall, W-2*wall).extrude(H-top).translate((0, 0, bot))\n");
-    prompt.push_str("result = outer.cut(inner)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("outer = Box(L, W, H)\n");
+    prompt.push_str("inner = Pos(0, 0, t) * Box(L-2*t, W-2*t, H-t)\n");
+    prompt.push_str("result = outer - inner\n");
     prompt.push_str("```\n\n");
 
-    prompt.push_str("### Workplane Switches\n");
-    prompt.push_str("After switching workplanes, you MUST draw a new sketch. The previous sketch does NOT carry over.\n");
-    prompt.push_str("WRONG: `base.faces('>Z').workplane().extrude(10)` — no sketch on new workplane\n");
-    prompt.push_str("RIGHT: `base.faces('>Z').workplane().rect(5, 5).extrude(10)`\n\n");
-
     prompt.push_str("### Fillet Safety\n");
-    prompt.push_str("- Fillet radius MUST be < 0.4× shortest adjacent edge. Exceeding this causes BRep failures.\n");
+    prompt.push_str("- Fillet radius MUST be < 0.4x shortest adjacent edge. Exceeding this causes BRep failures.\n");
     prompt.push_str("- ALWAYS wrap in try/except with graceful fallback (smaller radius or skip).\n");
-    prompt.push_str("- Prefer selective edge fillet (`edges(\">Z\").fillet(r)`) over blanket `.fillet(r)` on the whole solid.\n\n");
+    prompt.push_str("- Prefer selective edge fillet over blanket fillet on all edges.\n\n");
 
     prompt.push_str("### Boolean & Single-Body Rules\n");
-    prompt.push_str("- Cut tools MUST extend 0.01–0.1 mm beyond the target surface for clean booleans.\n");
-    prompt.push_str("- After EVERY .cut(), assert `result.solids().size() == 1` — if >1, your cut split the body (reduce depth or widen wall)\n");
-    prompt.push_str("- Always union additive features before cutting subtractive features.\n\n");
-
-    prompt.push_str("### Sketch Closure\n");
-    prompt.push_str("- ALWAYS call `.close()` when using `.lineTo()` / `.sagittaArc()` / `.spline()` to build a wire.\n");
-    prompt.push_str("- Open sketches silently fail on `.extrude()` — no error, just no geometry.\n\n");
+    prompt.push_str("- Cut tools MUST extend 0.01-0.1 mm beyond the target surface for clean booleans.\n");
+    prompt.push_str("- Use `mode=Mode.SUBTRACT` inside BuildPart context, or `-` operator for algebra mode.\n");
+    prompt.push_str("- Always add features before subtracting features.\n\n");
 
     prompt.push_str("### Common API Mistakes\n");
     prompt.push_str("```python\n");
-    prompt.push_str("# WRONG — roundedRect doesn't exist in CadQuery\n");
-    prompt.push_str(".roundedRect(w, h, r)\n");
-    prompt.push_str("# RIGHT — use rect then fillet edges after extrude\n");
-    prompt.push_str(".rect(w, h).extrude(z).edges('|Z').fillet(r)\n");
+    prompt.push_str("# WRONG - using CadQuery API\n");
+    prompt.push_str("cq.Workplane('XY').box(10, 10, 10)\n");
+    prompt.push_str("# RIGHT - Build123d algebra mode\n");
+    prompt.push_str("result = Box(10, 10, 10)\n");
     prompt.push_str("\n");
-    prompt.push_str("# WRONG — vertices() for fillet\n");
-    prompt.push_str("result.fillet(r, result.vertices())\n");
-    prompt.push_str("# RIGHT — edges() for fillet\n");
-    prompt.push_str("result.edges().fillet(r)\n");
+    prompt.push_str("# WRONG - forgetting to extract part from builder\n");
+    prompt.push_str("with BuildPart() as p:\n");
+    prompt.push_str("    Box(10, 10, 10)\n");
+    prompt.push_str("result = p  # wrong, p is a builder\n");
+    prompt.push_str("# RIGHT\n");
+    prompt.push_str("result = p.part\n");
     prompt.push_str("```\n\n");
 
     // -- Reusable Patterns (building-block snippets) --
@@ -729,58 +667,50 @@ pub fn build_compact_system_prompt_for_preset(
 
     prompt.push_str("### 1. Hollow Box (replaces shell)\n");
     prompt.push_str("```python\n");
-    prompt.push_str("outer = cq.Workplane('XY').rect(L, W).extrude(H, centered=(True, True, False))\n");
-    prompt.push_str("inner = cq.Workplane('XY').rect(L-2*t, W-2*t).extrude(H-t, centered=(True, True, False)).translate((0,0,t))\n");
-    prompt.push_str("result = outer.cut(inner)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("outer = Box(L, W, H)\n");
+    prompt.push_str("inner = Pos(0, 0, t) * Box(L-2*t, W-2*t, H-t)\n");
+    prompt.push_str("result = outer - inner\n");
     prompt.push_str("```\n\n");
 
     prompt.push_str("### 2. Through-Slot\n");
     prompt.push_str("```python\n");
-    prompt.push_str("base = cq.Workplane('XY').rect(60, 40).extrude(10)\n");
-    prompt.push_str("slot = cq.Workplane('XY').rect(30, 8).extrude(10).translate((0, 0, 0))\n");
-    prompt.push_str("result = base.cut(slot)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("with BuildPart() as p:\n");
+    prompt.push_str("    Box(60, 40, 10)\n");
+    prompt.push_str("    Box(30, 8, 10, mode=Mode.SUBTRACT)\n");
+    prompt.push_str("result = p.part\n");
     prompt.push_str("```\n\n");
 
     prompt.push_str("### 3. Internal Ledge (shelf/lip inside a hollow box)\n");
     prompt.push_str("```python\n");
-    prompt.push_str("# Creates a thin ring-shaped shelf inside the hollow box at height Z.\n");
-    prompt.push_str("# ledge = full-width slab filling the cavity; lip = smaller cutout → ring remains.\n");
-    prompt.push_str("ledge = cq.Workplane('XY').rect(L-2*t, W-2*t).extrude(ledge_h, centered=(True, True, False)).translate((0,0,Z))\n");
-    prompt.push_str("lip = cq.Workplane('XY').rect(L-2*t-2*lip_w, W-2*t-2*lip_w).extrude(ledge_h, centered=(True, True, False)).translate((0,0,Z))\n");
-    prompt.push_str("shelf = ledge.cut(lip)  # ring-shaped shelf, not a solid plate\n");
-    prompt.push_str("result = hollow_box.union(shelf)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("# Creates a ring-shaped shelf inside the hollow box at height Z.\n");
+    prompt.push_str("ledge = Pos(0, 0, Z) * Box(L-2*t, W-2*t, ledge_h)\n");
+    prompt.push_str("lip = Pos(0, 0, Z) * Box(L-2*t-2*lip_w, W-2*t-2*lip_w, ledge_h)\n");
+    prompt.push_str("shelf = ledge - lip\n");
+    prompt.push_str("result = hollow_box + shelf\n");
     prompt.push_str("```\n\n");
 
     prompt.push_str("### 4. Groove / Channel\n");
     prompt.push_str("```python\n");
-    prompt.push_str("base = cq.Workplane('XY').rect(60, 40).extrude(10)\n");
-    prompt.push_str("groove = cq.Workplane('XY').center(0, 10).rect(50, 3).extrude(2).translate((0, 0, 8))\n");
-    prompt.push_str("result = base.cut(groove)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("with BuildPart() as p:\n");
+    prompt.push_str("    Box(60, 40, 10)\n");
+    prompt.push_str("    with Locations((0, 10, 8)):\n");
+    prompt.push_str("        Box(50, 3, 2, mode=Mode.SUBTRACT)\n");
+    prompt.push_str("result = p.part\n");
     prompt.push_str("```\n\n");
 
     prompt.push_str("### 5. Face Feature (hole/pocket on a specific face)\n");
     prompt.push_str("```python\n");
-    prompt.push_str("base = cq.Workplane('XY').rect(40, 30).extrude(20)\n");
-    prompt.push_str("result = base.faces('>Y').workplane().center(0, 0).rect(10, 8).cutBlind(-5)\n");
-    prompt.push_str("```\n\n");
-
-    prompt.push_str("### 6. Dome / Barrel-Vault Top\n");
-    prompt.push_str("```python\n");
-    prompt.push_str("# Curved top on a rectangular box using cylinder intersection.\n");
-    prompt.push_str("# half_L = L/2, dome_rise = how far the dome rises above H_box.\n");
-    prompt.push_str("half_L = L / 2\n");
-    prompt.push_str("R = (half_L**2 + dome_rise**2) / (2 * dome_rise)  # radius from chord geometry\n");
-    prompt.push_str("box = cq.Workplane('XY').rect(L, W).extrude(H_box, centered=(True, True, False))\n");
-    prompt.push_str("dome_cyl = (\n");
-    prompt.push_str("    cq.Workplane('XZ')\n");
-    prompt.push_str("    .center(0, H_box + dome_rise - R)\n");
-    prompt.push_str("    .circle(R)\n");
-    prompt.push_str("    .extrude(W / 2, both=True)\n");
-    prompt.push_str(")\n");
-    prompt.push_str("result = box.union(dome_cyl)\n");
-    prompt.push_str("# Trim anything below Z=0\n");
-    prompt.push_str("trim = cq.Workplane('XY').box(L*3, W*3, 100, centered=(True, True, False)).translate((0, 0, -100))\n");
-    prompt.push_str("result = result.cut(trim)\n");
+    prompt.push_str("from build123d import *\n");
+    prompt.push_str("with BuildPart() as p:\n");
+    prompt.push_str("    Box(40, 30, 20)\n");
+    prompt.push_str("    with BuildSketch(p.faces().sort_by(Axis.Y)[-1]):\n");
+    prompt.push_str("        Rectangle(10, 8)\n");
+    prompt.push_str("    extrude(amount=-5, mode=Mode.SUBTRACT)\n");
+    prompt.push_str("result = p.part\n");
     prompt.push_str("```\n\n");
 
     // -- Response Format --
@@ -798,9 +728,9 @@ pub fn build_compact_system_prompt_for_preset(
 
     // -- Output Structure --
     prompt.push_str("\n## Output Structure\n");
-    prompt.push_str("When generating CadQuery code, wrap it in XML-style tags:\n\n");
+    prompt.push_str("When generating Build123d code, wrap it in XML-style tags:\n\n");
     prompt
-        .push_str("<CODE>\nimport cadquery as cq\n# ... your code ...\nresult = ...\n</CODE>\n\n");
+        .push_str("<CODE>\nfrom build123d import *\n# ... your code ...\nresult = ...\n</CODE>\n\n");
     prompt.push_str("You may also use ```python fences inside or outside the tags.\n");
     prompt.push_str("The <CODE> tags help the system reliably extract your code.\n");
 
@@ -1011,7 +941,7 @@ mod tests {
     fn test_prompt_still_has_code_requirements() {
         let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("## Code Requirements"));
-        assert!(prompt.contains("import cadquery as cq"));
+        assert!(prompt.contains("from build123d import"));
     }
 
     #[test]
@@ -1029,7 +959,7 @@ mod tests {
     #[test]
     fn test_prompt_still_has_cookbook() {
         let prompt = build_system_prompt_for_preset(None, None);
-        assert!(prompt.contains("## CadQuery Cookbook"));
+        assert!(prompt.contains("## Build123d Cookbook"));
         assert!(prompt.contains("### Recipe 1:"));
         // New recipes should also be present
         assert!(prompt.contains("Revolve"));
@@ -1085,7 +1015,7 @@ mod tests {
                 preset
             );
             assert!(
-                prompt.contains("## CadQuery Cookbook"),
+                prompt.contains("## Build123d Cookbook"),
                 "preset {:?} missing cookbook",
                 preset
             );
@@ -1095,7 +1025,7 @@ mod tests {
                 preset
             );
             assert!(
-                prompt.contains("## CadQuery API Quick-Reference"),
+                prompt.contains("## Build123d API Quick-Reference"),
                 "preset {:?} missing API reference",
                 preset
             );
@@ -1138,11 +1068,9 @@ mod tests {
     fn test_prompt_design_patterns_content() {
         let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("Enclosure"), "missing Enclosure pattern");
-        assert!(prompt.contains("Shaft"), "missing Shaft pattern");
         assert!(prompt.contains("Rotational"), "missing Rotational pattern");
         assert!(prompt.contains("Plate"), "missing Plate pattern");
         assert!(prompt.contains("Tube"), "missing Tube pattern");
-        assert!(prompt.contains("Spring"), "missing Spring pattern");
         assert!(prompt.contains("Gear"), "missing Gear pattern");
         assert!(prompt.contains("**Keywords:**"));
         assert!(prompt.contains("**Parameters:**"));
@@ -1180,8 +1108,8 @@ mod tests {
         let prompt = build_system_prompt_for_preset(None, None);
         assert!(prompt.contains("### Anti-Pattern 1:"));
         assert!(prompt.contains("Fillet before boolean"));
-        assert!(prompt.contains("translate() wrong signature"));
-        assert!(prompt.contains("Hole on wrong face"));
+        assert!(prompt.contains("offset_3d on complex boolean body"));
+        assert!(prompt.contains("Wrong face selection"));
         assert!(prompt.contains("**Wrong:**"));
         assert!(prompt.contains("**Error:**"));
         assert!(prompt.contains("**Why:**"));
@@ -1206,7 +1134,7 @@ mod tests {
     fn test_prompt_contains_api_reference_section() {
         let prompt = build_system_prompt_for_preset(None, None);
         assert!(
-            prompt.contains("## CadQuery API Quick-Reference"),
+            prompt.contains("## Build123d API Quick-Reference"),
             "prompt should have API reference section"
         );
         assert!(prompt.contains("Compact reference for error-prone operations."));
@@ -1219,11 +1147,10 @@ mod tests {
         assert!(prompt.contains("### `loft()`"));
         assert!(prompt.contains("### `sweep()`"));
         assert!(prompt.contains("### `revolve()`"));
-        assert!(prompt.contains("### `shell()`"));
-        assert!(prompt.contains("### `Selector strings`"));
-        assert!(prompt.contains("### `Workplane constructor & offsets`"));
-        assert!(prompt.contains("### `pushPoints / rarray / polarArray`"));
-        assert!(prompt.contains("### `.tag() / .faces(tag=)`"));
+        assert!(prompt.contains("### `offset_3d()`"));
+        assert!(prompt.contains("### `Face/edge selectors`"));
+        assert!(prompt.contains("### `Locations / GridLocations / PolarLocations`"));
+        assert!(prompt.contains("### `BuildPart / BuildSketch / BuildLine`"));
         // Check formatting markers
         assert!(prompt.contains("**Signature:**"));
         assert!(prompt.contains("**Returns:**"));
@@ -1236,7 +1163,7 @@ mod tests {
         for preset in &[None, Some("3d-printing"), Some("cnc")] {
             let prompt = build_system_prompt_for_preset(*preset, None);
             assert!(
-                prompt.contains("## CadQuery API Quick-Reference"),
+                prompt.contains("## Build123d API Quick-Reference"),
                 "preset {:?} missing API reference section",
                 preset
             );
@@ -1399,10 +1326,10 @@ mod tests {
         let tech_pos = prompt.find("## Advanced Techniques").unwrap();
         let style_pos = prompt.find("## Code Style").unwrap();
         let valid_pos = prompt.find("## Validation Checks").unwrap();
-        let cook_pos = prompt.find("## CadQuery Cookbook").unwrap();
+        let cook_pos = prompt.find("## Build123d Cookbook").unwrap();
         let dp_pos = prompt.find("## Design Patterns").unwrap();
         let ap_pos = prompt.find("## Common Anti-Patterns").unwrap();
-        let apiref_pos = prompt.find("## CadQuery API Quick-Reference").unwrap();
+        let apiref_pos = prompt.find("## Build123d API Quick-Reference").unwrap();
         let dimtab_pos = prompt.find("## Real-World Dimension Tables").unwrap();
         let dimguide_pos = prompt.find("## Dimension Estimation Guidance").unwrap();
         let mfg_pos = prompt.find("## Manufacturing Awareness").unwrap();
@@ -1511,7 +1438,7 @@ mod tests {
         assert!(!prompt.contains("## Manufacturing Awareness"));
         assert!(!prompt.contains("## Design Patterns"));
         assert!(!prompt.contains("## Common Anti-Patterns"));
-        assert!(!prompt.contains("## CadQuery API Quick-Reference"));
+        assert!(!prompt.contains("## Build123d API Quick-Reference"));
         assert!(!prompt.contains("## Real-World Dimension Tables"));
         assert!(!prompt.contains("## Dimension Estimation Guidance"));
         assert!(!prompt.contains("## Failure Prevention"));
@@ -1614,7 +1541,7 @@ mod tests {
             "missing self_diagnosis content"
         );
         assert!(
-            prompt.contains("about to use shell()"),
+            prompt.contains("about to use offset_3d()"),
             "missing preemptive_warnings content"
         );
         assert!(
@@ -1643,41 +1570,7 @@ mod tests {
         }
     }
 
-    // ── CadQuery Version Notes in prompt ─────────────────────────────────
-
-    #[test]
-    fn test_prompt_version_none_shows_unknown() {
-        let prompt = build_system_prompt_for_preset(None, None);
-        assert!(prompt.contains("## CadQuery Version Notes"));
-        assert!(prompt.contains("version unknown"));
-    }
-
-    #[test]
-    fn test_prompt_version_2_2_warns_tag_and_sketch() {
-        let prompt = build_system_prompt_for_preset(None, Some("2.2.0"));
-        assert!(prompt.contains("Installed CadQuery version: 2.2.0"));
-        assert!(prompt.contains("`.tag()` is NOT available"));
-        assert!(prompt.contains("`cq.Sketch()` API is NOT available"));
-        assert!(prompt.contains("Consider upgrading"));
-    }
-
-    #[test]
-    fn test_prompt_version_2_3_warns_sketch_only() {
-        let prompt = build_system_prompt_for_preset(None, Some("2.3.0"));
-        assert!(prompt.contains("Installed CadQuery version: 2.3.0"));
-        assert!(!prompt.contains("`.tag()` is NOT available"));
-        assert!(prompt.contains("`cq.Sketch()` API is NOT available"));
-        assert!(prompt.contains("Consider upgrading"));
-    }
-
-    #[test]
-    fn test_prompt_version_2_4_all_features() {
-        let prompt = build_system_prompt_for_preset(None, Some("2.4.0"));
-        assert!(prompt.contains("Installed CadQuery version: 2.4.0"));
-        assert!(prompt.contains("All CadQuery features are available"));
-        assert!(!prompt.contains("is NOT available"));
-        assert!(!prompt.contains("Consider upgrading"));
-    }
+    // ── Cookbook version filtering in prompt ─────────────────────────────────
 
     #[test]
     fn test_prompt_cookbook_filtering_by_version() {
@@ -1689,30 +1582,30 @@ mod tests {
             crate::agent::rules::CookbookEntry {
                 title: "Basic Box".to_string(),
                 description: None,
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+                code: "from build123d import *\nresult = Box(1, 1, 1)".to_string(),
                 min_version: None,
             },
             crate::agent::rules::CookbookEntry {
-                title: "Sketch Circle".to_string(),
+                title: "Advanced Feature".to_string(),
                 description: None,
-                code: "import cadquery as cq\nresult = cq.Sketch().circle(5)".to_string(),
-                min_version: Some("2.4.0".to_string()),
+                code: "from build123d import *\nresult = Box(5, 5, 5)".to_string(),
+                min_version: Some("0.5.0".to_string()),
             },
         ]);
 
-        // With version 2.3, the Sketch recipe should be filtered out
-        let prompt_23 = build_system_prompt(&rules, Some("2.3.0"));
-        assert!(prompt_23.contains("Basic Box"));
-        assert!(!prompt_23.contains("Sketch Circle"));
+        // With version 0.4, the advanced recipe should be filtered out
+        let prompt_04 = build_system_prompt(&rules, Some("0.4.0"));
+        assert!(prompt_04.contains("Basic Box"));
+        assert!(!prompt_04.contains("Advanced Feature"));
 
-        // With version 2.4, both should be present
-        let prompt_24 = build_system_prompt(&rules, Some("2.4.0"));
-        assert!(prompt_24.contains("Basic Box"));
-        assert!(prompt_24.contains("Sketch Circle"));
+        // With version 0.5, both should be present
+        let prompt_05 = build_system_prompt(&rules, Some("0.5.0"));
+        assert!(prompt_05.contains("Basic Box"));
+        assert!(prompt_05.contains("Advanced Feature"));
 
         // With None version, both should be present (permissive)
         let prompt_none = build_system_prompt(&rules, None);
         assert!(prompt_none.contains("Basic Box"));
-        assert!(prompt_none.contains("Sketch Circle"));
+        assert!(prompt_none.contains("Advanced Feature"));
     }
 }

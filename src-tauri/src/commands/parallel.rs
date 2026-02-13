@@ -451,7 +451,7 @@ If the request involves 2-4 clearly distinct SEPARABLE components that fit toget
 ## Part description requirements (multi mode only)
 - Include all dimensions in mm
 - Include geometric detail from the design plan: profiles, cross-sections, radii
-- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT include build sequences, construction steps, CadQuery operations, or implementation methods. The code generator will determine the best construction approach.
+- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT include build sequences, construction steps, CAD operations, or implementation methods. The code generator will determine the best construction approach.
 - Each part description must be self-contained (another AI must be able to build it without seeing other parts)
 - Include ALL dimensions (length, width, height, wall thickness, radii, hole diameters)
 - Specify mating surface dimensions explicitly (e.g. "inner bore 42mm to receive part X's 42mm OD")
@@ -632,16 +632,16 @@ fn build_part_prompt(
         {}\n\n\
         Active reliability policy: {}\n\
         Max operation budget: keep the script under ~22 geometric operations before optional polish.\n\n\
-        ## CadQuery Construction Rules (MANDATORY)\n\
+        ## Build123d Construction Rules (MANDATORY)\n\
         Operation order: 1) Base shape 2) Additive features (union/bosses/lips) 3) Main cavity (boolean subtract) \
         4) Large cuts (slots/pockets/through-holes) 5) Small cuts (grooves/channels) 6) Holes (drill last) \
         7) Fillets/chamfers LAST (always try/except)\n\
         - ALWAYS use `centered=(True, True, False)` so the base sits at Z=0\n\
-        - Do NOT use .shell() for hollowing. It fails on non-trivial geometry and produces non-manifold meshes. \
-          Instead: create outer solid, create smaller inner solid offset by wall thickness, use .cut(). \
-          Example: outer = cq.Workplane('XY').rect(L,W).extrude(H, centered=(True,True,False)); \
-          inner = cq.Workplane('XY').rect(L-2*wall,W-2*wall).extrude(H-top, centered=(True,True,False)).translate((0,0,bot)); \
-          result = outer.cut(inner)\n\
+        - Do NOT use shell() for hollowing. It fails on non-trivial geometry and produces non-manifold meshes. \
+          Instead: create outer solid, create smaller inner solid offset by wall thickness, use boolean subtract. \
+          Example: outer = Box(L, W, H, align=(Align.CENTER, Align.CENTER, Align.MIN)); \
+          inner = Pos(0, 0, bot) * Box(L-2*wall, W-2*wall, H-top, align=(Align.CENTER, Align.CENTER, Align.MIN)); \
+          result = outer - inner\n\
         - Fillet radius MUST be < 0.4× shortest adjacent edge; always try/except with smaller fallback\n\
         - Cut tools MUST extend 0.01–0.1 mm beyond target surface for clean booleans\n\
         - After each boolean, verify single body: `assert result.solids().size() == 1`\n\
@@ -674,7 +674,7 @@ fn build_part_prompt(
     )
 }
 
-/// Build a structured retry hint from a CadQuery error, using the validation
+/// Build a structured retry hint from a Build123d error, using the validation
 /// module's error parsing and retry strategy logic.
 fn build_error_retry_hint(error_text: &str) -> String {
     use crate::agent::validate;
@@ -713,7 +713,7 @@ async fn request_code_only_part_retry(
     let strict_prompt = format!(
         "{}\n\n\
         STRICT OUTPUT RULES (MANDATORY):\n\
-        - Return ONLY executable Python CadQuery code.\n\
+        - Return ONLY executable Python Build123d code.\n\
         - Wrap code in <CODE>...</CODE> tags.\n\
         - No prose, no markdown explanation, no bullets.\n\
         - Must assign final geometry to variable named result.\n\
@@ -724,7 +724,7 @@ async fn request_code_only_part_retry(
 
     let retry_user = format!(
         "Previous response was non-code and could not be executed.\n\
-        Return the CadQuery code now.\n\n\
+        Return the Build123d code now.\n\n\
         Part: {}\n\
         Description: {}\n\
         Constraints:\n{}\n\n\
@@ -765,7 +765,7 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
     }
 
     let mut assembled = String::new();
-    assembled.push_str("import cadquery as cq\n\n");
+    assembled.push_str("from build123d import *\n\n");
 
     // Process each part: strip duplicate imports and rename `result` → `part_{name}`
     let result_re = Regex::new(r"\bresult\b").unwrap();
@@ -778,7 +778,7 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
             .lines()
             .filter(|line| {
                 let trimmed = line.trim();
-                !trimmed.starts_with("import cadquery") && !trimmed.starts_with("from cadquery")
+                !trimmed.starts_with("from build123d") && !trimmed.starts_with("import build123d")
             })
             .collect();
 
@@ -794,17 +794,18 @@ fn assemble_parts(parts: &[(String, String, [f64; 3])]) -> Result<String, String
 
     // Build the assembly
     assembled.push_str("# --- Assembly ---\n");
-    assembled.push_str("assy = cq.Assembly()\n");
+    assembled.push_str("assy = Compound(label=\"assembly\", children=[\n");
 
     for (name, _code, pos) in parts {
         let var_name = format!("part_{}", name);
         assembled.push_str(&format!(
-            "assy.add({}, name=\"{}\", loc=cq.Location(({}, {}, {})))\n",
-            var_name, name, pos[0], pos[1], pos[2],
+            "    Pos({}, {}, {}) * {},\n",
+            pos[0], pos[1], pos[2], var_name,
         ));
     }
 
-    assembled.push_str("result = assy.toCompound()\n");
+    assembled.push_str("])\n");
+    assembled.push_str("result = assy\n");
 
     Ok(assembled)
 }
@@ -816,16 +817,16 @@ fn assembly_contract_issues(code: &str, parts: &[(String, String, [f64; 3])]) ->
         if !code.contains(&var_name) {
             issues.push(format!("missing {}", var_name));
         }
-        let add_call = format!("assy.add({},", var_name);
-        if !code.contains(&add_call) {
-            issues.push(format!("missing assy.add for {}", var_name));
+        // Check that the part variable is used in the assembly Compound
+        if !code.contains(&format!("{},", var_name)) && !code.contains(&format!("* {},", var_name)) {
+            issues.push(format!("missing assembly reference for {}", var_name));
         }
     }
 
-    if !code.contains("assy = cq.Assembly()") {
+    if !code.contains("Compound(") {
         issues.push("missing assembly initialization".to_string());
     }
-    if !code.contains("result = assy.toCompound()") {
+    if !code.contains("result = assy") {
         issues.push("missing assembly compound result".to_string());
     }
 
@@ -1919,7 +1920,7 @@ async fn run_generation_pipeline(
         let event_channel = on_event.clone();
 
         let user_content = format!(
-            "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
+            "## User Request\n{}\n\n## Your Task\nGenerate the Build123d code for part '{}': {}",
             user_request, part.name, part.description
         );
 
@@ -2218,7 +2219,7 @@ async fn run_generation_pipeline(
                             ChatMessage {
                                 role: "user".to_string(),
                                 content: format!(
-                                    "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}. \
+                                    "## User Request\n{}\n\n## Your Task\nGenerate the Build123d code for part '{}': {}. \
                                     Use only robust primitives and boolean operations.",
                                     user_request, part_spec.name, part_spec.description
                                 ),
@@ -2648,7 +2649,7 @@ pub async fn generate_parallel(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     let user_request = message.clone();
     let session_ctx = state.session_memory.lock().unwrap().build_context_section();
     let (system_prompt, retrieval_result) = build_system_prompt_with_retrieval(
@@ -3088,7 +3089,7 @@ pub async fn generate_from_plan(
 ) -> Result<String, AppError> {
     let _ = existing_code; // reserved for future use
     let config = state.config.lock().unwrap().clone();
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     let session_ctx = state.session_memory.lock().unwrap().build_context_section();
     let retrieval_query = format!("{}\n\n{}", user_request, plan_text);
     let (system_prompt, retrieval_result) = build_system_prompt_with_retrieval(
@@ -3487,21 +3488,21 @@ mod tests {
         let mock_parts: Vec<(String, String, [f64; 3])> = vec![
             (
                 "housing".to_string(),
-                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                "from build123d import *\nresult = Box(10, 10, 5)".to_string(),
                 [0.0, 0.0, 0.0],
             ),
             (
                 "back_plate".to_string(),
-                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                "from build123d import *\nresult = Box(10, 10, 5)".to_string(),
                 [0.0, 0.0, 0.0],
             ),
         ];
 
         let assembled = assemble_parts(&mock_parts).expect("assembly should succeed");
-        assert!(assembled.contains("cq.Assembly()"));
+        assert!(assembled.contains("Compound("));
         assert!(assembled.contains("part_housing"));
         assert!(assembled.contains("part_back_plate"));
-        assert!(assembled.contains("assy.toCompound()"));
+        assert!(assembled.contains("result = assy"));
     }
 
     #[test]
@@ -3510,12 +3511,12 @@ mod tests {
         let mock_parts: Vec<(String, String, [f64; 3])> = vec![
             (
                 "housing".to_string(),
-                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                "from build123d import *\nresult = Box(10, 10, 5)".to_string(),
                 [0.0, 0.0, 0.0],
             ),
             (
                 "back_plate".to_string(),
-                "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)".to_string(),
+                "from build123d import *\nresult = Box(10, 10, 5)".to_string(),
                 [0.0, 0.0, 0.0],
             ),
         ];
@@ -3752,7 +3753,7 @@ pub async fn retry_skipped_steps(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     let mut system_prompt = crate::agent::prompts::build_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
@@ -3791,7 +3792,7 @@ pub async fn retry_skipped_steps(
     };
 
     let ctx = execution_ctx.ok_or_else(|| {
-        AppError::CadQueryError("Python environment not available for retry".to_string())
+        AppError::CadError("Python environment not available for retry".to_string())
     })?;
 
     // Convert SkippedSteps back to BuildSteps
@@ -3920,7 +3921,7 @@ pub async fn retry_part(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     // Use compact prompt for part retries (multi-part context)
     let mut system_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
@@ -3954,7 +3955,7 @@ pub async fn retry_part(
         ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "## User Request\n{}\n\n## Your Task\nGenerate the CadQuery code for part '{}': {}",
+                "## User Request\n{}\n\n## Your Task\nGenerate the Build123d code for part '{}': {}",
                 user_request, part_spec.name, part_spec.description
             ),
         },

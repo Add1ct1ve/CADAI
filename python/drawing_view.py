@@ -1,7 +1,7 @@
 """
-CadQuery SVG projection generator for CAD AI Studio.
+Build123d SVG projection generator for CAD AI Studio.
 
-Generates orthographic projection SVGs from CadQuery models.
+Generates orthographic projection SVGs from Build123d models.
 
 Usage:
     python drawing_view.py <code_file> <output_svg> <proj_x> <proj_y> <proj_z> [--hidden] [--section PLANE OFFSET]
@@ -89,7 +89,7 @@ def main():
     with open(code_file, "r", encoding="utf-8") as f:
         code = f.read()
 
-    # Execute the CadQuery code
+    # Execute the Build123d code
     namespace = {}
     try:
         exec(code, namespace)
@@ -103,40 +103,47 @@ def main():
         sys.exit(3)
 
     try:
-        import cadquery as cq
+        from build123d import ExportSVG, Solid, Vector, Axis
+
+        # Unwrap BuildPart context results if needed
+        if hasattr(result, "part") and result.part is not None:
+            result = result.part
+        elif hasattr(result, "val") and callable(result.val):
+            result = result.val()
 
         # Handle section view
         if section_plane:
             try:
-                plane_map = {"XY": "XY", "XZ": "XZ", "YZ": "YZ"}
-                wp_name = plane_map.get(section_plane, "XY")
-                cut_plane = cq.Workplane(wp_name).workplane(offset=section_offset)
-                # Use the section method to cut through the model
-                result = result.cut(
-                    cq.Workplane(wp_name)
-                    .workplane(offset=section_offset)
-                    .rect(10000, 10000)
-                    .extrude(10000)
+                from build123d import Box, Location
+
+                # Create a large cutting box to remove half the model
+                cut_size = 10000
+                plane_offsets = {
+                    "XY": (0, 0, cut_size / 2 + section_offset),
+                    "XZ": (0, cut_size / 2 + section_offset, 0),
+                    "YZ": (cut_size / 2 + section_offset, 0, 0),
+                }
+                offset = plane_offsets.get(section_plane, (0, 0, cut_size / 2 + section_offset))
+
+                cut_box = Solid.make_box(cut_size, cut_size, cut_size)
+                cut_box = cut_box.locate(
+                    Location(
+                        (offset[0] - cut_size / 2, offset[1] - cut_size / 2, offset[2] - cut_size / 2)
+                    )
                 )
+                result = result - cut_box
             except Exception:
                 traceback.print_exc()
                 sys.exit(5)
 
-        # Export SVG projection
-        export_opts = {
-            "projectionDir": (proj_x, proj_y, proj_z),
-            "showHidden": show_hidden,
-            "strokeWidth": 0.25,
-            "hiddenColor": (0.4, 0.4, 0.4),
-            "showAxes": False,
-        }
-
-        cq.exporters.export(
-            result,
-            output_svg,
-            cq.exporters.ExportTypes.SVG,
-            opt=export_opts,
+        # Export SVG projection using Build123d's ExportSVG
+        svg = ExportSVG(
+            line_weight=0.25,
         )
+        svg.add_shape(result, line_type=ExportSVG.LineType.VISIBLE)
+        if show_hidden:
+            svg.add_shape(result, line_type=ExportSVG.LineType.HIDDEN)
+        svg.write(output_svg)
 
     except SystemExit:
         raise

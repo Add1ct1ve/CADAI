@@ -91,7 +91,7 @@ fn configured_max_attempts(config: &AppConfig) -> u32 {
     config.max_validation_attempts.clamp(1, 8)
 }
 
-/// Run CadQuery code through `runner.py` with a timeout, using an isolated temp directory.
+/// Run CAD code through `runner.py` with a timeout, using an isolated temp directory.
 ///
 /// Safe for concurrent execution — each call gets its own temp subdirectory.
 pub async fn execute_with_timeout_isolated(
@@ -106,7 +106,7 @@ pub async fn execute_with_timeout_isolated(
     let result = timeout(
         Duration::from_secs(EXECUTION_TIMEOUT_SECS),
         tokio::task::spawn_blocking(move || {
-            runner::execute_cadquery_isolated(&venv_owned, &runner_owned, &code_owned)
+            runner::execute_cad_isolated(&venv_owned, &runner_owned, &code_owned)
         }),
     )
     .await;
@@ -117,13 +117,13 @@ pub async fn execute_with_timeout_isolated(
             EXECUTION_TIMEOUT_SECS
         )),
         Ok(Err(join_err)) => Err(format!("Execution task panicked: {}", join_err)),
-        Ok(Ok(Err(AppError::CadQueryError(msg)))) => Err(msg),
+        Ok(Ok(Err(AppError::CadError(msg)))) => Err(msg),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Ok(Ok(exec_result))) => Ok(exec_result),
     }
 }
 
-/// Run CadQuery code through `runner.py` with a timeout.
+/// Run CAD code through `runner.py` with a timeout.
 ///
 /// Returns `Ok(ExecutionResult)` on success, `Err(error_message)` on failure or timeout.
 pub async fn execute_with_timeout(
@@ -138,7 +138,7 @@ pub async fn execute_with_timeout(
     let result = timeout(
         Duration::from_secs(EXECUTION_TIMEOUT_SECS),
         tokio::task::spawn_blocking(move || {
-            runner::execute_cadquery(&venv_owned, &runner_owned, &code_owned)
+            runner::execute_cad_code(&venv_owned, &runner_owned, &code_owned)
         }),
     )
     .await;
@@ -149,7 +149,7 @@ pub async fn execute_with_timeout(
             EXECUTION_TIMEOUT_SECS
         )),
         Ok(Err(join_err)) => Err(format!("Execution task panicked: {}", join_err)),
-        Ok(Ok(Err(AppError::CadQueryError(msg)))) => Err(msg),
+        Ok(Ok(Err(AppError::CadError(msg)))) => Err(msg),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Ok(Ok(exec_result))) => Ok(exec_result),
     }
@@ -270,7 +270,7 @@ fn wrap_line_with_sweep_guard(line: &str) -> String {
 
 fn apply_line_targeted_fillet_guard(code: &str, source_line: &str) -> Option<String> {
     let target = source_line.trim();
-    if target.is_empty() || !(target.contains(".fillet(") || target.contains(".chamfer(")) {
+    if target.is_empty() || !(target.contains("fillet(") || target.contains("chamfer(")) {
         return None;
     }
 
@@ -297,7 +297,7 @@ fn apply_last_fillet_guard_fallback(code: &str) -> Option<String> {
     let mut idx: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
         let t = line.trim();
-        if (t.contains(".fillet(") || t.contains(".chamfer(")) && !t.contains("auto-fillet-guard") {
+        if (t.contains("fillet(") || t.contains("chamfer(")) && !t.contains("auto-fillet-guard") {
             idx = Some(i);
         }
     }
@@ -315,7 +315,7 @@ fn apply_last_fillet_guard_fallback(code: &str) -> Option<String> {
 
 fn apply_line_targeted_sweep_guard(code: &str, source_line: &str) -> Option<String> {
     let target = source_line.trim();
-    if target.is_empty() || !target.contains(".sweep(") {
+    if target.is_empty() || !target.contains("sweep(") {
         return None;
     }
 
@@ -342,7 +342,7 @@ fn apply_last_sweep_guard_fallback(code: &str) -> Option<String> {
     let mut idx: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
         let t = line.trim();
-        if t.contains(".sweep(") && !t.contains("auto-sweep-guard") {
+        if t.contains("sweep(") && !t.contains("auto-sweep-guard") {
             idx = Some(i);
         }
     }
@@ -363,7 +363,7 @@ fn apply_global_fillet_guard(code: &str) -> Option<String> {
     let mut out = Vec::new();
     for line in code.lines() {
         let trimmed = line.trim();
-        if (trimmed.contains(".fillet(") || trimmed.contains(".chamfer("))
+        if (trimmed.contains("fillet(") || trimmed.contains("chamfer("))
             && !trimmed.contains("auto-fillet-guard")
         {
             out.push(wrap_line_with_fillet_guard(line));
@@ -384,7 +384,7 @@ fn strip_fillet_chamfer_operations(code: &str) -> Option<String> {
     let mut out = Vec::new();
     for line in code.lines() {
         let trimmed = line.trim();
-        if trimmed.contains(".fillet(") || trimmed.contains(".chamfer(") {
+        if trimmed.contains("fillet(") || trimmed.contains("chamfer(") {
             let indent: String = line
                 .chars()
                 .take_while(|c| c.is_ascii_whitespace())
@@ -415,7 +415,7 @@ fn apply_global_sweep_guard(code: &str) -> Option<String> {
     let mut out = Vec::new();
     for line in code.lines() {
         let trimmed = line.trim();
-        if trimmed.contains(".sweep(") && !trimmed.contains("auto-sweep-guard") {
+        if trimmed.contains("sweep(") && !trimmed.contains("auto-sweep-guard") {
             out.push(wrap_line_with_sweep_guard(line));
             changed = true;
         } else {
@@ -557,15 +557,15 @@ fn is_fillet_failure_candidate(
         .map(|s| s.to_lowercase())
         .unwrap_or_default();
     if msg.contains("cannot find a solid on the stack or in the parent chain")
-        && (source.contains(".fillet(") || source.contains(".chamfer("))
+        && (source.contains("fillet(") || source.contains("chamfer("))
     {
         return true;
     }
     (msg.contains("stdfail_notdone") || msg.contains("brep_api: command not done"))
         && (msg.contains("fillet")
             || msg.contains("chamfer")
-            || source.contains(".fillet(")
-            || source.contains(".chamfer("))
+            || source.contains("fillet(")
+            || source.contains("chamfer("))
 }
 
 fn maybe_apply_fillet_auto_repair(
@@ -613,7 +613,7 @@ fn is_sweep_failure_candidate(
         return true;
     }
 
-    (msg.contains("sweep") && msg.contains("wire")) || source.contains(".sweep(")
+    (msg.contains("sweep") && msg.contains("wire")) || source.contains("sweep(")
 }
 
 fn maybe_apply_sweep_auto_repair(
@@ -1013,7 +1013,7 @@ pub async fn validate_and_retry(
 
                             // Build a post-geometry retry prompt with specific feedback
                             let retry_prompt = format!(
-                                "Your CadQuery code executed successfully but produced invalid geometry.\n\n\
+                                "Your Build123d code executed successfully but produced invalid geometry.\n\n\
                                  Post-geometry issues:\n{}\n\n\
                                  Original code:\n```python\n{}\n```\n\n\
                                  Fix the code and return the corrected version. \
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn test_validation_result_serialization() {
         let result = ValidationResult {
-            code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)".to_string(),
+            code: "from build123d import *\nresult = Box(10, 10, 10)".to_string(),
             stl_base64: Some("c3RsZGF0YQ==".to_string()),
             success: true,
             attempts: 1,
@@ -1386,7 +1386,7 @@ mod tests {
         };
         let stl_base64 = base64::engine::general_purpose::STANDARD.encode(&exec_result.stl_data);
         let result = ValidationResult {
-            code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+            code: "from build123d import *\nresult = Box(1, 1, 1)".to_string(),
             stl_base64: Some(stl_base64),
             success: true,
             attempts: 1,
@@ -1406,8 +1406,8 @@ mod tests {
 
     #[test]
     fn test_maybe_apply_fillet_auto_repair_targets_source_line() {
-        let code = r#"import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10)
+        let code = r#"from build123d import *
+result = Box(10, 10, 10)
 result = result.edges("|Z").fillet(4.0)"#;
 
         let err = validate::StructuredError {
@@ -1431,8 +1431,8 @@ result = result.edges("|Z").fillet(4.0)"#;
 
     #[test]
     fn test_maybe_apply_fillet_auto_repair_fallback_last_fillet() {
-        let code = r#"import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10)
+        let code = r#"from build123d import *
+result = Box(10, 10, 10)
 body = result.edges("|Z").fillet(3.0)
 result = body"#;
 
@@ -1454,8 +1454,8 @@ result = body"#;
 
     #[test]
     fn test_maybe_apply_fillet_auto_repair_handles_no_solid_error() {
-        let code = r#"import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10)
+        let code = r#"from build123d import *
+result = Box(10, 10, 10)
 result = result.edges("|Z").fillet(3.0)"#;
 
         let err = validate::StructuredError {
@@ -1482,10 +1482,10 @@ result = result.edges("|Z").fillet(3.0)"#;
 
     #[test]
     fn test_maybe_apply_sweep_auto_repair_targets_source_line() {
-        let code = r#"import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 1)
-ridge = cq.Workplane("XY").rect(2, 2).sweep(path)
-result = result.union(ridge)"#;
+        let code = r#"from build123d import *
+result = Box(10, 10, 1)
+ridge = profile.sweep(path)
+result = result + ridge"#;
 
         let err = validate::StructuredError {
             error_type: "ValueError".to_string(),
@@ -1496,7 +1496,7 @@ result = result.union(ridge)"#;
             failing_operation: Some("sweep".to_string()),
             context: Some(validate::ErrorContext {
                 source_line: Some(
-                    r#"ridge = cq.Workplane("XY").rect(2, 2).sweep(path)"#.to_string(),
+                    r#"ridge = profile.sweep(path)"#.to_string(),
                 ),
                 failing_parameters: None,
             }),
@@ -1527,8 +1527,8 @@ result = result.union(ridge)"#;
 
     #[test]
     fn test_ladder_repairs_planar_faces_workplane_error() {
-        let code = r#"import cadquery as cq
-body = cq.Workplane("XY").box(10, 10, 10)
+        let code = r#"from build123d import *
+body = Box(10, 10, 10)
 wp = body.faces(">Z").workplane(offset=1.0)
 result = body"#;
 

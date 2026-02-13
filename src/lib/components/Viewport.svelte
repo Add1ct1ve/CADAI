@@ -194,7 +194,7 @@
         preDragSnapshot = captureFullSnapshot();
       }
       transformDraggingId = id;
-      // Convert Three.js position/rotation to CadQuery coords and update scene store
+      // Convert Three.js position/rotation to CAD coords and update scene store
       const cadPos = threeToCadPos(group.position);
       const cadRot = threeToCadRot(group.rotation);
       const transform: CadTransform = { position: cadPos, rotation: cadRot };
@@ -1043,7 +1043,7 @@
       } else {
         const gridPos = engine.getGridIntersection(e);
         if (!gridPos) return;
-        // Grid returns CadQuery coords; convert to Three.js Y-up for worldPos
+        // Grid returns CAD coords; convert to Three.js Y-up for worldPos
         worldPos = [gridPos[0], 0, -gridPos[1]];
       }
 

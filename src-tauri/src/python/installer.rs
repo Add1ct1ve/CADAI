@@ -3,8 +3,8 @@ use crate::error::AppError;
 use std::path::Path;
 use std::process::Command;
 
-/// Install CadQuery and dependencies into the venv.
-pub fn install_cadquery(venv_dir: &Path) -> Result<(), AppError> {
+/// Install Build123d and dependencies into the venv.
+pub fn install_build123d(venv_dir: &Path) -> Result<(), AppError> {
     let pip = venv::get_venv_pip(venv_dir);
 
     // Upgrade pip first
@@ -19,15 +19,15 @@ pub fn install_cadquery(venv_dir: &Path) -> Result<(), AppError> {
         // Continue anyway, pip should still work
     }
 
-    // Install cadquery
+    // Install build123d
     let output = Command::new(&pip)
-        .args(["install", "cadquery>=2.4.0"])
+        .args(["install", "build123d"])
         .output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::CadQueryError(format!(
-            "Failed to install CadQuery: {}",
+        return Err(AppError::CadError(format!(
+            "Failed to install build123d: {}",
             stderr
         )));
     }
@@ -35,12 +35,12 @@ pub fn install_cadquery(venv_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Check if CadQuery is installed in the venv.
-pub fn is_cadquery_installed(venv_dir: &Path) -> bool {
+/// Check if Build123d is installed in the venv.
+pub fn is_build123d_installed(venv_dir: &Path) -> bool {
     let python = venv::get_venv_python(venv_dir);
 
     let output = Command::new(python)
-        .args(["-c", "import cadquery; print(cadquery.__version__)"])
+        .args(["-c", "import build123d; print(build123d.__version__)"])
         .output();
 
     match output {
@@ -49,11 +49,11 @@ pub fn is_cadquery_installed(venv_dir: &Path) -> bool {
     }
 }
 
-/// Detect the installed CadQuery version string (e.g. "2.4.0").
-pub fn detect_cadquery_version(venv_dir: &Path) -> Option<String> {
+/// Detect the installed Build123d version string.
+pub fn detect_build123d_version(venv_dir: &Path) -> Option<String> {
     let python = venv::get_venv_python(venv_dir);
     let output = Command::new(python)
-        .args(["-c", "import cadquery; print(cadquery.__version__)"])
+        .args(["-c", "import build123d; print(build123d.__version__)"])
         .output()
         .ok()?;
     if output.status.success() {

@@ -10,7 +10,7 @@ pub struct AppState {
     pub python_path: Mutex<Option<PathBuf>>,
     pub venv_path: Mutex<Option<PathBuf>>,
     pub session_memory: Mutex<SessionMemory>,
-    pub cadquery_version: Mutex<Option<String>>,
+    pub build123d_version: Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -20,7 +20,7 @@ impl Default for AppState {
             python_path: Mutex::new(None),
             venv_path: Mutex::new(None),
             session_memory: Mutex::new(SessionMemory::new()),
-            cadquery_version: Mutex::new(None),
+            build123d_version: Mutex::new(None),
         }
     }
 }

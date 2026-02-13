@@ -1,1 +1,1 @@
-cadquery>=2.4.0
+build123d>=0.7.0

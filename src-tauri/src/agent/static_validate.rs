@@ -60,12 +60,12 @@ pub fn validate_code_with_profile(
 ) -> StaticValidationResult {
     let mut findings = Vec::new();
 
-    let import_re = Regex::new(r"(?m)^\s*import\s+cadquery\s+as\s+cq\b").unwrap();
+    let import_re = Regex::new(r"(?m)^\s*from\s+build123d\s+import\b").unwrap();
     if !import_re.is_match(code) {
         push_error(
             &mut findings,
             "missing_import",
-            "Code must include `import cadquery as cq`.",
+            "Code must include `from build123d import ...`.",
         );
     }
 
@@ -113,39 +113,11 @@ pub fn validate_code_with_profile(
         }
     }
 
-    let translate_bad_sig =
-        Regex::new(r"\.translate\s*\(\s*[^\(\)]*?,\s*[^\(\)]*?,\s*[^\(\)]*?\)").unwrap();
-    if translate_bad_sig.is_match(code) {
-        push_warning(
-            &mut findings,
-            "translate_signature",
-            "`.translate()` should receive a single tuple argument: `.translate((x, y, z))`.",
-        );
-    }
-
-    let selector_re = Regex::new(r"\.faces\s*\(\s*([^\)]*)\)").unwrap();
-    for cap in selector_re.captures_iter(code) {
-        let args = cap.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
-        if args.contains(',') {
-            push_warning(
-                &mut findings,
-                "faces_selector",
-                "`faces()` selector usually expects one selector string or callable; multiple args are risky.",
-            );
-            break;
-        }
-    }
-
     let lower = code.to_ascii_lowercase();
-    let has_shell = lower.contains(".shell(");
-    let has_loft = lower.contains(".loft(");
-    let has_sweep = lower.contains(".sweep(");
-    let has_blanket_edges_fillet = lower.contains(".edges().fillet(")
-        || lower.contains(".edges().chamfer(")
-        || Regex::new(r"\.edges\s*\(\s*\)\s*\.\s*(fillet|chamfer)\s*\(")
-            .unwrap()
-            .is_match(&lower);
-    let bool_re = Regex::new(r"\.(cut|union|intersect|fuse|combine)\s*\(").unwrap();
+    let has_shell = lower.contains("shell(") || lower.contains("offset_3d(");
+    let has_loft = lower.contains("loft(");
+    let has_fillet_with_edges = lower.contains("fillet(") && lower.contains(".edges()");
+    let bool_re = Regex::new(r"(?:\.(cut|union|intersect|fuse|combine)\s*\(|\s-\s)").unwrap();
     let boolean_count = bool_re.find_iter(&lower).count();
 
     let shell_chain_re = Regex::new(r"(?s)\.(?:cut|union|intersect|fuse|combine)\s*\(.*?\)\s*\.(?:cut|union|intersect|fuse|combine)\s*\(.*?\)\s*\.shell\s*\(").unwrap();
@@ -169,48 +141,13 @@ pub fn validate_code_with_profile(
         );
     }
 
-    if has_sweep && !lower.contains(".wire(") {
-        push_profile_finding(
-            &mut findings,
-            profile,
-            first_pass,
-            "sweep_without_wire",
-            "`sweep()` detected without explicit wire path usage (`.wire()`); high failure risk.",
-        );
-    }
-
-    if has_blanket_edges_fillet && (has_loft || has_shell || boolean_count >= 2) {
+    if has_fillet_with_edges && (has_loft || has_shell || boolean_count >= 2) {
         push_profile_finding(
             &mut findings,
             profile,
             first_pass,
             "blanket_fillet_on_complex_body",
             "Blanket `.edges().fillet()/chamfer()` on loft/shell/multi-boolean geometry is high risk.",
-        );
-    }
-
-    let ambiguous_faces_workplane_re =
-        Regex::new(r"\.faces\s*\([^\n\)]*\)\s*\.workplane\s*\(").unwrap();
-    if ambiguous_faces_workplane_re.is_match(code)
-        && !lower.contains(".first().workplane(")
-        && !lower.contains(".last().workplane(")
-    {
-        push_warning(
-            &mut findings,
-            "ambiguous_faces_workplane",
-            "`.faces(...).workplane(...)` can fail if multiple faces are selected. Prefer `.faces(...).first().workplane(...)` or a tighter selector.",
-        );
-    }
-
-    let fillet_chain_re = Regex::new(
-        r"(?s)\.(?:cut|union|intersect|fuse)\s*\(.*?\)\s*\.(?:edges\s*\(.*?\)\s*\.)?fillet\s*\(",
-    )
-    .unwrap();
-    if fillet_chain_re.is_match(code) {
-        push_warning(
-            &mut findings,
-            "fillet_after_boolean",
-            "Fillet directly after booleans is fragile. Prefer fillet at final stage with conservative radius.",
         );
     }
 
@@ -225,10 +162,10 @@ pub fn validate_code_with_profile(
         );
     }
 
-    if code.contains(".cut(")
-        && !code.contains(".translate(")
-        && !code.contains("workplane(offset=")
-        && !code.contains(".pushPoints(")
+    if (code.contains(".cut(") || code.contains(" - "))
+        && !code.contains("Pos(")
+        && !code.contains("Location(")
+        && !code.contains("Plane(")
     {
         push_warning(
             &mut findings,
@@ -273,8 +210,8 @@ mod tests {
     #[test]
     fn test_static_validation_success() {
         let code = r#"
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10)
+from build123d import *
+result = Box(10, 10, 10)
 "#;
         let result = validate_code(code);
         assert!(result.passed);
@@ -282,7 +219,7 @@ result = cq.Workplane("XY").box(10, 10, 10)
 
     #[test]
     fn test_static_validation_missing_result() {
-        let code = "import cadquery as cq\nobj = cq.Workplane('XY').box(1,1,1)";
+        let code = "from build123d import *\nobj = Box(1, 1, 1)";
         let result = validate_code(code);
         assert!(!result.passed);
         assert!(result.findings.iter().any(|f| f.code == "missing_result"));
@@ -291,9 +228,9 @@ result = cq.Workplane("XY").box(10, 10, 10)
     #[test]
     fn test_static_validation_detects_file_io() {
         let code = r#"
-import cadquery as cq
+from build123d import *
 open("x.txt", "w")
-result = cq.Workplane("XY").box(1,1,1)
+result = Box(1, 1, 1)
 "#;
         let result = validate_code(code);
         assert!(!result.passed);
@@ -303,10 +240,15 @@ result = cq.Workplane("XY").box(1,1,1)
     #[test]
     fn test_static_validation_warns_non_parametric_hardcoded() {
         let code = r#"
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 20, 30).faces(">Z").workplane().hole(3).cut(
-    cq.Workplane("XY").box(5, 6, 7).translate((1,2,3))
-).edges().fillet(0.5)
+from build123d import *
+with BuildPart() as p:
+    Box(10, 20, 30)
+    with Locations((1, 2, 3)):
+        Box(5, 6, 7, mode=Mode.SUBTRACT)
+    with Locations((15, 25, 8)):
+        Cylinder(4, 12, mode=Mode.SUBTRACT)
+    fillet(p.edges(), radius=0.5)
+result = p.part
 "#;
         let result = validate_code(code);
         assert!(result
@@ -318,9 +260,15 @@ result = cq.Workplane("XY").box(10, 20, 30).faces(">Z").workplane().hole(3).cut(
     #[test]
     fn test_reliability_first_escalates_loft_shell_combo() {
         let code = r#"
-import cadquery as cq
-body = cq.Workplane("XY").rect(10, 10).workplane(offset=5).rect(8, 8).loft()
-result = body.shell(1)
+from build123d import *
+with BuildPart() as p:
+    with BuildSketch():
+        Rectangle(10, 10)
+    with BuildSketch(Plane.XY.offset(5)):
+        Rectangle(8, 8)
+    loft()
+    offset_3d(openings=p.faces().sort_by(Axis.Z)[-1], amount=-1)
+result = p.part
 "#;
         let result =
             validate_code_with_profile(code, &GenerationReliabilityProfile::ReliabilityFirst, true);
@@ -331,9 +279,15 @@ result = body.shell(1)
     #[test]
     fn test_balanced_keeps_loft_shell_as_warning() {
         let code = r#"
-import cadquery as cq
-body = cq.Workplane("XY").rect(10, 10).workplane(offset=5).rect(8, 8).loft()
-result = body.shell(1)
+from build123d import *
+with BuildPart() as p:
+    with BuildSketch():
+        Rectangle(10, 10)
+    with BuildSketch(Plane.XY.offset(5)):
+        Rectangle(8, 8)
+    loft()
+    offset_3d(openings=p.faces().sort_by(Axis.Z)[-1], amount=-1)
+result = p.part
 "#;
         let result =
             validate_code_with_profile(code, &GenerationReliabilityProfile::Balanced, true);
@@ -342,20 +296,5 @@ result = body.shell(1)
             .findings
             .iter()
             .any(|f| matches!(f.level, FindingLevel::Warning)));
-    }
-
-    #[test]
-    fn test_warns_on_ambiguous_faces_workplane_chain() {
-        let code = r#"
-import cadquery as cq
-body = cq.Workplane("XY").box(10, 10, 10)
-wp = body.faces(">Z").workplane(offset=1.0)
-result = body
-"#;
-        let result = validate_code(code);
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.code == "ambiguous_faces_workplane"));
     }
 }

@@ -111,26 +111,26 @@
     parts: PartProgress[],
     planParts: PartSpec[],
   ): string {
-    let code = 'import cadquery as cq\n\n';
+    let code = 'from build123d import *\n\n';
     for (const part of parts) {
       const varName = `part_${part.name}`;
       const cleaned = part.code!
         .split('\n')
         .filter((line) => {
           const t = line.trim();
-          return !t.startsWith('import cadquery') && !t.startsWith('from cadquery');
+          return !t.startsWith('from build123d') && !t.startsWith('import build123d');
         })
         .join('\n')
         .replace(/\bresult\b/g, varName);
       code += `# --- ${part.name} ---\n${cleaned}\n\n`;
     }
-    code += '# --- Assembly ---\nassy = cq.Assembly()\n';
+    code += '# --- Assembly ---\n_parts = []\n';
     for (const part of parts) {
       const varName = `part_${part.name}`;
       const pos = planParts.find((p) => p.name === part.name)?.position ?? [0, 0, 0];
-      code += `assy.add(${varName}, name="${part.name}", loc=cq.Location((${pos[0]}, ${pos[1]}, ${pos[2]})))\n`;
+      code += `_parts.append(${varName}.move(Location((${pos[0]}, ${pos[1]}, ${pos[2]}))))\n`;
     }
-    code += 'result = assy.toCompound()\n';
+    code += 'result = Compound(children=_parts)\n';
     return code;
   }
 
@@ -1383,7 +1383,7 @@
     let planTimerInterval: ReturnType<typeof setInterval> | null = null;
 
     // Determine if we should send existing code for modification detection
-    const DEFAULT_CODE_TEMPLATE = `import cadquery as cq\n\n# Create your 3D model here\nresult = cq.Workplane("XY").box(10, 10, 10)\n`;
+    const DEFAULT_CODE_TEMPLATE = `from build123d import *\n\n# Create your 3D model here\nwith BuildPart() as part:\n    Box(10, 10, 10)\nresult = part.part\n`;
     const existingCode = project.code;
     const hasExistingCode = existingCode.trim() !== DEFAULT_CODE_TEMPLATE.trim()
       && existingCode.trim().split('\n').length > 3;
@@ -2047,7 +2047,7 @@
     chatStore.addMessage({
       id: generateId(),
       role: 'system',
-      content: 'Welcome to CAD AI Studio. Describe what you want to build and I will generate CadQuery code for you.',
+      content: 'Welcome to CAD AI Studio. Describe what you want to build and I will generate Build123d code for you.',
       timestamp: Date.now(),
     });
   });

@@ -10,12 +10,12 @@ Case schema (JSON):
   "id": "whoop_housing",
   "category": "enclosure",
   "prompt": "...",
-  "reference_code": "optional cadquery code"
+  "reference_code": "optional build123d code"
 }
 
 Generator command mode:
   --generator-cmd "my-generator --prompt-file {prompt_file} --attempt {attempt}"
-The command must print CadQuery Python code to stdout.
+The command must print Build123d Python code to stdout.
 
 Metrics:
 - first_pass_success_rate

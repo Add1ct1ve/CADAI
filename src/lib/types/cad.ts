@@ -256,7 +256,7 @@ export interface ConeParams {
 export type PrimitiveParams = BoxParams | CylinderParams | SphereParams | ConeParams;
 
 export interface CadTransform {
-  position: [number, number, number]; // CadQuery coords (Z-up)
+  position: [number, number, number]; // CAD coords (Z-up)
   rotation: [number, number, number]; // degrees
 }
 
@@ -438,7 +438,7 @@ export type Measurement = DistanceMeasurement | AngleMeasurement | RadiusMeasure
 export interface MassProperties {
   volume: number;
   surfaceArea: number;
-  centerOfMass: [number, number, number]; // CadQuery Z-up
+  centerOfMass: [number, number, number]; // CAD Z-up
   density?: number;    // g/cm³
   mass?: number;       // density × volume
 }

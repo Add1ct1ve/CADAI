@@ -42,8 +42,8 @@ pub struct PythonStatus {
     pub python_version: Option<String>,
     pub python_path: Option<String>,
     pub venv_ready: bool,
-    pub cadquery_installed: bool,
-    pub cadquery_version: Option<String>,
+    pub build123d_installed: bool,
+    pub build123d_version: Option<String>,
 }
 
 fn clamp_timeout(timeout_ms: Option<u64>) -> u64 {
@@ -111,7 +111,7 @@ pub async fn execute_code(
     let code_owned = code.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        runner::execute_cadquery_with_timeout_ms(
+        runner::execute_cad_with_timeout_ms(
             &venv_owned,
             &runner_owned,
             &code_owned,
@@ -200,17 +200,17 @@ pub async fn check_python(state: State<'_, AppState>) -> Result<PythonStatus, Ap
     // Check venv
     let venv_dir = venv::get_venv_dir()?;
     let venv_ready = venv::venv_exists(&venv_dir);
-    let cadquery_installed = if venv_ready {
-        installer::is_cadquery_installed(&venv_dir)
+    let build123d_installed = if venv_ready {
+        installer::is_build123d_installed(&venv_dir)
     } else {
         false
     };
 
-    // Detect and cache CadQuery version
-    let cadquery_version = if cadquery_installed {
-        let ver = installer::detect_cadquery_version(&venv_dir);
-        *state.cadquery_version.lock().map_err(|_| {
-            AppError::ConfigError("Failed to update CadQuery version state".into())
+    // Detect and cache Build123d version
+    let build123d_version = if build123d_installed {
+        let ver = installer::detect_build123d_version(&venv_dir);
+        *state.build123d_version.lock().map_err(|_| {
+            AppError::ConfigError("Failed to update Build123d version state".into())
         })? = ver.clone();
         ver
     } else {
@@ -230,8 +230,8 @@ pub async fn check_python(state: State<'_, AppState>) -> Result<PythonStatus, Ap
         python_version,
         python_path,
         venv_ready,
-        cadquery_installed,
-        cadquery_version,
+        build123d_installed,
+        build123d_version,
     })
 }
 
@@ -251,27 +251,27 @@ pub async fn setup_python(state: State<'_, AppState>) -> Result<String, AppError
         venv::create_venv(&info.path, &venv_dir)?;
     }
 
-    // Install CadQuery
-    if !installer::is_cadquery_installed(&venv_dir) {
-        installer::install_cadquery(&venv_dir)?;
+    // Install Build123d
+    if !installer::is_build123d_installed(&venv_dir) {
+        installer::install_build123d(&venv_dir)?;
     }
 
-    // Detect and cache CadQuery version
-    let cq_version = installer::detect_cadquery_version(&venv_dir);
+    // Detect and cache Build123d version
+    let b3d_version = installer::detect_build123d_version(&venv_dir);
     *state
-        .cadquery_version
+        .build123d_version
         .lock()
-        .map_err(|_| AppError::ConfigError("Failed to update CadQuery version state".into()))? =
-        cq_version.clone();
+        .map_err(|_| AppError::ConfigError("Failed to update Build123d version state".into()))? =
+        b3d_version.clone();
 
     *state
         .venv_path
         .lock()
         .map_err(|_| AppError::ConfigError("Failed to update venv state".into()))? = Some(venv_dir);
 
-    let cq_ver_str = cq_version.unwrap_or_else(|| "unknown".to_string());
+    let b3d_ver_str = b3d_version.unwrap_or_else(|| "unknown".to_string());
     Ok(format!(
-        "Python {} environment ready with CadQuery {}",
-        info.version, cq_ver_str
+        "Python {} environment ready with Build123d {}",
+        info.version, b3d_ver_str
     ))
 }

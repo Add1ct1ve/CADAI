@@ -7,7 +7,7 @@ pub enum ExtractionFormat {
     XmlTags,
     /// `` ```python ... ``` `` markdown fence
     MarkdownFence,
-    /// Any code block containing CadQuery markers
+    /// Any code block containing Build123d markers
     Heuristic,
 }
 
@@ -19,11 +19,11 @@ pub struct ExtractionOutcome {
     pub format: ExtractionFormat,
 }
 
-/// Extract Python/CadQuery code from an AI response using a 3-tier cascade:
+/// Extract Python/Build123d code from an AI response using a 3-tier cascade:
 ///
 /// 1. `<CODE>...</CODE>` XML tags (case-insensitive)
 /// 2. `` ```python ... ``` `` markdown fence
-/// 3. Any `` ``` `` block containing `import cadquery` or `cq.`
+/// 3. Any `` ``` `` block containing Build123d markers
 ///
 /// Returns `None` if no code block is found.
 pub fn extract_python_code(response: &str) -> Option<ExtractionOutcome> {
@@ -35,7 +35,7 @@ pub fn extract_python_code(response: &str) -> Option<ExtractionOutcome> {
     if let Some(outcome) = try_markdown_fence(response) {
         return Some(outcome);
     }
-    // Tier 3: Any ``` block with cadquery/cq. markers
+    // Tier 3: Any ``` block with Build123d markers
     if let Some(outcome) = try_heuristic(response) {
         return Some(outcome);
     }
@@ -80,12 +80,12 @@ fn try_markdown_fence(response: &str) -> Option<ExtractionOutcome> {
     })
 }
 
-/// Tier 3: Find any fenced code block containing CadQuery markers (`import cadquery` or `cq.`).
+/// Tier 3: Find any fenced code block containing Build123d markers (`from build123d`, `BuildPart`, `Box(`, `Cylinder(`).
 fn try_heuristic(response: &str) -> Option<ExtractionOutcome> {
     let re = Regex::new(r"```\w*\s*\n([\s\S]*?)```").ok()?;
     for cap in re.captures_iter(response) {
         let code = cap[1].trim().to_string();
-        if !code.is_empty() && (code.contains("import cadquery") || code.contains("cq.")) {
+        if !code.is_empty() && (code.contains("from build123d") || code.contains("BuildPart") || code.contains("Box(") || code.contains("Cylinder(")) {
             return Some(ExtractionOutcome {
                 code,
                 format: ExtractionFormat::Heuristic,
@@ -101,58 +101,58 @@ mod tests {
 
     #[test]
     fn test_extract_xml_tags() {
-        let response = "Here is the code:\n<CODE>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n</CODE>\nDone.";
+        let response = "Here is the code:\n<CODE>\nfrom build123d import *\nresult = Box(10, 10, 10)\n</CODE>\nDone.";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::XmlTags);
-        assert!(outcome.code.contains("import cadquery as cq"));
+        assert!(outcome.code.contains("from build123d import *"));
     }
 
     #[test]
     fn test_extract_xml_tags_case_insensitive() {
         let response =
-            "<code>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(5,5,5)\n</code>";
+            "<code>\nfrom build123d import *\nresult = Box(5, 5, 5)\n</code>";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::XmlTags);
-        assert!(outcome.code.contains("import cadquery"));
+        assert!(outcome.code.contains("from build123d"));
     }
 
     #[test]
     fn test_extract_markdown_fence() {
-        let response = "Here is the code:\n```python\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```\nDone.";
+        let response = "Here is the code:\n```python\nfrom build123d import *\nresult = Box(10, 10, 10)\n```\nDone.";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::MarkdownFence);
-        assert!(outcome.code.contains("import cadquery as cq"));
+        assert!(outcome.code.contains("from build123d import *"));
     }
 
     #[test]
     fn test_extract_heuristic() {
         let response =
-            "Here:\n```\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```";
+            "Here:\n```\nfrom build123d import *\nresult = Box(10, 10, 10)\n```";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::Heuristic);
-        assert!(outcome.code.contains("import cadquery"));
+        assert!(outcome.code.contains("from build123d"));
     }
 
     #[test]
     fn test_extract_xml_preferred_over_markdown() {
-        let response = "<CODE>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)\n</CODE>\n\n```python\nimport cadquery as cq\nresult = cq.Workplane('XY').box(2,2,2)\n```";
+        let response = "<CODE>\nfrom build123d import *\nresult = Box(1, 1, 1)\n</CODE>\n\n```python\nfrom build123d import *\nresult = Box(2, 2, 2)\n```";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::XmlTags);
-        assert!(outcome.code.contains("box(1,1,1)"));
+        assert!(outcome.code.contains("Box(1, 1, 1)"));
     }
 
     #[test]
     fn test_extract_markdown_preferred_over_heuristic() {
-        let response = "```python\nimport cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)\n```\n\n```\nimport cadquery as cq\nresult = cq.Workplane('XY').box(2,2,2)\n```";
+        let response = "```python\nfrom build123d import *\nresult = Box(1, 1, 1)\n```\n\n```\nfrom build123d import *\nresult = Box(2, 2, 2)\n```";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::MarkdownFence);
-        assert!(outcome.code.contains("box(1,1,1)"));
+        assert!(outcome.code.contains("Box(1, 1, 1)"));
     }
 
     #[test]
     fn test_extract_empty_code_block_skipped() {
         // Empty <CODE> tags should fall through to the markdown fence
-        let response = "<CODE>\n\n</CODE>\n\n```python\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```";
+        let response = "<CODE>\n\n</CODE>\n\n```python\nfrom build123d import *\nresult = Box(10, 10, 10)\n```";
         let outcome = extract_python_code(response).unwrap();
         assert_eq!(outcome.format, ExtractionFormat::MarkdownFence);
     }
@@ -166,13 +166,13 @@ mod tests {
     #[test]
     fn test_extract_code_convenience() {
         let response =
-            "<CODE>\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n</CODE>";
+            "<CODE>\nfrom build123d import *\nresult = Box(10, 10, 10)\n</CODE>";
         let code = extract_code(response).unwrap();
-        assert!(code.contains("import cadquery as cq"));
+        assert!(code.contains("from build123d import *"));
     }
 
     #[test]
-    fn test_extract_heuristic_skips_non_cadquery() {
+    fn test_extract_heuristic_skips_non_cad() {
         let response = "```\nprint('hello world')\n```";
         assert!(extract_python_code(response).is_none());
     }

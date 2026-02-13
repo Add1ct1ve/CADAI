@@ -10,7 +10,7 @@ export const PLAN_TEMPLATES: PlanTemplate[] = [
 - Dimensions: 50mm x 30mm x 20mm (L x W x H)
 - Features: Sharp edges, flat faces
 
-### CadQuery Approach
+### CAD Approach
 - Single Workplane("XY").box() call
 - Centered at origin by default
 - Optional: fillets on edges
@@ -31,7 +31,7 @@ export const PLAN_TEMPLATES: PlanTemplate[] = [
 - Dimensions: radius 15mm, height 40mm
 - Features: Smooth circular profile
 
-### CadQuery Approach
+### CAD Approach
 - Workplane("XY").circle(radius).extrude(height)
 - Centered at origin on XY plane
 
@@ -52,7 +52,7 @@ export const PLAN_TEMPLATES: PlanTemplate[] = [
 - Wall thickness: 2mm
 - Features: Screw posts (4x), ventilation slots, lid lip
 
-### CadQuery Approach
+### CAD Approach
 - Create outer shell with .box() then .shell()
 - Add screw posts with .pushPoints() and .circle().extrude()
 - Cut ventilation slots with .rect().cutThruAll()
@@ -80,7 +80,7 @@ export const PLAN_TEMPLATES: PlanTemplate[] = [
 - Mounting holes: 2 on base (5mm dia), 2 on upright (5mm dia)
 - Fillet at junction: 5mm radius
 
-### CadQuery Approach
+### CAD Approach
 - Create L-profile as 2D sketch, extrude 30mm
 - Add fillet at inner corner
 - Cut mounting holes with .faces().workplane().hole()
@@ -107,7 +107,7 @@ export const PLAN_TEMPLATES: PlanTemplate[] = [
 - Face width: 10mm
 - Bore: 8mm diameter
 
-### CadQuery Approach
+### CAD Approach
 - Calculate gear dimensions from module and tooth count
 - Pitch diameter = module * teeth = 40mm
 - Outer diameter = pitch + 2*module = 44mm

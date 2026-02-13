@@ -1,13 +1,13 @@
 """
-CadQuery execution wrapper for CAD AI Studio.
+Build123d execution wrapper for CAD AI Studio.
 
 This script is invoked by the Rust backend as a subprocess.
-It executes CadQuery code and exports the result as STL.
+It executes Build123d code and exports the result as STL.
 
 Usage:
     python runner.py <input_file> <output_file>
 
-The input file should contain valid CadQuery Python code.
+The input file should contain valid Build123d Python code.
 The code MUST assign the final result to a variable named 'result'.
 The output file will be written as binary STL.
 """
@@ -24,11 +24,13 @@ def _is_string_like(value):
 
 def _extract_exportables(result):
     """
-    Flatten a user-provided `result` into CadQuery-exportable objects.
+    Flatten a user-provided `result` into Build123d-exportable objects.
 
     Supports:
     - a single Shape / Solid / Compound
-    - Workplane (via .vals()/.val())
+    - Workplane (via .vals()/.val()) for CadQuery backward compat
+    - BuildPart context manager results (via .part)
+    - BuildSketch context manager results (via .sketch)
     - list/tuple/set of the above
     - dict of named parts (values are inspected)
     """
@@ -53,7 +55,7 @@ def _extract_exportables(result):
                 add_candidate(value)
             return
 
-        # Workplane with multiple objects.
+        # Workplane with multiple objects (CadQuery backward compat).
         if hasattr(candidate, "vals") and callable(candidate.vals):
             try:
                 values = candidate.vals()
@@ -64,7 +66,7 @@ def _extract_exportables(result):
             except Exception:
                 pass
 
-        # Workplane with a single object.
+        # Workplane with a single object (CadQuery backward compat).
         if hasattr(candidate, "val") and callable(candidate.val):
             try:
                 value = candidate.val()
@@ -74,7 +76,21 @@ def _extract_exportables(result):
             except Exception:
                 pass
 
-        # CadQuery shape-like object.
+        # Build123d BuildPart context manager result.
+        if hasattr(candidate, "part"):
+            part = candidate.part
+            if part is not None:
+                add_candidate(part)
+                return
+
+        # Build123d BuildSketch context manager result.
+        if hasattr(candidate, "sketch"):
+            sketch = candidate.sketch
+            if sketch is not None:
+                add_candidate(sketch)
+                return
+
+        # Build123d / CadQuery shape-like object (both use .wrapped for OCCT).
         if hasattr(candidate, "wrapped"):
             obj_id = id(candidate)
             if obj_id not in seen_ids:
@@ -87,7 +103,7 @@ def _extract_exportables(result):
             invalid.append(f"scalar:{candidate}")
             return
 
-        # Unknown object type that did not resolve to a CadQuery shape.
+        # Unknown object type that did not resolve to a Build123d shape.
         invalid.append(f"type:{type(candidate).__name__}")
 
     add_candidate(result)
@@ -108,7 +124,7 @@ def _count_solids(shape):
     return count
 
 
-def _ensure_single_solid(normalized, cq):
+def _ensure_single_solid(normalized):
     """
     Verify result is a single solid body.
     If multiple solids found, attempt OCP-level fuse.
@@ -143,7 +159,8 @@ def _ensure_single_solid(normalized, cq):
                 )
                 sys.exit(5)
 
-        fused_shape = cq.Shape(fused)
+        from build123d import Solid
+        fused_shape = Solid(fused)
         if _count_solids(fused_shape) == 1:
             print(f"FUSED: {count} solids merged into 1", file=sys.stderr)
             return fused_shape
@@ -161,26 +178,27 @@ def _ensure_single_solid(normalized, cq):
         return normalized
 
 
-def _normalize_result_for_export(result, cq):
+def _normalize_result_for_export(result):
     exportables, invalid = _extract_exportables(result)
     if not exportables:
         raise ValueError(
-            "result did not contain exportable CadQuery geometry. "
-            "Assign a CadQuery Workplane/Shape or a collection of those to `result`."
+            "result did not contain exportable Build123d geometry. "
+            "Assign a Build123d Part/Shape or a collection of those to `result`."
         )
 
     if invalid:
         examples = ", ".join(invalid[:3])
         raise ValueError(
             "result mixed geometry with non-geometry values "
-            f"({examples}). Assign only CadQuery geometry objects to `result`."
+            f"({examples}). Assign only Build123d geometry objects to `result`."
         )
 
     if len(exportables) == 1:
         return exportables[0]
 
     # Multiple parts: export as one compound (preserves all generated solids).
-    return cq.Compound.makeCompound(exportables)
+    from build123d import Compound
+    return Compound(children=exportables)
 
 
 def _indent_width(line):
@@ -221,7 +239,7 @@ def guard_fillet_chamfer(code):
                 protected.pop()
 
         in_try = bool(protected) and indent > protected[-1]
-        has_fillet = ".fillet(" in line or ".chamfer(" in line
+        has_fillet = "fillet(" in line or "chamfer(" in line
         is_comment = stripped.startswith("#")
         already_guarded = "auto-fillet-guard" in line
 
@@ -258,7 +276,7 @@ def main():
 
     code = guard_fillet_chamfer(code)
 
-    # Execute the CadQuery code
+    # Execute the Build123d code
     namespace = {}
     try:
         exec(code, namespace)
@@ -274,14 +292,14 @@ def main():
 
     # Export based on file extension
     try:
-        import cadquery as cq
-        normalized = _normalize_result_for_export(result, cq)
-        normalized = _ensure_single_solid(normalized, cq)
+        normalized = _normalize_result_for_export(result)
+        normalized = _ensure_single_solid(normalized)
+        from build123d import export_stl, export_step
         ext = os.path.splitext(output_file)[1].lower()
         if ext in ('.step', '.stp'):
-            cq.exporters.export(normalized, output_file, cq.exporters.ExportTypes.STEP)
+            export_step(normalized, output_file)
         else:
-            cq.exporters.export(normalized, output_file, cq.exporters.ExportTypes.STL)
+            export_stl(normalized, output_file)
     except Exception:
         traceback.print_exc()
         sys.exit(4)

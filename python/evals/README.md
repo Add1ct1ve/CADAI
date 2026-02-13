@@ -20,6 +20,6 @@ python python/evals/run_eval.py \
   --max-attempts 4
 ```
 
-`generator-cmd` must print CadQuery Python code to stdout.
+`generator-cmd` must print Build123d Python code to stdout.
 
 Output report is written to `python/evals/last_eval_summary.json`.

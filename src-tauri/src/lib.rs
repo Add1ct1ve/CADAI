@@ -23,7 +23,7 @@ pub fn run() {
         python_path: std::sync::Mutex::new(None),
         venv_path: std::sync::Mutex::new(None),
         session_memory: std::sync::Mutex::new(agent::memory::SessionMemory::new()),
-        cadquery_version: std::sync::Mutex::new(None),
+        build123d_version: std::sync::Mutex::new(None),
     };
 
     tauri::Builder::default()

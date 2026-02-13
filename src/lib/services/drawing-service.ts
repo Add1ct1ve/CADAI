@@ -31,7 +31,7 @@ const VIEW_LABELS: Record<ViewDirection, string> = {
 };
 
 /**
- * Generate a single view's SVG content via CadQuery projection.
+ * Generate a single view's SVG content via Build123d projection.
  */
 export async function generateView(drawingId: DrawingId, viewId: DrawingViewId): Promise<void> {
   const store = getDrawingStore();
@@ -150,7 +150,7 @@ export function composeSheetSvg(drawing: Drawing): string {
   for (const view of drawing.views) {
     if (!view.svgContent) continue;
     svg += `  <g transform="translate(${view.x}, ${view.y}) scale(${view.scale})">\n`;
-    // Strip the outer <svg> wrapper from the CadQuery SVG and insert the inner content
+    // Strip the outer <svg> wrapper from the Build123d SVG and insert the inner content
     const inner = extractSvgInner(view.svgContent);
     svg += `    ${inner}\n`;
     svg += `  </g>\n`;

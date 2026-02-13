@@ -18,7 +18,7 @@ export const PAPER_SIZES: Record<PaperSize, [number, number]> = {
 
 export type ViewDirection = 'front' | 'back' | 'top' | 'bottom' | 'left' | 'right' | 'iso' | 'section';
 
-/** Maps view direction to CadQuery projection vector (Z-up coordinate system) */
+/** Maps view direction to CAD projection vector (Z-up coordinate system) */
 export const VIEW_PROJECTION: Record<Exclude<ViewDirection, 'section'>, [number, number, number]> = {
   front:  [0, -1, 0],
   back:   [0, 1, 0],
@@ -37,7 +37,7 @@ export interface DrawingView {
   y: number;              // Position on sheet (mm from top)
   scale: number;          // e.g. 1 = 1:1, 0.5 = 1:2
   showHidden: boolean;
-  svgContent: string;     // Generated SVG from CadQuery
+  svgContent: string;     // Generated SVG from Build123d
   width: number;          // Bounding box width in mm
   height: number;         // Bounding box height in mm
   // Section view specific

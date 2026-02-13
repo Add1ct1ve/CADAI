@@ -37,10 +37,10 @@
 | Feature | Status | Notes |
 |---------|--------|-------|
 | New project | ⬜ | Clear scene, reset state |
-| Save project (.cadai) | ⬜ | Save: CadQuery code + viewport state + history |
+| Save project (.cadai) | ⬜ | Save: Build123d code + viewport state + history |
 | Open project | ⬜ | Load .cadai file |
 | Export STL | ✅ | Already working |
-| Export STEP | ⬜ | CadQuery supports this |
+| Export STEP | ⬜ | Build123d supports this |
 | Undo/Redo | ⬜ | Code history stack |
 | Autosave | ⬜ | Save draft every 60s |
 
@@ -253,17 +253,17 @@
 
 ## Implementation Notes
 
-### CadQuery Mapping
-Most features map to CadQuery operations:
-- Extrude → `cq.Workplane().extrude()`
-- Fillet → `.fillet()`
-- Chamfer → `.chamfer()`
-- Shell → `.shell()`
-- Revolve → `.revolve()`
-- Sweep → `.sweep()`
-- Loft → `.loft()`
-- Union → `.union()`
-- Cut → `.cut()`
+### Build123d Mapping
+Most features map to Build123d operations:
+- Extrude → `extrude()`
+- Fillet → `fillet()`
+- Chamfer → `chamfer()`
+- Shell → `shell()`
+- Revolve → `revolve()`
+- Sweep → `sweep()`
+- Loft → `loft()`
+- Union → `+` operator or `Compound`
+- Cut → `-` operator or `Mode.SUBTRACT`
 - Intersect → `.intersect()`
 
 ### Three.js Considerations
@@ -278,7 +278,7 @@ JSON structure:
 {
   "version": "1.0",
   "units": "mm",
-  "code": "import cadquery as cq\n...",
+  "code": "from build123d import *\n...",
   "history": [...],
   "viewport": {
     "camera": {...},

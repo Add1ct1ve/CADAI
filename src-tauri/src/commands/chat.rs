@@ -253,7 +253,7 @@ pub async fn send_message(
     let config = state.config.lock().unwrap().clone();
 
     // Build the system prompt from the configured preset.
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     let base_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
@@ -342,7 +342,7 @@ pub(crate) fn build_retry_prompt(
 ) -> String {
     let mut prompt = String::new();
 
-    prompt.push_str("The following CadQuery code failed with an error. Please fix it.\n\n");
+    prompt.push_str("The following Build123d code failed with an error. Please fix it.\n\n");
     prompt.push_str(&format!(
         "Code that failed:\n```python\n{}\n```\n\n",
         failed_code
@@ -401,7 +401,7 @@ pub async fn auto_retry(
     let config = state.config.lock().unwrap().clone();
 
     // Build the system prompt from the configured preset.
-    let cq_version = state.cadquery_version.lock().unwrap().clone();
+    let cq_version = state.build123d_version.lock().unwrap().clone();
     let base_prompt = prompts::build_compact_system_prompt_for_preset(
         config.agent_rules_preset.as_deref(),
         cq_version.as_deref(),
@@ -479,9 +479,9 @@ pub async fn auto_retry(
     // Extract code from AI response.
     let code = validate::extract_python_code(&full_response);
 
-    // If code was extracted, validate it has basic CadQuery structure.
+    // If code was extracted, validate it has basic Build123d structure.
     let valid_code = code.and_then(|c| {
-        match validate::validate_cadquery_code(&c) {
+        match validate::validate_cad_code(&c) {
             Ok(()) => Some(c),
             Err(_) => {
                 // Code extracted but doesn't pass basic validation.

@@ -387,7 +387,7 @@ mod tests {
         let mut report = base_report();
         report.component_count = 2;
         let contract = build_default_contract("back_plate", "size 40x20x10mm with lip and ridge");
-        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        let result = validate_part_semantics(&contract, &report, "result = Box(10, 10, 10)");
         assert!(!result.passed);
         assert!(result
             .findings
@@ -400,7 +400,7 @@ mod tests {
         let mut report = base_report();
         report.bounds_max = [200.0, 120.0, 80.0];
         let contract = build_default_contract("housing", "outer dimensions 40x20x10mm");
-        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        let result = validate_part_semantics(&contract, &report, "result = Box(10, 10, 10)");
         assert!(!result.passed);
         assert!(result.findings.iter().any(|f| f.contains("bbox extent")));
     }
@@ -411,7 +411,7 @@ mod tests {
         report.bounds_min = [0.0, 0.0, -25.0];
         report.bounds_max = [40.0, 20.0, -5.0];
         let contract = build_default_contract("housing", "40x20x10mm");
-        let result = validate_part_semantics(&contract, &report, "result = cq.Workplane('XY')");
+        let result = validate_part_semantics(&contract, &report, "result = Box(10, 10, 10)");
         assert!(!result.passed);
         assert!(result
             .findings

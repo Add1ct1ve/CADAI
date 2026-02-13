@@ -7,7 +7,7 @@ use crate::config::GenerationReliabilityProfile;
 use crate::error::AppError;
 
 /// Result of the fast prompt triage that determines whether a user request
-/// has enough detail for CadQuery code generation.
+/// has enough detail for Build123d code generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptAnalysis {
     pub needs_clarification: bool,
@@ -61,7 +61,7 @@ Describe what this object looks like in the real world. What are its key visual 
 Describe each feature by its geometric shape, dimensions, and spatial relationship to other features:
 - Use shape vocabulary: rectangular, cylindrical, spherical, conical, domed, tapered, flat, curved, hollow, etc.
 - Specify positions relative to the base or other features (centered on top face, offset 5mm from left edge, etc.)
-- Do NOT name CadQuery operations — the code generator chooses the construction method
+- Do NOT name CAD operations — the code generator chooses the construction method
 - For enclosure-like objects, describe wall thickness, cavity dimensions, and opening positions
 
 ### Build Plan
@@ -73,7 +73,7 @@ Example — WRONG: "Revolve a semi-circular arc (r=6.25mm) around X-axis to crea
 Example — RIGHT: "Smooth dome on top surface — 7.5mm at center, tapering to 5mm at edges"
 
 ### Approximation Notes
-What can't CadQuery do perfectly? What's the closest buildable shape? Where should fillets be applied to smooth transitions?
+What can't Build123d do perfectly? What's the closest buildable shape? Where should fillets be applied to smooth transitions?
 
 ## Rules
 - Think about CROSS-SECTIONS: describe the profile shape at key heights
@@ -85,13 +85,13 @@ What can't CadQuery do perfectly? What's the closest buildable shape? Where shou
 - For enclosures: describe outer dimensions, wall thickness, and cavity shape — NOT the construction method
 - Defer fillets/chamfers to optional last-step polish with fallback behavior
 - For enclosure-like objects, describe the hollow body as: outer dimensions, wall thickness per side, cavity dimensions, and which faces are open — NEVER use the word "shell" as a construction verb
-- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT specify CadQuery operations, construction methods, or API calls — the code generator picks the best approach from its pattern library
+- Describe geometry by shape, dimensions, and spatial relationships ONLY. Do NOT specify CAD operations, construction methods, or API calls — the code generator picks the best approach from its pattern library
 - WRONG: "revolve a semi-circular arc around X-axis", "use loft between cross-sections", "boolean subtract a cylinder"
 - RIGHT: "dome shape on top, 7.5mm tall at center", "tapered tube from 20mm to 12mm diameter", "cylindrical hole, 8mm diameter, through the top face"
 - WRONG: "Shell the body from the bottom face with 1.8mm walls"
 - RIGHT: "The body is hollow with 1.8mm side walls and 1.5mm top wall, open at the bottom"
 - If the request is simple (e.g. "a box" or "a cylinder"), keep the plan brief — 2-3 lines is fine
-- NEVER write Python or CadQuery code — only describe geometry in plain English"#;
+- NEVER write Python or Build123d code — only describe geometry in plain English"#;
 
 // ---------------------------------------------------------------------------
 // Manufacturing constraints formatting
@@ -255,7 +255,7 @@ const NEGATION_PREFIXES: &[&str] = &[
 ];
 const REPAIR_SENSITIVE_OPS: &[&str] = &["shell", "loft", "sweep", "fillet", "chamfer"];
 
-/// Check if "shell" appears as a CadQuery operation (verb) rather than an English noun.
+/// Check if "shell" appears as a CAD operation (verb) rather than an English noun.
 /// Matches: "shell(", "shell it", "shell the body", "apply shell", "use shell", "then shell"
 /// Does NOT match: "hollow shell", "outer shell", "thick shell"
 fn has_shell_operation(text: &str) -> bool {
@@ -331,7 +331,7 @@ fn has_positive_operation(text: &str, op: &str) -> bool {
     false
 }
 
-/// Extract known CadQuery operation names from the plan text (unique, case-insensitive).
+/// Extract known CAD operation names from the plan text (unique, case-insensitive).
 fn extract_operations(plan_text: &str) -> Vec<String> {
     let lower = plan_text.to_lowercase();
     let mut ops = Vec::new();
@@ -547,7 +547,7 @@ fn sanitize_plan_text(plan_text: &str) -> String {
         n
     } else {
         let heading_re = Regex::new(
-            r"(?im)^#{2,3}\s+(object analysis|housing analysis|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan|build plan structure|build steps|implementation steps|approximation notes)\s*$",
+            r"(?im)^#{2,3}\s+(object analysis|housing analysis|build123d approach|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan|build plan structure|build steps|implementation steps|approximation notes)\s*$",
         )
         .unwrap();
         if let Some(m) = heading_re.find(plan_text) {
@@ -643,7 +643,7 @@ fn canonicalize_plan_sections(plan_text: &str) -> String {
     let object_analysis = extract_section(plan_text, "Object Analysis")
         .map(|s| clean_section_lines(&s))
         .unwrap_or_default();
-    let cadquery_approach = extract_section(plan_text, "CadQuery Approach")
+    let cad_approach = extract_section(plan_text, "CAD Approach")
         .map(|s| clean_section_lines(&s))
         .unwrap_or_default();
     let approximation_notes = extract_section(plan_text, "Approximation Notes")
@@ -664,9 +664,9 @@ fn canonicalize_plan_sections(plan_text: &str) -> String {
         out.push_str("\n\n");
     }
 
-    if !cadquery_approach.is_empty() {
-        out.push_str("### CadQuery Approach\n");
-        out.push_str(&cadquery_approach.join("\n"));
+    if !cad_approach.is_empty() {
+        out.push_str("### CAD Approach\n");
+        out.push_str(&cad_approach.join("\n"));
         out.push_str("\n\n");
     }
 
@@ -702,7 +702,7 @@ fn canonicalize_plan_sections(plan_text: &str) -> String {
 ///
 /// Accepts variants like:
 /// - "*Object Analysis*:"
-/// - "**CadQuery Approach**"
+/// - "**CAD Approach**"
 /// - "Build Plan Structure:"
 /// - "Object Analysis:"
 ///
@@ -710,7 +710,7 @@ fn canonicalize_plan_sections(plan_text: &str) -> String {
 fn normalize_section_labels(plan_text: &str) -> Option<String> {
     fn parse_section_label_line(line: &str) -> Option<(&'static str, String)> {
         let re = Regex::new(
-            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|housing analysis|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan(?: structure)?|build steps|implementation steps|approximation notes)[*_`#\s]*:?\s*(.*)$",
+            r"(?i)^\s*(?:[-*]\s+|\d+[\.\)]\s+)?[*_`#\s]*(object analysis|housing analysis|build123d approach|cadquery approach|geometry breakdown|modeling approach|cad approach|build plan(?: structure)?|build steps|implementation steps|approximation notes)[*_`#\s]*:?\s*(.*)$",
         )
         .unwrap();
         let caps = re.captures(line)?;
@@ -722,12 +722,13 @@ fn normalize_section_labels(plan_text: &str) -> Option<String> {
 
         let label = if raw_label == "object analysis" || raw_label == "housing analysis" {
             "Object Analysis"
-        } else if raw_label == "cadquery approach"
+        } else if raw_label == "cad approach"
+            || raw_label == "build123d approach"
+            || raw_label == "cadquery approach"
             || raw_label == "geometry breakdown"
             || raw_label == "modeling approach"
-            || raw_label == "cad approach"
         {
-            "CadQuery Approach"
+            "CAD Approach"
         } else if raw_label == "build plan"
             || raw_label == "build plan structure"
             || raw_label == "build steps"
@@ -770,7 +771,7 @@ fn normalize_section_labels(plan_text: &str) -> Option<String> {
 
     let order = [
         "Object Analysis",
-        "CadQuery Approach",
+        "CAD Approach",
         "Build Plan",
         "Approximation Notes",
     ];
@@ -830,11 +831,12 @@ fn has_section(plan_text: &str, heading: &str) -> bool {
             "object analysis".to_string(),
             "housing analysis".to_string(),
         ],
-        "cadquery approach" => vec![
+        "cad approach" => vec![
+            "cad approach".to_string(),
+            "build123d approach".to_string(),
             "cadquery approach".to_string(),
             "geometry breakdown".to_string(),
             "modeling approach".to_string(),
-            "cad approach".to_string(),
         ],
         "build plan" => vec![
             "build plan".to_string(),
@@ -1085,7 +1087,7 @@ pub fn validate_plan_with_profile(
     // Rule 12: no operations
     if operations_for_presence.is_empty() {
         risk += 1;
-        warnings.push("no CadQuery operations mentioned in plan".to_string());
+        warnings.push("no CAD operations mentioned in plan".to_string());
     }
 
     // Rule 13: shell with thin walls (skip dimensions that are fillet radii or chamfer sizes)
@@ -1129,17 +1131,17 @@ pub fn validate_plan_with_profile(
         warnings.push("plan is missing an 'Object Analysis' section".to_string());
     }
 
-    // Rule 16: missing CadQuery Approach section
-    if !has_section(plan_text, "CadQuery Approach") {
+    // Rule 16: missing CAD Approach section
+    if !has_section(plan_text, "CAD Approach") {
         risk += 1;
-        warnings.push("plan is missing a 'CadQuery Approach' section".to_string());
+        warnings.push("plan is missing a 'CAD Approach' section".to_string());
     }
 
     // Clamp to 10
     risk = risk.min(10);
 
     let has_required_structure = has_section(plan_text, "Object Analysis")
-        && has_section(plan_text, "CadQuery Approach")
+        && has_section(plan_text, "CAD Approach")
         && has_section(plan_text, "Build Plan")
         && build_plan_steps_text.is_some();
     let risk_threshold = match profile {
@@ -1279,7 +1281,7 @@ pub async fn plan_geometry_with_feedback(
 // Prompt triage
 // ---------------------------------------------------------------------------
 
-const PROMPT_TRIAGE_SYSTEM: &str = r#"You are a CAD prompt triage assistant. Evaluate whether a user's request has enough detail to generate accurate CadQuery geometry.
+const PROMPT_TRIAGE_SYSTEM: &str = r#"You are a CAD prompt triage assistant. Evaluate whether a user's request has enough detail to generate accurate Build123d geometry.
 
 Return JSON only: {"clear": true/false, "questions": ["..."], "enriched_prompt": "..."}
 
@@ -1304,7 +1306,7 @@ Rules:
 - When not clear, set enriched_prompt to null and questions to a list of clarifying questions"#;
 
 /// Fast AI triage call that determines whether the user's prompt has enough
-/// detail for CadQuery code generation, or needs clarifying questions first.
+/// detail for Build123d code generation, or needs clarifying questions first.
 ///
 /// On parse failure or AI error, defaults to `needs_clarification: false`
 /// so that triage failures never block the pipeline.
@@ -1517,7 +1519,7 @@ mod tests {
     #[test]
     fn test_validate_simple_plan_low_risk() {
         let text = "### Object Analysis\nA simple rectangular box.\n\n\
-            ### CadQuery Approach\nUse extrude to create the base.\n\n\
+            ### CAD Approach\nUse extrude to create the base.\n\n\
             ### Build Plan\n1. Extrude a 50x30x20mm box.";
         let v = validate_plan(text);
         assert!(v.is_valid);
@@ -1538,7 +1540,7 @@ mod tests {
 
     #[test]
     fn test_extract_operations_shell_noun_not_detected() {
-        // "shell" used as an English noun should NOT be detected as a CadQuery operation
+        // "shell" used as an English noun should NOT be detected as a CAD operation
         let text = "Boolean subtract inner solid from outer solid → 3mm thick hollow shell";
         let ops = extract_operations(text);
         assert!(
@@ -1894,7 +1896,7 @@ overhangs:
     fn test_shell_with_fillet_not_flagged_as_thin_wall() {
         // 1mm is a fillet radius, not a wall thickness → Rule 13 should not fire
         let text = "### Object Analysis\nA hollow container.\n\n\
-            ### CadQuery Approach\nShell and fillet.\n\n\
+            ### CAD Approach\nShell and fillet.\n\n\
             ### Build Plan\n1. Create a 50x30x20mm box.\n\
             2. Shell with 3mm walls.\n3. Apply fillet 1mm on edges.";
         let v = validate_plan(text);
@@ -1912,7 +1914,7 @@ overhangs:
         // "cut the design into sections" in Object Analysis is prose, not a boolean op
         let text = "### Object Analysis\nWe need to cut the design into sections for analysis. \
             We combine ideas to fuse the concept.\n\n\
-            ### CadQuery Approach\nUse extrude.\n\n\
+            ### CAD Approach\nUse extrude.\n\n\
             ### Build Plan\n1. Extrude a 50x30x20mm box.";
         let count = count_boolean_mentions_in_build_plan(text);
         // Build Plan has no boolean ops
@@ -1932,7 +1934,7 @@ overhangs:
     #[test]
     fn test_validate_ignores_reasoning_outside_numbered_steps() {
         let text = "### Object Analysis\nbooleans booleans booleans cut union fuse intersect.\n\n\
-            ### CadQuery Approach\nThis paragraph repeats cut/union/fuse many times cut cut cut.\n\n\
+            ### CAD Approach\nThis paragraph repeats cut/union/fuse many times cut cut cut.\n\n\
             ### Build Plan\n1. Extrude a 42x28x5mm rounded rectangle.";
         let v = validate_plan(text);
         assert!(
@@ -1945,7 +1947,7 @@ overhangs:
     #[test]
     fn test_validate_requires_numbered_steps_when_build_plan_exists() {
         let text = "### Object Analysis\nA box.\n\n\
-            ### CadQuery Approach\nUse extrude.\n\n\
+            ### CAD Approach\nUse extrude.\n\n\
             ### Build Plan\nCreate a 50x30x20mm box without numbering.";
         let v = validate_plan(text);
         assert!(v
@@ -1966,12 +1968,12 @@ overhangs:
     fn test_normalize_section_labels_from_emphasis_style() {
         let text = "Load template...\n\n\
             *Object Analysis*:\nA wearable housing.\n\n\
-            *CadQuery Approach*:\nUse robust primitives.\n\n\
+            *CAD Approach*:\nUse robust primitives.\n\n\
             *Build Plan Structure*:\n1. Extrude 42x28x5mm base.\n2. Add dome.\n\n\
             *Approximation Notes*:\nSimplify soft transitions.";
         let sanitized = sanitize_plan_text(text);
         assert!(sanitized.contains("### Object Analysis"));
-        assert!(sanitized.contains("### CadQuery Approach"));
+        assert!(sanitized.contains("### CAD Approach"));
         assert!(sanitized.contains("### Build Plan"));
         assert!(sanitized.contains("### Approximation Notes"));
         assert!(sanitized.contains("1. Extrude 42x28x5mm base."));
@@ -1983,7 +1985,7 @@ overhangs:
         let text = "Key aspects:\n\
             1. *Object Analysis*:\n\
             - Wrist-worn tracker housing.\n\
-            2. *CadQuery Approach*:\n\
+            2. *CAD Approach*:\n\
             - Use extrude, shell, cut, union.\n\
             3. *Build Plan*:\n\
             1. Extrude 42x28x5mm base.\n\
@@ -1993,7 +1995,7 @@ overhangs:
 
         let sanitized = sanitize_plan_text(text);
         assert!(sanitized.contains("### Object Analysis"));
-        assert!(sanitized.contains("### CadQuery Approach"));
+        assert!(sanitized.contains("### CAD Approach"));
         assert!(sanitized.contains("### Build Plan"));
         assert!(sanitized.contains("### Approximation Notes"));
         assert!(sanitized.contains("1. Extrude 42x28x5mm base."));
@@ -2022,20 +2024,20 @@ overhangs:
 
     #[test]
     fn test_operations_include_presence_from_full_plan() {
-        // "loft" and "sweep" appear in CadQuery Approach and are now retained
+        // "loft" and "sweep" appear in CAD Approach and are now retained
         // for reliability gating even if Build Plan uses simpler wording.
         let text = "### Object Analysis\nA simple bracket.\n\n\
-            ### CadQuery Approach\nCould use loft or sweep for organic shapes.\n\n\
+            ### CAD Approach\nCould use loft or sweep for organic shapes.\n\n\
             ### Build Plan\n1. Extrude a 50x30x10mm box.\n\
             2. Cut a 20mm hole through the center.";
         let v = validate_plan(text);
         assert!(
             v.extracted_operations.contains(&"loft".to_string()),
-            "loft from CadQuery Approach should be retained for reliability scoring"
+            "loft from CAD Approach should be retained for reliability scoring"
         );
         assert!(
             v.extracted_operations.contains(&"sweep".to_string()),
-            "sweep from CadQuery Approach should be retained for reliability scoring"
+            "sweep from CAD Approach should be retained for reliability scoring"
         );
         assert!(v.extracted_operations.contains(&"extrude".to_string()));
         assert!(v.extracted_operations.contains(&"cut".to_string()));
@@ -2043,18 +2045,18 @@ overhangs:
 
     #[test]
     fn test_structural_rules_15_16() {
-        // Plan missing Object Analysis and CadQuery Approach → +1 each
+        // Plan missing Object Analysis and CAD Approach → +1 each
         let text = "### Build Plan\n1. Extrude a 50x30x20mm box.";
         let v = validate_plan(text);
         assert!(v.warnings.iter().any(|w| w.contains("Object Analysis")));
-        assert!(v.warnings.iter().any(|w| w.contains("CadQuery Approach")));
+        assert!(v.warnings.iter().any(|w| w.contains("CAD Approach")));
     }
 
     #[test]
     fn test_reliability_first_rejects_loft_shell_combo() {
         let text = r#"### Object Analysis
 - Enclosure.
-### CadQuery Approach
+### CAD Approach
 - loft + shell.
 ### Build Plan
 1. Loft a rounded enclosure profile.
@@ -2072,7 +2074,7 @@ overhangs:
     fn test_reliability_first_rejects_when_combo_only_in_approach() {
         let text = r#"### Object Analysis
 - Enclosure.
-### CadQuery Approach
+### CAD Approach
 - Use loft() for dome and shell from the bottom face for cavity.
 ### Build Plan
 1. Extrude base.
@@ -2092,7 +2094,7 @@ overhangs:
     fn test_negated_operations_do_not_count_as_positive() {
         let text = r#"### Object Analysis
 - Enclosure.
-### CadQuery Approach
+### CAD Approach
 - Avoid shell and avoid loft for first pass.
 ### Build Plan
 1. Extrude a 42x28x5mm base.
@@ -2111,7 +2113,7 @@ overhangs:
     fn test_positive_shell_still_detected() {
         let text = r#"### Object Analysis
 - Enclosure.
-### CadQuery Approach
+### CAD Approach
 - Robust enclosure path.
 ### Build Plan
 1. Extrude a 42x28x5mm base.
@@ -2126,7 +2128,7 @@ overhangs:
     fn test_negation_conflict_emits_warning_and_signal() {
         let text = r#"### Object Analysis
 - Enclosure.
-### CadQuery Approach
+### CAD Approach
 - Avoid shell for first pass.
 ### Build Plan
 1. Loft rounded outer body.
@@ -2164,7 +2166,7 @@ overhangs:
         // should cause rejection under Balanced profile (threshold 7)
         let text = r#"### Object Analysis
 - An enclosure.
-### CadQuery Approach
+### CAD Approach
 - Robust path.
 ### Build Plan
 1. Extrude a 60x40x30mm box.
@@ -2184,7 +2186,7 @@ overhangs:
     fn test_balanced_profile_can_accept_simple_plan() {
         let text = r#"### Object Analysis
 - Simple bracket.
-### CadQuery Approach
+### CAD Approach
 - extrude + cut.
 ### Build Plan
 1. Extrude a 50x30x10mm base.

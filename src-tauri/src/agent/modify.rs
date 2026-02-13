@@ -25,8 +25,8 @@ pub struct DiffLine {
 /// Default/template code markers — if the editor only has one of these,
 /// there is no meaningful code to modify.
 const DEFAULT_CODE_MARKERS: &[&str] = &[
-    "cq.Workplane(\"XY\").box(10, 10, 10)",
-    "cq.Workplane(\"XY\").box(10,10,10)",
+    "result = Box(10, 10, 10)",
+    "Box(10, 10, 10)",
     "# Create your 3D model here",
 ];
 
@@ -51,7 +51,7 @@ const MODIFICATION_PATTERNS: &[&str] = &[
 /// System prompt addendum for modification mode.
 pub const MODIFICATION_INSTRUCTIONS: &str = r#"
 ## MODIFICATION MODE
-You are modifying existing CadQuery code, NOT generating from scratch.
+You are modifying existing Build123d code, NOT generating from scratch.
 
 Critical rules:
 1. Return the COMPLETE updated code (not just the changed parts)
@@ -177,17 +177,16 @@ pub fn diff_has_changes(diff: &[DiffLine]) -> bool {
 mod tests {
     use super::*;
 
-    const REAL_CODE: &str = r#"import cadquery as cq
+    const REAL_CODE: &str = r#"from build123d import *
 
 # Create a box with rounded edges
-result = cq.Workplane("XY").box(50, 30, 20)
-result = result.edges("|Z").fillet(3)
+result = fillet(Box(50, 30, 20).edges().filter_by(Axis.Z), radius=3)
 "#;
 
-    const DEFAULT_TEMPLATE: &str = r#"import cadquery as cq
+    const DEFAULT_TEMPLATE: &str = r#"from build123d import *
 
 # Create your 3D model here
-result = cq.Workplane("XY").box(10, 10, 10)
+result = Box(10, 10, 10)
 "#;
 
     #[test]
@@ -231,7 +230,7 @@ result = cq.Workplane("XY").box(10, 10, 10)
 
     #[test]
     fn test_compute_diff_changes() {
-        let new_code = REAL_CODE.replace("box(50, 30, 20)", "box(50, 30, 40)");
+        let new_code = REAL_CODE.replace("Box(50, 30, 20)", "Box(50, 30, 40)");
         let diff = compute_diff(REAL_CODE, &new_code);
         assert!(diff_has_changes(&diff));
         // Should have at least one insert and one delete
@@ -281,7 +280,7 @@ result = cq.Workplane("XY").box(10, 10, 10)
 
     #[test]
     fn test_modification_message_preserves_code() {
-        let code = "result = cq.Workplane(\"XY\").box(10, 10, 10)\nresult = result.fillet(2)";
+        let code = "result = fillet(Box(10, 10, 10).edges(), radius=2)";
         let msg = build_modification_message(code, "add a hole");
         assert!(msg.contains(code));
     }

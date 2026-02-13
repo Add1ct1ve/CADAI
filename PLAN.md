@@ -6,7 +6,7 @@
 
 Desktop CAD application where users can:
 1. Chat with any AI model (Claude, GPT, Ollama)
-2. AI generates CadQuery (Python) code that instantly renders
+2. AI generates Build123d (Python) code that instantly renders
 3. Iterate visually until design is correct
 4. Export to STL/STEP for manufacturing
 
@@ -18,7 +18,7 @@ Desktop CAD application where users can:
 | Frontend Framework | Svelte 5 + SvelteKit (adapter-static) | 5.25+ |
 | 3D Rendering | Three.js in webview | 0.182+ |
 | Code Editor | Monaco Editor | 0.55+ |
-| CAD Engine | CadQuery via Python subprocess | 2.4+ |
+| CAD Engine | Build123d via Python subprocess | 0.7+ |
 | AI Provider | REST APIs (Claude, OpenAI, Ollama) | — |
 | HTTP Client | reqwest | 0.13 |
 | Async Runtime | tokio | 1.43+ |
@@ -46,12 +46,12 @@ Desktop CAD application where users can:
 │                      │  Python Manager              │
 │                      │  ├─ Auto-detect/installer    │
 │                      │  ├─ Venv management          │
-│                      │  └─ CadQuery subprocess      │
+│                      │  └─ Build123d subprocess     │
 └──────────────────────┴──────────────────────────────┘
                               │
                     ┌─────────┴──────────┐
                     │  Python Subprocess  │
-                    │  CadQuery → STL     │
+                    │  Build123d → STL    │
                     └────────────────────┘
 ```
 
@@ -63,7 +63,7 @@ Desktop CAD application where users can:
 4. SSE deltas streamed to frontend via Tauri Channel → chat updates live
 5. When complete: extract ```python code block from AI response
 6. Code shown in Monaco editor
-7. CadQuery code written to temp file, run via Python subprocess
+7. Build123d code written to temp file, run via Python subprocess
 8. STL output read and sent to frontend
 9. Three.js renders STL with orbit controls, lights, grid
 10. On error: send error message back to AI for auto-retry (Phase 4)
@@ -108,7 +108,7 @@ cadai/
 │           ├── detector.rs         # Find Python on system
 │           ├── installer.rs        # Auto-installer (venv + pip)
 │           ├── venv.rs             # Venv management
-│           └── runner.rs           # CadQuery subprocess executor
+│           └── runner.rs           # Build123d subprocess executor
 │
 ├── src/                            # Frontend (Svelte 5 + TS)
 │   ├── app.html
@@ -137,8 +137,8 @@ cadai/
 │       └── +page.svelte
 │
 ├── python/
-│   ├── runner.py                   # CadQuery execution wrapper
-│   └── requirements.txt            # cadquery>=2.4.0
+│   ├── runner.py                   # Build123d execution wrapper
+│   └── requirements.txt            # build123d>=0.7.0
 │
 ├── agent-rules/
 │   ├── default.yaml                # Standard agent rules
@@ -166,20 +166,20 @@ cadai/
 - [x] StatusBar and Toolbar (placeholder buttons)
 - [x] Verify Tauri IPC with a test command
 
-### Phase 2: Python/CadQuery Integration
-**Goal:** User writes CadQuery code in editor, clicks "Run", sees result in viewport.
+### Phase 2: Python/Build123d Integration
+**Goal:** User writes Build123d code in editor, clicks "Run", sees result in viewport.
 
 - [ ] Python detector (python/python3/py -3 on Win, python3 on Mac)
 - [ ] Venv creation in app data dir
-- [ ] pip install cadquery in venv
-- [ ] Python runner script (exec CadQuery, export STL)
+- [ ] pip install build123d in venv
+- [ ] Python runner script (exec Build123d, export STL)
 - [ ] Rust subprocess executor
 - [ ] execute_code Tauri command
 - [ ] Monaco Editor with Python syntax highlighting
 - [ ] Wire "Run" button → execute → viewport render
 
 ### Phase 3: AI Provider + Chat + Code Generation
-**Goal:** User chats, AI streams CadQuery code, it runs automatically, model renders.
+**Goal:** User chats, AI streams Build123d code, it runs automatically, model renders.
 
 - [ ] AiProvider trait with complete() and stream()
 - [ ] Claude API implementation with SSE streaming
@@ -189,13 +189,13 @@ cadai/
 - [ ] System prompt builder
 - [ ] send_message command with Tauri Channel streaming
 - [ ] Chat.svelte with streaming messages
-- [ ] Full pipeline: message → AI → code → CadQuery → STL → viewport
+- [ ] Full pipeline: message → AI → code → Build123d → STL → viewport
 
 ### Phase 4: Agent Intelligence
 **Goal:** Auto error correction, validation, iterative design.
 
 - [ ] Pre/post validation pipeline
-- [ ] Auto-retry on CadQuery errors (max N attempts)
+- [ ] Auto-retry on Build123d errors (max N attempts)
 - [ ] Conversation context management
 - [ ] Structured traceback parsing
 - [ ] "Explain error" and "Retry" buttons
@@ -251,7 +251,7 @@ dirs = "6.0"
 | Risk | Level | Mitigation |
 |------|-------|------------|
 | Python auto-install fails | High | Graceful degradation, clear manual install instructions |
-| CadQuery subprocess slow (2-5s cold start) | Medium | Warm process pool (Phase 4+), progress spinner |
+| Build123d subprocess slow (2-5s cold start) | Medium | Warm process pool (Phase 4+), progress spinner |
 | AI spatial confusion | Medium | Agent rules YAML, auto-retry with error context |
 | STL base64 overhead | Low | Use raw bytes via Tauri invoke (Phase 5) |
 | Three.js rendering quality | Low | Mature lib, MeshPhysicalMaterial, computeVertexNormals() |

@@ -1,9 +1,9 @@
 import type { ChatMessage } from '$lib/types';
 
-const DEFAULT_CODE = `import cadquery as cq
+const DEFAULT_CODE = `from build123d import *
 
 # Create your 3D model here
-result = cq.Workplane("XY").box(10, 10, 10)
+result = Box(10, 10, 10)
 `;
 
 let name = $state('Untitled Project');

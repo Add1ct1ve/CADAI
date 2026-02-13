@@ -194,10 +194,10 @@ fn build_step_prompt(
 ) -> String {
     if current_code.is_empty() {
         format!(
-            "Generate the initial CadQuery code for step {}: {}\n\n\
+            "Generate the initial Build123d code for step {}: {}\n\n\
              Geometry Design Plan:\n{}\n\n\
              Rules:\n\
-             - Start with `import cadquery as cq`\n\
+             - Start with `from build123d import *`\n\
              - The final variable MUST be called `result`\n\
              - Wrap your code in `<CODE>...</CODE>` tags\n\
              - Generate ONLY the code, no explanations",
@@ -205,7 +205,7 @@ fn build_step_prompt(
         )
     } else {
         format!(
-            "Here is the current working CadQuery code:\n\
+            "Here is the current working Build123d code:\n\
              <CODE>\n{}\n</CODE>\n\n\
              Geometry Design Plan:\n{}\n\n\
              Add step {}: {}\n\n\
@@ -603,7 +603,7 @@ None.";
     #[test]
     fn test_iterative_result_serialization() {
         let result = IterativeResult {
-            final_code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)"
+            final_code: "from build123d import *\nresult = Box(10, 10, 10)"
                 .to_string(),
             stl_base64: Some("c3RsZGF0YQ==".to_string()),
             success: true,

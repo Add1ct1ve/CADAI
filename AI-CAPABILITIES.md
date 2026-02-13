@@ -1,6 +1,6 @@
 # AI Generation Capabilities — Expansion Roadmap
 
-> This document tracks the phased expansion of the AI CadQuery generation pipeline. Each sub-phase (e.g. "1.2") is a self-contained implementation task that can be tackled with "implement phase X.Y". The goal is to dramatically improve generation quality, success rate, and user experience without exceeding ~10% of the context window.
+> This document tracks the phased expansion of the AI Build123d generation pipeline. Each sub-phase (e.g. "1.2") is a self-contained implementation task that can be tackled with "implement phase X.Y". The goal is to dramatically improve generation quality, success rate, and user experience without exceeding ~10% of the context window.
 
 **Status Legend:**
 - ⬜ Not started
@@ -36,7 +36,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ## Phase 1: Knowledge Base Expansion (P0)
 
-> **Goal:** Give the AI dramatically more reference material for correct CadQuery usage. Target: ~12,000 tokens added to system prompt.
+> **Goal:** Give the AI dramatically more reference material for correct Build123d usage. Target: ~12,000 tokens added to system prompt.
 >
 > **Files affected:** `agent-rules/default.yaml`, `agent-rules/printing-focused.yaml`, `agent-rules/cnc-focused.yaml`
 
@@ -72,7 +72,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 **Implementation notes:**
 - Add each recipe to the `cookbook` section of `default.yaml`
-- Each recipe must be a complete, tested, runnable CadQuery script
+- Each recipe must be a complete, tested, runnable Build123d script
 - Include `title`, `description`, and `code` fields
 - Test every recipe through `python/runner.py` to ensure it actually produces valid geometry
 - Keep individual recipes under 25 lines — concise is better than comprehensive
@@ -104,7 +104,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ---
 
-### 1.3 CadQuery API Quick-Reference
+### 1.3 Build123d API Quick-Reference
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -298,7 +298,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | Strict response template in prompt | ✅ | Output Structure section in `prompts.rs` with `<CODE>` tag instructions |
 | Separator tokens for parsing | ✅ | `<CODE>...</CODE>` tags added to prompt and YAML presets |
 | Response validation before extraction | ✅ | 3-tier cascade in `extract.rs` validates each format before accepting |
-| Fallback extraction for non-compliant responses | ✅ | Heuristic tier catches bare code blocks with CadQuery markers |
+| Fallback extraction for non-compliant responses | ✅ | Heuristic tier catches bare code blocks with Build123d markers |
 | Multi-format extraction | ✅ | XML tags → markdown fence → heuristic cascade in `extract.rs` |
 | Extraction success rate tracking | ✅ | `log::warn!` when no code block found; `ExtractionFormat` enum tracks which tier matched |
 
@@ -445,7 +445,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 - New system prompt mode: "modification mode" that tells the AI to edit, not rewrite
 - Frontend: if there's already code in the editor, send it with the request
 - Diff display: use a simple line-by-line diff algorithm in TypeScript
-- The modification prompt should say: "Here is the current CadQuery code. The user wants to [change]. Modify the code to implement this change. Return the complete modified code."
+- The modification prompt should say: "Here is the current Build123d code. The user wants to [change]. Modify the code to implement this change. Return the complete modified code."
 
 ---
 
@@ -532,7 +532,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 **Implementation notes:**
 - New component: `src/lib/components/MultiPartProgress.svelte`
-- New Rust functions: `execute_cadquery_isolated()` (runner.rs), `execute_with_timeout_isolated()` (executor.rs)
+- New Rust functions: `execute_cad_isolated()` (runner.rs), `execute_with_timeout_isolated()` (executor.rs)
 - New event variants: `PartCodeExtracted`, `PartStlReady` on `MultiPartEvent`
 - New command: `retry_part` — re-generates a single failed part with streaming
 - Background per-part STL tasks spawned after code extraction, non-blocking
@@ -564,7 +564,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ## Phase 6: Advanced Knowledge and Reasoning (P3)
 
-> **Goal:** Push the AI toward expert-level CadQuery usage with deep domain knowledge.
+> **Goal:** Push the AI toward expert-level Build123d usage with deep domain knowledge.
 >
 > **Files affected:** `agent-rules/default.yaml`, `src-tauri/src/agent/` (new modules), `src-tauri/src/agent/prompts.rs`
 
@@ -607,7 +607,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 **Implementation notes:**
 - New YAML section: `operation_interactions` in `default.yaml`
-- Tribal knowledge about how CadQuery operations interact with each other
+- Tribal knowledge about how Build123d operations interact with each other
 - Format: "If operation A followed by operation B, then [rule/warning/alternative]"
 - These are currently learned the hard way through failures — codify them
 - The AI reads these before generating and plans operation order accordingly
@@ -638,25 +638,21 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 
 ---
 
-### 6.4 CadQuery Version-Aware Prompts
+### 6.4 Build123d Version-Aware Prompts
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Detect installed CadQuery version | ✅ | `detect_cadquery_version()` in installer.rs |
-| Version-specific API availability | ✅ | CQ 2.3 vs 2.4 feature detection with warnings in prompt |
-| Disable unavailable operations in prompt | ✅ | Version notes section warns about `.tag()`, `cq.Sketch()` etc. |
+| Detect installed Build123d version | ✅ | `detect_build123d_version()` in installer.rs |
+| Version-specific API availability | ✅ | Feature detection with warnings in prompt |
+| Disable unavailable operations in prompt | ✅ | Version notes section warns about unavailable features |
 | Version-specific cookbook filtering | ✅ | Recipes with `min_version` filtered at prompt build time |
-| Version check on app startup | ✅ | Cached in `AppState.cadquery_version`, shown in StatusBar |
+| Version check on app startup | ✅ | Cached in `AppState.build123d_version`, shown in StatusBar |
 | Upgrade recommendation | ✅ | Prompt includes "Consider upgrading" for older versions |
 
 **Implementation notes:**
-- New function in `commands/python.rs`: `detect_cadquery_version() -> String`
+- New function in `commands/python.rs`: `detect_build123d_version() -> String`
 - Call on app startup, store in `AppState`
 - Pass version string to `build_system_prompt()` — prompts.rs adds version-aware notes
-- Version-specific rules:
-  - CQ < 2.3: no `.tag()`, no `.transformed()` with `rotate` param
-  - CQ < 2.4: no `cq.Sketch()` API
-  - CQ 2.x: all operations from 2.0+ available
 - Cookbook recipes get optional `min_version` field — filtered at prompt build time
 - Estimated token cost: ~200 tokens (just version notes, no new content)
 
@@ -714,7 +710,7 @@ The AI generation pipeline uses ~6,500 tokens of system prompt across these comp
 | 6.1 Design Patterns | P2 | Medium | Medium | Higher-level templates |
 | 6.2 Operation Interactions | P1 | Low | High | Tribal knowledge codified |
 | 6.3 Session Memory | P2 | Medium | Medium | Learns from failures within session |
-| 6.4 Version-Aware Prompts | ✅ | Low | Low | Detects CQ version, filters prompt/cookbook |
+| 6.4 Version-Aware Prompts | ✅ | Low | Low | Detects Build123d version, filters prompt/cookbook |
 
 ---
 

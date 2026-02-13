@@ -269,7 +269,7 @@ export async function generateFromPlan(
  * Extract Python code from an AI response using a 3-tier cascade:
  * 1. <CODE>...</CODE> XML tags (case-insensitive)
  * 2. ```python ... ``` markdown fence
- * 3. Any ``` block containing CadQuery markers (import cadquery / cq.)
+ * 3. Any ``` block containing Build123d markers (from build123d / BuildPart / Part.)
  * Returns the first matched code block content, or null if none found.
  */
 export function extractPythonCode(text: string): string | null {
@@ -281,19 +281,19 @@ export function extractPythonCode(text: string): string | null {
   const fenceMatch = text.match(/```python\s*\n([\s\S]*?)```/);
   if (fenceMatch && fenceMatch[1].trim()) return fenceMatch[1].trim();
 
-  // Tier 3: Any ``` block with CadQuery markers
+  // Tier 3: Any ``` block with Build123d markers
   const heuristicRe = /```\w*\s*\n([\s\S]*?)```/g;
   let m;
   while ((m = heuristicRe.exec(text)) !== null) {
     const code = m[1].trim();
-    if (code.includes('import cadquery') || code.includes('cq.')) return code;
+    if (code.includes('from build123d') || code.includes('BuildPart') || code.includes('Part.')) return code;
   }
 
   return null;
 }
 
 /**
- * Execute CadQuery code via the Python backend
+ * Execute Build123d code via the Python backend
  */
 export async function executeCode(
   code: string,
@@ -350,7 +350,7 @@ export async function removeMechanismPack(packageId: string): Promise<boolean> {
 }
 
 /**
- * Check Python environment status (python, venv, cadquery)
+ * Check Python environment status (python, venv, build123d)
  */
 export async function checkPython(): Promise<PythonStatus> {
   try {
@@ -362,7 +362,7 @@ export async function checkPython(): Promise<PythonStatus> {
 }
 
 /**
- * Set up Python virtual environment and install CadQuery
+ * Set up Python virtual environment and install Build123d
  */
 export async function setupPython(): Promise<string> {
   try {
@@ -434,7 +434,7 @@ export async function loadProject(path: string): Promise<ProjectFile> {
 }
 
 /**
- * Export STL: run CadQuery code and save the resulting STL to a file
+ * Export STL: run Build123d code and save the resulting STL to a file
  */
 export async function exportStl(code: string, outputPath: string): Promise<string> {
   try {
@@ -446,7 +446,7 @@ export async function exportStl(code: string, outputPath: string): Promise<strin
 }
 
 /**
- * Export STEP: run CadQuery code and save the resulting STEP to a file
+ * Export STEP: run Build123d code and save the resulting STEP to a file
  */
 export async function exportStep(code: string, outputPath: string): Promise<string> {
   try {
@@ -475,7 +475,7 @@ export async function showSaveDialog(defaultName: string, extension: string): Pr
 }
 
 /**
- * Generate an SVG orthographic projection view of a CadQuery model
+ * Generate an SVG orthographic projection view of a Build123d model
  */
 export async function generateDrawingView(
   code: string,

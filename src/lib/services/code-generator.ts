@@ -1,8 +1,6 @@
 import type { SceneObject, PrimitiveParams, CadTransform, Sketch, SketchEntity, EdgeSelector, FilletParams, ChamferParams, ShellParams, HoleParams, RevolveParams, SketchPlane, BooleanOp, SplitOp, SplitPlane, PatternOp, DatumPlane, Component } from '$lib/types/cad';
 import { getDatumStore } from '$lib/stores/datum.svelte';
 import { getComponentStore } from '$lib/stores/component.svelte';
-import { getMateStore } from '$lib/stores/mate.svelte';
-import { getFeatureTreeStore } from '$lib/stores/feature-tree.svelte';
 import type { SymbolMap } from '$lib/types/symbol-map';
 
 const PYTHON_RESERVED_WORDS = new Set([
@@ -60,14 +58,13 @@ function pyString(value: string): string {
 function generatePrimitive(name: string, params: PrimitiveParams): string {
   switch (params.type) {
     case 'box':
-      return `${name} = cq.Workplane("XY").box(${params.width}, ${params.depth}, ${params.height})`;
+      return `${name} = Box(${params.width}, ${params.depth}, ${params.height})`;
     case 'cylinder':
-      return `${name} = cq.Workplane("XY").circle(${params.radius}).extrude(${params.height})`;
+      return `${name} = Cylinder(radius=${params.radius}, height=${params.height})`;
     case 'sphere':
-      return `${name} = cq.Workplane("XY").sphere(${params.radius})`;
+      return `${name} = Sphere(radius=${params.radius})`;
     case 'cone':
-      // CadQuery cone via revolution of a line profile
-      return `${name} = cq.Solid.makeCone(${params.bottomRadius}, ${params.topRadius}, ${params.height})`;
+      return `${name} = Cone(bottom_radius=${params.bottomRadius}, top_radius=${params.topRadius}, height=${params.height})`;
   }
 }
 
@@ -76,14 +73,14 @@ function generateTransform(name: string, transform: CadTransform): string[] {
   const [x, y, z] = transform.position;
   const [rx, ry, rz] = transform.rotation;
 
-  if (rx !== 0 || ry !== 0 || rz !== 0) {
-    if (rx !== 0) lines.push(`${name} = ${name}.rotate((0,0,0), (1,0,0), ${rx})`);
-    if (ry !== 0) lines.push(`${name} = ${name}.rotate((0,0,0), (0,1,0), ${ry})`);
-    if (rz !== 0) lines.push(`${name} = ${name}.rotate((0,0,0), (0,0,1), ${rz})`);
-  }
+  // Rotations — Build123d uses .rotate(Axis, angle)
+  if (rx !== 0) lines.push(`${name} = ${name}.rotate(Axis.X, ${rx})`);
+  if (ry !== 0) lines.push(`${name} = ${name}.rotate(Axis.Y, ${ry})`);
+  if (rz !== 0) lines.push(`${name} = ${name}.rotate(Axis.Z, ${rz})`);
 
+  // Translation — Build123d .move(Location(...))
   if (x !== 0 || y !== 0 || z !== 0) {
-    lines.push(`${name} = ${name}.translate((${x}, ${y}, ${z}))`);
+    lines.push(`${name} = ${name}.move(Location((${x}, ${y}, ${z})))`);
   }
 
   return lines;
@@ -94,85 +91,93 @@ function fmt(n: number): string {
   return parseFloat(n.toFixed(4)).toString();
 }
 
-function edgeSelectorToCadQuery(selector: EdgeSelector): string {
+function edgeSelectorExpr(name: string, selector: EdgeSelector): string {
   switch (selector) {
     case 'all':
-      return '.edges()';
+      return `${name}.edges()`;
     case 'top':
-      return '.edges(">Z")';
+      return `${name}.edges().sort_by(Axis.Z)[-1:]`;
     case 'bottom':
-      return '.edges("<Z")';
+      return `${name}.edges().sort_by(Axis.Z)[:1]`;
     case 'vertical':
-      return '.edges("|Z")';
+      return `${name}.edges().filter_by(Axis.Z)`;
   }
 }
 
 function generateFilletChamfer(name: string, fillet?: FilletParams, chamfer?: ChamferParams): string[] {
   const lines: string[] = [];
   if (fillet) {
-    lines.push(`${name} = ${name}${edgeSelectorToCadQuery(fillet.edges)}.fillet(${fmt(fillet.radius)})`);
+    const edges = edgeSelectorExpr(name, fillet.edges);
+    lines.push(`${name} = fillet(${edges}, radius=${fmt(fillet.radius)})`);
   }
   if (chamfer) {
-    lines.push(`${name} = ${name}${edgeSelectorToCadQuery(chamfer.edges)}.chamfer(${fmt(chamfer.distance)})`);
+    const edges = edgeSelectorExpr(name, chamfer.edges);
+    lines.push(`${name} = chamfer(${edges}, length=${fmt(chamfer.distance)})`);
   }
   return lines;
 }
 
 function generateShell(name: string, shell?: ShellParams): string[] {
   if (!shell) return [];
-  return [`${name} = ${name}.faces("${shell.face}").shell(${fmt(shell.thickness)})`];
+  // Build123d face selection
+  const faceMap: Record<string, string> = {
+    '>Z': `${name}.faces().sort_by(Axis.Z)[-1]`,
+    '<Z': `${name}.faces().sort_by(Axis.Z)[0]`,
+    '>Y': `${name}.faces().sort_by(Axis.Y)[-1]`,
+    '<Y': `${name}.faces().sort_by(Axis.Y)[0]`,
+    '>X': `${name}.faces().sort_by(Axis.X)[-1]`,
+    '<X': `${name}.faces().sort_by(Axis.X)[0]`,
+  };
+  const faceExpr = faceMap[shell.face] || `${name}.faces().sort_by(Axis.Z)[-1]`;
+  return [`${name} = offset_3d(${name}, openings=${faceExpr}, amount=${fmt(-Math.abs(shell.thickness))})`];
 }
 
 function generateHoles(name: string, holes?: HoleParams[]): string[] {
   if (!holes?.length) return [];
   const lines: string[] = [];
   for (const hole of holes) {
-    const face = `.faces("${hole.face}").workplane()`;
-    const pos = (hole.position[0] !== 0 || hole.position[1] !== 0)
-      ? `.center(${fmt(hole.position[0])}, ${fmt(hole.position[1])})` : '';
+    const radius = hole.diameter / 2;
+
+    // Build123d: subtract cylinders/cones in algebra mode
     switch (hole.holeType) {
       case 'through':
-        lines.push(`${name} = ${name}${face}${pos}.hole(${fmt(hole.diameter)})`);
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cylinder(radius=${fmt(radius)}, height=${fmt(200)})`);
         break;
       case 'blind':
-        lines.push(`${name} = ${name}${face}${pos}.hole(${fmt(hole.diameter)}, ${fmt(hole.depth ?? 5)})`);
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cylinder(radius=${fmt(radius)}, height=${fmt(hole.depth ?? 5)})`);
         break;
-      case 'counterbore':
-        lines.push(`${name} = ${name}${face}${pos}.cboreHole(${fmt(hole.diameter)}, ${fmt(hole.cboreDiameter ?? hole.diameter * 1.6)}, ${fmt(hole.cboreDepth ?? 3)})`);
+      case 'counterbore': {
+        const cboreR = (hole.cboreDiameter ?? hole.diameter * 1.6) / 2;
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cylinder(radius=${fmt(radius)}, height=${fmt(200)})`);
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cylinder(radius=${fmt(cboreR)}, height=${fmt(hole.cboreDepth ?? 3)})`);
         break;
-      case 'countersink':
-        lines.push(`${name} = ${name}${face}${pos}.cskHole(${fmt(hole.diameter)}, ${fmt(hole.cskDiameter ?? hole.diameter * 2)}, ${fmt(hole.cskAngle ?? 82)})`);
+      }
+      case 'countersink': {
+        const cskR = (hole.cskDiameter ?? hole.diameter * 2) / 2;
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cylinder(radius=${fmt(radius)}, height=${fmt(200)})`);
+        lines.push(`${name} = ${name} - Pos(${fmt(hole.position[0])}, ${fmt(hole.position[1])}, 0) * Cone(bottom_radius=${fmt(cskR)}, top_radius=${fmt(radius)}, height=${fmt(cskR - radius)})`);
         break;
+      }
     }
   }
   return lines;
 }
 
-/** Map sketch plane + axis direction + offset to CadQuery revolve args */
-function revolveAxis(plane: SketchPlane, op: RevolveParams): string {
-  // CadQuery .revolve(angle, axisStart, axisEnd) uses 2D sketch-plane coordinates
-  // axisDirection='X' means axis along sketch X, 'Y' means along sketch Y
-  // axisOffset is the perpendicular offset from origin
-  const offset = op.axisOffset;
-  if (op.axisDirection === 'X') {
-    // Axis along X at Y=offset
-    return `(0, ${fmt(offset)}, 0), (1, ${fmt(offset)}, 0)`;
-  } else {
-    // Axis along Y at X=offset
-    return `(${fmt(offset)}, 0, 0), (${fmt(offset)}, 1, 0)`;
-  }
+/** Map sketch axis direction to Build123d Axis for revolve */
+function revolveAxisObj(op: RevolveParams): string {
+  // Build123d revolve uses Axis objects
+  return op.axisDirection === 'X' ? 'Axis.X' : 'Axis.Y';
 }
 
-/** Generate a CadQuery wire from a path sketch (for sweep) */
+/** Generate a Build123d wire from a path sketch (for sweep) */
 function generatePathWire(varName: string, pathSketch: Sketch): string[] {
   const lines: string[] = [];
-  lines.push(`${varName} = (`);
-  lines.push(`    ${workplaneString(pathSketch.plane, pathSketch.origin)}`);
+  const plane = planeString(pathSketch.plane, pathSketch.origin);
+  lines.push(`with BuildLine(${plane}) as _${varName}_line:`);
   for (const entity of pathSketch.entities) {
     lines.push(...generateSketchEntity(entity));
   }
-  lines.push(`    .wire()`);
-  lines.push(`)`);
+  lines.push(`${varName} = _${varName}_line.line`);
   return lines;
 }
 
@@ -180,45 +185,49 @@ function generateSketchEntity(entity: SketchEntity): string[] {
   const lines: string[] = [];
   switch (entity.type) {
     case 'line':
-      lines.push(`    .moveTo(${fmt(entity.start[0])}, ${fmt(entity.start[1])})`);
-      lines.push(`    .lineTo(${fmt(entity.end[0])}, ${fmt(entity.end[1])})`);
+      lines.push(`        Line((${fmt(entity.start[0])}, ${fmt(entity.start[1])}), (${fmt(entity.end[0])}, ${fmt(entity.end[1])}))`);
       break;
     case 'rectangle': {
       const w = Math.abs(entity.corner2[0] - entity.corner1[0]);
       const h = Math.abs(entity.corner2[1] - entity.corner1[1]);
       const cx = (entity.corner1[0] + entity.corner2[0]) / 2;
       const cy = (entity.corner1[1] + entity.corner2[1]) / 2;
-      lines.push(`    .center(${fmt(cx)}, ${fmt(cy)})`);
-      lines.push(`    .rect(${fmt(w)}, ${fmt(h)})`);
+      if (cx !== 0 || cy !== 0) {
+        lines.push(`        with Locations((${fmt(cx)}, ${fmt(cy)})):`);
+        lines.push(`            Rectangle(${fmt(w)}, ${fmt(h)})`);
+      } else {
+        lines.push(`        Rectangle(${fmt(w)}, ${fmt(h)})`);
+      }
       break;
     }
     case 'circle':
-      lines.push(`    .center(${fmt(entity.center[0])}, ${fmt(entity.center[1])})`);
-      lines.push(`    .circle(${fmt(entity.radius)})`);
+      if (entity.center[0] !== 0 || entity.center[1] !== 0) {
+        lines.push(`        with Locations((${fmt(entity.center[0])}, ${fmt(entity.center[1])})):`);
+        lines.push(`            Circle(radius=${fmt(entity.radius)})`);
+      } else {
+        lines.push(`        Circle(radius=${fmt(entity.radius)})`);
+      }
       break;
     case 'arc':
-      lines.push(`    .moveTo(${fmt(entity.start[0])}, ${fmt(entity.start[1])})`);
-      lines.push(`    .threePointArc((${fmt(entity.mid[0])}, ${fmt(entity.mid[1])}), (${fmt(entity.end[0])}, ${fmt(entity.end[1])}))`);
+      lines.push(`        ThreePointArc((${fmt(entity.start[0])}, ${fmt(entity.start[1])}), (${fmt(entity.mid[0])}, ${fmt(entity.mid[1])}), (${fmt(entity.end[0])}, ${fmt(entity.end[1])}))`);
       break;
   }
   return lines;
 }
 
 /**
- * Generate CadQuery workplane string for a sketch plane (standard or datum).
+ * Generate Build123d Plane string for a sketch plane (standard or datum).
  */
-function workplaneString(plane: SketchPlane, origin: [number, number, number]): string {
-  // Standard planes at origin
+function planeString(plane: SketchPlane, origin: [number, number, number]): string {
   if (plane === 'XY' || plane === 'XZ' || plane === 'YZ') {
-    return `cq.Workplane("${plane}")`;
+    return `Plane.${plane}`;
   }
 
-  // Datum plane reference
   const datumPlane = getDatumStore().getDatumPlaneById(plane);
-  if (!datumPlane) return `cq.Workplane("XY")`;
+  if (!datumPlane) return 'Plane.XY';
 
   if (datumPlane.definition.type === 'offset') {
-    return `cq.Workplane("${datumPlane.definition.basePlane}").workplane(offset=${fmt(datumPlane.definition.offset)})`;
+    return `Plane.${datumPlane.definition.basePlane}.offset(${fmt(datumPlane.definition.offset)})`;
   }
 
   // 3-point plane: compute normal from cross product
@@ -231,7 +240,7 @@ function workplaneString(plane: SketchPlane, origin: [number, number, number]): 
   const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
   const normal = len > 1e-10 ? [nx / len, ny / len, nz / len] : [0, 0, 1];
 
-  return `cq.Workplane(cq.Plane(origin=(${fmt(p1[0])}, ${fmt(p1[1])}, ${fmt(p1[2])}), normal=(${fmt(normal[0])}, ${fmt(normal[1])}, ${fmt(normal[2])})))`;
+  return `Plane(origin=(${fmt(p1[0])}, ${fmt(p1[1])}, ${fmt(p1[2])}), z_dir=(${fmt(normal[0])}, ${fmt(normal[1])}, ${fmt(normal[2])}))`;
 }
 
 function generateSketchBase(sketch: Sketch, symbolMap: SymbolMap, allSketches?: Sketch[]): string[] {
@@ -244,7 +253,7 @@ function generateSketchBase(sketch: Sketch, symbolMap: SymbolMap, allSketches?: 
   const baseVarName = symbolForFeature(symbolMap, sketch.id, 'sketch');
   const varName = op?.mode === 'cut' ? sketchCutterSymbol(symbolMap, sketch.id) : baseVarName;
 
-  // For sweep, generate path sketch inline first
+  // For sweep, generate path first
   if (op?.type === 'sweep' && allSketches) {
     const pathSketch = allSketches.find(s => s.id === op.pathSketchId);
     if (pathSketch) {
@@ -252,26 +261,27 @@ function generateSketchBase(sketch: Sketch, symbolMap: SymbolMap, allSketches?: 
     }
   }
 
-  lines.push(`${varName} = (`);
-  lines.push(`    ${workplaneString(sketch.plane, sketch.origin)}`);
+  const plane = planeString(sketch.plane, sketch.origin);
+
+  lines.push(`with BuildPart() as _${varName}_builder:`);
+  lines.push(`    with BuildSketch(${plane}) as _sk:`);
 
   for (const entity of sketch.entities) {
     lines.push(...generateSketchEntity(entity));
   }
 
-  // Apply 3D operation
   if (op?.type === 'extrude') {
     const taperArg = op.taper ? `, taper=${fmt(op.taper)}` : '';
-    lines.push(`    .extrude(${fmt(op.distance)}${taperArg})`);
+    lines.push(`    extrude(amount=${fmt(op.distance)}${taperArg})`);
   } else if (op?.type === 'revolve') {
-    lines.push(`    .revolve(${fmt(op.angle)}, ${revolveAxis(sketch.plane, op)})`);
+    lines.push(`    revolve(axis=${revolveAxisObj(op)}, revolution_arc=${fmt(op.angle)})`);
   } else if (op?.type === 'sweep') {
-    lines.push(`    .sweep(${sketchPathSymbol(symbolMap, sketch.id)})`);
+    lines.push(`    sweep(path=${sketchPathSymbol(symbolMap, sketch.id)})`);
   }
 
-  lines.push(`)`);
+  lines.push(`${varName} = _${varName}_builder.part`);
 
-  // Post-processing chain (only if 3D operation set)
+  // Post-processing (only if 3D operation set)
   if (op) {
     lines.push(...generateFilletChamfer(varName, sketch.fillet, sketch.chamfer));
     lines.push(...generateShell(varName, sketch.shell));
@@ -286,29 +296,44 @@ function generateSplitOp(name: string, split: SplitOp): string[] {
   const lines: string[] = [];
   lines.push(`# --- Split ${name} on ${split.plane} at offset ${fmt(split.offset)} ---`);
 
-  // Build a large half-space cutter on the split plane
-  // The half-space is a 1000x1000x1000 box on one side of the plane
-  const planeMap: Record<SplitPlane, { axis: string; offset: (o: number) => string; negTrans: (o: number) => string }> = {
-    'XY': { axis: 'Z', offset: (o) => `offset=cq.Vector(0, 0, ${fmt(o)})`, negTrans: (o) => `(0, 0, ${fmt(o - 1000)})` },
-    'XZ': { axis: 'Y', offset: (o) => `offset=cq.Vector(0, ${fmt(o)}, 0)`, negTrans: (o) => `(0, ${fmt(o - 1000)}, 0)` },
-    'YZ': { axis: 'X', offset: (o) => `offset=cq.Vector(${fmt(o)}, 0, 0)`, negTrans: (o) => `(${fmt(o - 1000)}, 0, 0)` },
-  };
-  const p = planeMap[split.plane];
-
+  const cutterSize = 10000;
+  // Build123d: create box at correct position and subtract
   if (split.keepSide === 'positive') {
-    // Cut away the negative half (below the plane)
-    lines.push(`_split_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False)).translate(${p.negTrans(split.offset)})`);
-    lines.push(`${name} = ${name}.cut(_split_cutter)`);
+    lines.push(`_split_cutter = Box(${cutterSize}, ${cutterSize}, ${cutterSize})`);
+    if (split.plane === 'XY') {
+      lines.push(`_split_cutter = _split_cutter.move(Location((0, 0, ${fmt(split.offset - cutterSize/2)})))`);
+    } else if (split.plane === 'XZ') {
+      lines.push(`_split_cutter = _split_cutter.move(Location((0, ${fmt(split.offset - cutterSize/2)}, 0)))`);
+    } else {
+      lines.push(`_split_cutter = _split_cutter.move(Location((${fmt(split.offset - cutterSize/2)}, 0, 0)))`);
+    }
+    lines.push(`${name} = ${name} - _split_cutter`);
   } else if (split.keepSide === 'negative') {
-    // Cut away the positive half (above the plane)
-    lines.push(`_split_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False))`);
-    lines.push(`${name} = ${name}.cut(_split_cutter)`);
+    lines.push(`_split_cutter = Box(${cutterSize}, ${cutterSize}, ${cutterSize})`);
+    if (split.plane === 'XY') {
+      lines.push(`_split_cutter = _split_cutter.move(Location((0, 0, ${fmt(split.offset + cutterSize/2)})))`);
+    } else if (split.plane === 'XZ') {
+      lines.push(`_split_cutter = _split_cutter.move(Location((0, ${fmt(split.offset + cutterSize/2)}, 0)))`);
+    } else {
+      lines.push(`_split_cutter = _split_cutter.move(Location((${fmt(split.offset + cutterSize/2)}, 0, 0)))`);
+    }
+    lines.push(`${name} = ${name} - _split_cutter`);
   } else {
-    // Keep both: create two halves
-    lines.push(`_split_pos_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False)).translate(${p.negTrans(split.offset)})`);
-    lines.push(`_split_neg_cutter = cq.Workplane("${split.plane}").transformed(${p.offset(split.offset)}).box(1000, 1000, 1000, centered=(True, True, False))`);
-    lines.push(`${name}_pos = ${name}.cut(_split_pos_cutter)`);
-    lines.push(`${name}_neg = ${name}.cut(_split_neg_cutter)`);
+    // Keep both halves
+    lines.push(`_split_neg = Box(${cutterSize}, ${cutterSize}, ${cutterSize})`);
+    lines.push(`_split_pos = Box(${cutterSize}, ${cutterSize}, ${cutterSize})`);
+    if (split.plane === 'XY') {
+      lines.push(`_split_neg = _split_neg.move(Location((0, 0, ${fmt(split.offset - cutterSize/2)})))`);
+      lines.push(`_split_pos = _split_pos.move(Location((0, 0, ${fmt(split.offset + cutterSize/2)})))`);
+    } else if (split.plane === 'XZ') {
+      lines.push(`_split_neg = _split_neg.move(Location((0, ${fmt(split.offset - cutterSize/2)}, 0)))`);
+      lines.push(`_split_pos = _split_pos.move(Location((0, ${fmt(split.offset + cutterSize/2)}, 0)))`);
+    } else {
+      lines.push(`_split_neg = _split_neg.move(Location((${fmt(split.offset - cutterSize/2)}, 0, 0)))`);
+      lines.push(`_split_pos = _split_pos.move(Location((${fmt(split.offset + cutterSize/2)}, 0, 0)))`);
+    }
+    lines.push(`${name}_pos = ${name} - _split_neg`);
+    lines.push(`${name}_neg = ${name} - _split_pos`);
   }
   lines.push('');
   return lines;
@@ -320,30 +345,20 @@ function generatePatternOp(name: string, pattern: PatternOp): string[] {
 
   switch (pattern.type) {
     case 'mirror': {
-      const plane = pattern.plane;
-      if (pattern.keepOriginal) {
-        if (pattern.offset !== 0) {
-          const axisVec = plane === 'XY' ? `(0, 0, ${fmt(-pattern.offset)})`
-            : plane === 'XZ' ? `(0, ${fmt(-pattern.offset)}, 0)`
-            : `(${fmt(-pattern.offset)}, 0, 0)`;
-          const backVec = plane === 'XY' ? `(0, 0, ${fmt(pattern.offset)})`
-            : plane === 'XZ' ? `(0, ${fmt(pattern.offset)}, 0)`
-            : `(${fmt(pattern.offset)}, 0, 0)`;
-          lines.push(`${name} = ${name}.union(${name}.translate(${axisVec}).mirror("${plane}").translate(${backVec}))`);
+      const planeMap: Record<string, string> = { 'XY': 'Plane.XY', 'XZ': 'Plane.XZ', 'YZ': 'Plane.YZ' };
+      const mirrorPlane = planeMap[pattern.plane] || 'Plane.XY';
+      if (pattern.offset !== 0) {
+        const offsetPlane = `${mirrorPlane}.offset(${fmt(pattern.offset)})`;
+        if (pattern.keepOriginal) {
+          lines.push(`${name} = ${name} + mirror(${name}, about=${offsetPlane})`);
         } else {
-          lines.push(`${name} = ${name}.union(${name}.mirror("${plane}"))`);
+          lines.push(`${name} = mirror(${name}, about=${offsetPlane})`);
         }
       } else {
-        if (pattern.offset !== 0) {
-          const axisVec = plane === 'XY' ? `(0, 0, ${fmt(-pattern.offset)})`
-            : plane === 'XZ' ? `(0, ${fmt(-pattern.offset)}, 0)`
-            : `(${fmt(-pattern.offset)}, 0, 0)`;
-          const backVec = plane === 'XY' ? `(0, 0, ${fmt(pattern.offset)})`
-            : plane === 'XZ' ? `(0, ${fmt(pattern.offset)}, 0)`
-            : `(${fmt(pattern.offset)}, 0, 0)`;
-          lines.push(`${name} = ${name}.translate(${axisVec}).mirror("${plane}").translate(${backVec})`);
+        if (pattern.keepOriginal) {
+          lines.push(`${name} = ${name} + mirror(${name}, about=${mirrorPlane})`);
         } else {
-          lines.push(`${name} = ${name}.mirror("${plane}")`);
+          lines.push(`${name} = mirror(${name}, about=${mirrorPlane})`);
         }
       }
       break;
@@ -352,18 +367,18 @@ function generatePatternOp(name: string, pattern: PatternOp): string[] {
       const dirVec = pattern.direction === 'X' ? [1, 0, 0] : pattern.direction === 'Y' ? [0, 1, 0] : [0, 0, 1];
       lines.push(`_base_${name} = ${name}`);
       lines.push(`for _i in range(1, ${pattern.count}):`);
-      lines.push(`    ${name} = ${name}.union(_base_${name}.translate((`);
+      lines.push(`    ${name} = ${name} + _base_${name}.move(Location((`);
       lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[0]},`);
       lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[1]},`);
       lines.push(`        ${fmt(pattern.spacing)} * _i * ${dirVec[2]})))`);
       break;
     }
     case 'circular': {
-      const axisVec = pattern.axis === 'X' ? '(1, 0, 0)' : pattern.axis === 'Y' ? '(0, 1, 0)' : '(0, 0, 1)';
+      const axisObj = pattern.axis === 'X' ? 'Axis.X' : pattern.axis === 'Y' ? 'Axis.Y' : 'Axis.Z';
       const angleStep = pattern.fullAngle / pattern.count;
       lines.push(`_base_${name} = ${name}`);
       lines.push(`for _i in range(1, ${pattern.count}):`);
-      lines.push(`    ${name} = ${name}.union(_base_${name}.rotate((0,0,0), ${axisVec}, ${fmt(angleStep)} * _i))`);
+      lines.push(`    ${name} = ${name} + _base_${name}.rotate(${axisObj}, ${fmt(angleStep)} * _i)`);
       break;
     }
   }
@@ -384,10 +399,10 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   const hasSketches = nonEmptySketches.length > 0;
 
   if (!hasObjects && !hasSketches) {
-    return `import cadquery as cq\n\n# Empty scene — add objects using the toolbar\nresult = cq.Workplane("XY").box(1, 1, 1)\n`;
+    return `from build123d import *\n\n# Empty scene — add objects using the toolbar\nresult = Box(1, 1, 1)\n`;
   }
 
-  const lines: string[] = ['import cadquery as cq', ''];
+  const lines: string[] = ['from build123d import *', ''];
   const componentStore = getComponentStore();
   const symbolMap = buildSymbolMap(codegenObjects, nonEmptySketches, componentStore.components);
 
@@ -437,7 +452,7 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
         ? symbolForFeature(symbolMap, targetId, targetSketch ? 'sketch' : 'obj')
         : undefined;
       if (targetVar) {
-        lines.push(`${targetVar} = ${targetVar}.cut(${sketchCutterSymbol(symbolMap, sketch.id)})`);
+        lines.push(`${targetVar} = ${targetVar} - ${sketchCutterSymbol(symbolMap, sketch.id)}`);
         lines.push('');
       }
     }
@@ -447,40 +462,29 @@ export function generateCode(objects: SceneObject[], sketches: Sketch[] = [], ac
   const assemblyEntries: Array<{
     varName: string;
     displayName: string;
-    isCone: boolean;
   }> = [
     ...operatedAddSketches.map((s) => ({
       varName: symbolForFeature(symbolMap, s.id, 'sketch'),
       displayName: s.name,
-      isCone: false,
     })),
     ...visibleObjects.map((o) => ({
       varName: symbolForFeature(symbolMap, o.id, 'obj'),
       displayName: o.name,
-      isCone: o.params.type === 'cone',
     })),
   ];
 
   if (assemblyEntries.length === 0) {
-    lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
+    lines.push('result = Box(1, 1, 1)');
   } else if (assemblyEntries.length === 1) {
     const entry = assemblyEntries[0];
-    if (entry.isCone) {
-      lines.push(`result = cq.Workplane("XY").add(${entry.varName})`);
-    } else {
-      lines.push(`result = ${entry.varName}`);
-    }
+    lines.push(`result = ${entry.varName}`);
   } else {
     lines.push('# Assemble all objects');
-    lines.push('assy = cq.Assembly()');
+    lines.push('result = Compound(children=[');
     for (const entry of assemblyEntries) {
-      if (entry.isCone) {
-        lines.push(`assy.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
-      } else {
-        lines.push(`assy.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
-      }
+      lines.push(`    ${entry.varName},`);
     }
-    lines.push('result = assy.toCompound()');
+    lines.push('])');
   }
 
   lines.push('');
@@ -504,7 +508,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const splitOps: Array<{ featureId: string; split: SplitOp }> = [];
   const patternOps: Array<{ featureId: string; pattern: PatternOp }> = [];
   const generatedFeatureIds = new Set<string>();
-  const assemblyEntries: Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }> = [];
+  const assemblyEntries: Array<{ featureId?: string; varName: string; displayName: string }> = [];
 
   // Build feature→component map for visibility checks
   const featureCompMap = compStore.getFeatureComponentMap();
@@ -533,10 +537,10 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   }
 
   if (addFeatures.length === 0 && cutSketches.length === 0) {
-    return `import cadquery as cq\n\n# Empty scene — add objects using the toolbar\nresult = cq.Workplane("XY").box(1, 1, 1)\n`;
+    return `from build123d import *\n\n# Empty scene — add objects using the toolbar\nresult = Box(1, 1, 1)\n`;
   }
 
-  const lines: string[] = ['import cadquery as cq', ''];
+  const lines: string[] = ['from build123d import *', ''];
 
   // ── Pass 1: Generate all geometry ──
   for (const feature of addFeatures) {
@@ -548,7 +552,6 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
           featureId: feature.sketch.id,
           varName: symbolForFeature(symbolMap, feature.sketch.id, 'sketch'),
           displayName: feature.sketch.name,
-          isCone: false,
         });
       }
     } else {
@@ -590,7 +593,6 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
           featureId: obj.id,
           varName: objVar,
           displayName: obj.name,
-          isCone: obj.params.type === 'cone',
         });
       }
     }
@@ -607,8 +609,8 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         op.targetId,
         sketchMap.has(op.targetId) ? 'sketch' : 'obj',
       );
-      const method = op.opType === 'union' ? 'union' : op.opType === 'subtract' ? 'cut' : 'intersect';
-      lines.push(`${targetVar} = ${targetVar}.${method}(${toolVar})`);
+      const operator = op.opType === 'union' ? '+' : op.opType === 'subtract' ? '-' : '&';
+      lines.push(`${targetVar} = ${targetVar} ${operator} ${toolVar}`);
     }
     lines.push('');
   }
@@ -655,7 +657,7 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
         sketchMap.has(cutTargetId) ? 'sketch' : 'obj',
       );
       if (targetVar) {
-        lines.push(`${targetVar} = ${targetVar}.cut(${sketchCutterSymbol(symbolMap, sketch.id)})`);
+        lines.push(`${targetVar} = ${targetVar} - ${sketchCutterSymbol(symbolMap, sketch.id)}`);
         lines.push('');
       }
     }
@@ -666,11 +668,11 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const activeIdSet = new Set(activeFeatureIds);
 
   // Build map: componentId → assembly entries in that component
-  const compFeatureEntries = new Map<string, Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }>>();
-  const entriesInComponents = new Set<{ featureId?: string; varName: string; displayName: string; isCone: boolean }>();
+  const compFeatureEntries = new Map<string, Array<{ featureId?: string; varName: string; displayName: string }>>();
+  const entriesInComponents = new Set<{ featureId?: string; varName: string; displayName: string }>();
   for (const comp of allComponents) {
     if (!comp.visible) continue; // Skip hidden components entirely
-    const entries: Array<{ featureId?: string; varName: string; displayName: string; isCone: boolean }> = [];
+    const entries: Array<{ featureId?: string; varName: string; displayName: string }> = [];
     for (const fid of comp.featureIds) {
       if (!activeIdSet.has(fid)) continue;
       const matching = assemblyEntries.filter((entry) => entry.featureId === fid);
@@ -688,21 +690,16 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
   const rootEntries = assemblyEntries.filter((entry) => !entriesInComponents.has(entry));
 
   if (assemblyEntries.length === 0) {
-    lines.push('result = cq.Workplane("XY").box(1, 1, 1)');
+    lines.push('result = Box(1, 1, 1)');
   } else if (compFeatureEntries.size === 0 && assemblyEntries.length === 1) {
     // Simple case: single result, no components
     const entry = assemblyEntries[0];
-    if (entry.isCone) {
-      lines.push(`result = cq.Workplane("XY").add(${entry.varName})`);
-    } else {
-      lines.push(`result = ${entry.varName}`);
-    }
+    lines.push(`result = ${entry.varName}`);
   } else {
     lines.push('# Assemble all objects');
-    lines.push('assy = cq.Assembly()');
 
-    // Build compId→varName map for mate references
-    const compVarNameMap = new Map<string, string>();
+    // Collect all parts for final Compound
+    const compoundParts: string[] = [];
 
     // Add component sub-assemblies
     for (const comp of allComponents) {
@@ -711,70 +708,33 @@ function generateCodeOrdered(objects: SceneObject[], sketches: Sketch[], activeF
       if (!entries || entries.length === 0) continue;
 
       const compVarName = `${symbolForFeature(symbolMap, comp.id, 'comp')}_assy`;
-      compVarNameMap.set(comp.id, comp.name);
       lines.push('');
       lines.push(`# Component: ${comp.name}`);
-      lines.push(`${compVarName} = cq.Assembly()`);
+      lines.push(`${compVarName} = Compound(children=[`);
       for (const entry of entries) {
-        if (entry.isCone) {
-          lines.push(`${compVarName}.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
-        } else {
-          lines.push(`${compVarName}.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
-        }
+        lines.push(`    ${entry.varName},`);
       }
+      lines.push(`])`);
+
       // Component transform
       const [tx, ty, tz] = comp.transform.position;
-      if (comp.grounded || (tx === 0 && ty === 0 && tz === 0)) {
-        lines.push(`assy.add(${compVarName}, name="${pyString(comp.name)}")`);
-      } else {
-        lines.push(`assy.add(${compVarName}, name="${pyString(comp.name)}", loc=cq.Location(cq.Vector(${fmt(tx)}, ${fmt(ty)}, ${fmt(tz)})))`);
+      if (!comp.grounded && (tx !== 0 || ty !== 0 || tz !== 0)) {
+        lines.push(`${compVarName} = ${compVarName}.move(Location((${fmt(tx)}, ${fmt(ty)}, ${fmt(tz)})))`);
       }
+      compoundParts.push(compVarName);
     }
 
     // Add root features (not in any component)
     for (const entry of rootEntries) {
-      if (entry.isCone) {
-        lines.push(`assy.add(cq.Workplane("XY").add(${entry.varName}), name="${pyString(entry.displayName)}")`);
-      } else {
-        lines.push(`assy.add(${entry.varName}, name="${pyString(entry.displayName)}")`);
-      }
+      compoundParts.push(entry.varName);
     }
 
-    // ── Assembly Mates ──
-    const ftStore = getFeatureTreeStore();
-    const suppressedIdSet = ftStore.suppressedIds;
-    const activeMates = getMateStore().mates.filter((m) => !suppressedIdSet.has(m.id));
-    if (activeMates.length > 0 && compVarNameMap.size > 0) {
-      lines.push('');
-      lines.push('# --- Assembly Mates ---');
-      for (const mate of activeMates) {
-        const c1 = compVarNameMap.get(mate.ref1.componentId);
-        const c2 = compVarNameMap.get(mate.ref2.componentId);
-        if (!c1 || !c2) continue;
-        const r1 = `"${pyString(c1)}@faces@${pyString(mate.ref1.faceSelector)}"`;
-        const r2 = `"${pyString(c2)}@faces@${pyString(mate.ref2.faceSelector)}"`;
-        switch (mate.type) {
-          case 'coincident':
-            lines.push(`assy.constrain(${r1}, ${r2}, "Plane")`);
-            break;
-          case 'concentric':
-            lines.push(`assy.constrain("${pyString(c1)}", "${pyString(c2)}", "Axis", param=0)`);
-            break;
-          case 'distance':
-            lines.push(`assy.constrain(${r1}, ${r2}, "Plane", param=${mate.distance})`);
-            break;
-          case 'angle':
-            lines.push(`assy.constrain(${r1}, ${r2}, "Plane", param=${mate.angle})`);
-            break;
-        }
-      }
-      lines.push('try:');
-      lines.push('    assy.solve()');
-      lines.push('except Exception:');
-      lines.push('    pass  # Fallback to manual positioning if solve fails');
+    lines.push('');
+    lines.push('result = Compound(children=[');
+    for (const part of compoundParts) {
+      lines.push(`    ${part},`);
     }
-
-    lines.push('result = assy.toCompound()');
+    lines.push('])');
   }
 
   lines.push('');
