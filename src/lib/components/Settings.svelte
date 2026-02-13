@@ -482,9 +482,9 @@
               <span class="status-dot" class:ok={pythonStatus.venv_ready} class:error={!pythonStatus.venv_ready}></span>
               <span>Virtual Environment: {pythonStatus.venv_ready ? 'Ready' : 'Not set up'}</span>
             </div>
-            <div class="status-row" class:ok={pythonStatus.cadquery_installed} class:error={!pythonStatus.cadquery_installed}>
-              <span class="status-dot" class:ok={pythonStatus.cadquery_installed} class:error={!pythonStatus.cadquery_installed}></span>
-              <span>CadQuery: {pythonStatus.cadquery_installed ? 'Installed' : 'Not installed'}</span>
+            <div class="status-row" class:ok={pythonStatus.build123d_installed} class:error={!pythonStatus.build123d_installed}>
+              <span class="status-dot" class:ok={pythonStatus.build123d_installed} class:error={!pythonStatus.build123d_installed}></span>
+              <span>Build123d: {pythonStatus.build123d_installed ? 'Installed' : 'Not installed'}</span>
             </div>
           {/if}
         </div>
@@ -502,7 +502,7 @@
         >
           {isSettingUp ? 'Setting up...' : 'Setup Python Environment'}
         </button>
-        <span class="form-hint">Creates a virtual environment and installs CadQuery. This may take a few minutes.</span>
+        <span class="form-hint">Creates a virtual environment and installs Build123d. This may take a few minutes.</span>
       </div>
     </div>
 

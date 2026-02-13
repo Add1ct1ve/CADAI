@@ -59,7 +59,7 @@ pub async fn export_3mf(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up. Click 'Setup Python' in settings.".into(),
             ));
         }
@@ -98,7 +98,7 @@ pub async fn export_3mf(
 
     if result.exit_code != 0 {
         let msg = match result.exit_code {
-            2 => format!("CadQuery execution error:\n{}", result.stderr),
+            2 => format!("Build123d execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("Export error:\n{}", result.stderr),
             5 => "Missing dependency (trimesh). Will auto-install on next attempt.".to_string(),
@@ -107,12 +107,12 @@ pub async fn export_3mf(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     // Parse JSON from stdout
     let parsed: serde_json::Value = serde_json::from_str(result.stdout.trim())
-        .map_err(|e| AppError::CadQueryError(format!("Failed to parse result: {}", e)))?;
+        .map_err(|e| AppError::CadError(format!("Failed to parse result: {}", e)))?;
 
     Ok(Export3mfResult {
         path: parsed["path"].as_str().unwrap_or(&output_path).to_string(),
@@ -129,7 +129,7 @@ pub async fn mesh_check(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up. Click 'Setup Python' in settings.".into(),
             ));
         }
@@ -151,7 +151,7 @@ pub async fn mesh_check(
 
     if result.exit_code != 0 {
         let msg = match result.exit_code {
-            2 => format!("CadQuery execution error:\n{}", result.stderr),
+            2 => format!("Build123d execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("Mesh check error:\n{}", result.stderr),
             5 => "Missing dependency (trimesh). Will auto-install on next attempt.".to_string(),
@@ -160,11 +160,11 @@ pub async fn mesh_check(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     let parsed: serde_json::Value = serde_json::from_str(result.stdout.trim())
-        .map_err(|e| AppError::CadQueryError(format!("Failed to parse result: {}", e)))?;
+        .map_err(|e| AppError::CadError(format!("Failed to parse result: {}", e)))?;
 
     Ok(MeshCheckResult {
         watertight: parsed["watertight"].as_bool().unwrap_or(false),
@@ -193,7 +193,7 @@ pub async fn orient_for_print(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up. Click 'Setup Python' in settings.".into(),
             ));
         }
@@ -215,7 +215,7 @@ pub async fn orient_for_print(
 
     if result.exit_code != 0 {
         let msg = match result.exit_code {
-            2 => format!("CadQuery execution error:\n{}", result.stderr),
+            2 => format!("Build123d execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("Orientation analysis error:\n{}", result.stderr),
             5 => {
@@ -226,11 +226,11 @@ pub async fn orient_for_print(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     let parsed: serde_json::Value = serde_json::from_str(result.stdout.trim())
-        .map_err(|e| AppError::CadQueryError(format!("Failed to parse result: {}", e)))?;
+        .map_err(|e| AppError::CadError(format!("Failed to parse result: {}", e)))?;
 
     let rotation = parsed["rotation"]
         .as_array()
@@ -263,7 +263,7 @@ pub async fn sheet_metal_unfold(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up. Click 'Setup Python' in settings.".into(),
             ));
         }
@@ -291,7 +291,7 @@ pub async fn sheet_metal_unfold(
 
     if result.exit_code != 0 {
         let msg = match result.exit_code {
-            2 => format!("CadQuery execution error:\n{}", result.stderr),
+            2 => format!("Build123d execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("Unfold error:\n{}", result.stderr),
             5 => "Missing dependency (ezdxf). Will auto-install on next attempt.".to_string(),
@@ -300,11 +300,11 @@ pub async fn sheet_metal_unfold(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     let parsed: serde_json::Value = serde_json::from_str(result.stdout.trim())
-        .map_err(|e| AppError::CadQueryError(format!("Failed to parse result: {}", e)))?;
+        .map_err(|e| AppError::CadError(format!("Failed to parse result: {}", e)))?;
 
     let success = parsed["success"].as_bool().unwrap_or(false);
     if !success {
@@ -312,7 +312,7 @@ pub async fn sheet_metal_unfold(
             .as_str()
             .unwrap_or("Unknown unfold error")
             .to_string();
-        return Err(AppError::CadQueryError(error));
+        return Err(AppError::CadError(error));
     }
 
     Ok(UnfoldResult {

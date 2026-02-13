@@ -25,9 +25,9 @@
     if (!pythonInfo) return 'Python: Checking...';
     if (!pythonInfo.python_found) return 'Python: Not found';
     if (!pythonInfo.venv_ready) return `Python: ${pythonInfo.python_version ?? 'found'} (no venv)`;
-    if (!pythonInfo.cadquery_installed) return `Python: ${pythonInfo.python_version} (no CadQuery)`;
-    const cqVer = pythonInfo.cadquery_version ? ` ${pythonInfo.cadquery_version}` : '';
-    return `Python: ${pythonInfo.python_version} + CadQuery${cqVer}`;
+    if (!pythonInfo.build123d_installed) return `Python: ${pythonInfo.python_version} (no Build123d)`;
+    const b123dVer = pythonInfo.build123d_version ? ` ${pythonInfo.build123d_version}` : '';
+    return `Python: ${pythonInfo.python_version} + Build123d${b123dVer}`;
   });
 
   let unitsText = $derived(() => {

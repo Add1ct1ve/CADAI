@@ -417,7 +417,7 @@ export class ViewportEngine {
     group.add(mesh);
     group.userData.objectId = id;
 
-    // Apply transform (CadQuery Z-up → Three.js Y-up)
+    // Apply transform (CAD Z-up → Three.js Y-up)
     const pos = cadToThreePos(transform.position);
     group.position.copy(pos);
 
@@ -455,7 +455,7 @@ export class ViewportEngine {
     const buffer = this.decodeBase64ToArrayBuffer(stlBase64);
     const loader = new STLLoader();
     const geometry = loader.parse(buffer);
-    geometry.rotateX(-Math.PI / 2); // CadQuery Z-up -> Three.js Y-up
+    geometry.rotateX(-Math.PI / 2); // CAD Z-up -> Three.js Y-up
     geometry.computeVertexNormals();
 
     const resolvedMetalness = metalness ?? 0.3;
@@ -688,7 +688,7 @@ export class ViewportEngine {
   }
 
   /**
-   * Raycast to the ground plane (Y=0 in Three.js) and return grid-snapped CadQuery position.
+   * Raycast to the ground plane (Y=0 in Three.js) and return grid-snapped CAD position.
    */
   getGridIntersection(event: PointerEvent): [number, number, number] | null {
     this.updateNdc(event);
@@ -708,7 +708,7 @@ export class ViewportEngine {
       Math.round(intersection.z / cs) * cs,
     );
 
-    // Convert to CadQuery coords: Three.js (x, 0, z) -> CadQuery (x, -z, 0)
+    // Convert to CAD coords: Three.js (x, 0, z) -> CAD (x, -z, 0)
     return [snapped.x, -snapped.z, 0];
   }
 
@@ -1025,7 +1025,7 @@ export class ViewportEngine {
   }
 
   /**
-   * Move the ghost to a CadQuery position (grid-snapped).
+   * Move the ghost to a CAD position (grid-snapped).
    */
   updateGhostPosition(cadPos: [number, number, number]): void {
     if (!this.ghostMesh) return;
@@ -1923,7 +1923,7 @@ export class ViewportEngine {
 
     const loader = new STLLoader();
     const geometry = loader.parse(data);
-    geometry.rotateX(-Math.PI / 2); // CadQuery Z-up → Three.js Y-up
+    geometry.rotateX(-Math.PI / 2); // CAD Z-up → Three.js Y-up
 
     // Compute vertex normals for smooth shading
     geometry.computeVertexNormals();

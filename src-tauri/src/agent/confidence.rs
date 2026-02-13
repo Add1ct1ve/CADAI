@@ -329,26 +329,26 @@ mod tests {
             CookbookEntry {
                 title: "Hollow box (shell operation)".to_string(),
                 description: Some("Create a box and shell it to make hollow".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)"
+                code: "from build123d import *\nresult = shell(Box(10,10,10).faces(), thickness=1)"
                     .to_string(),
                 min_version: None,
             },
             CookbookEntry {
                 title: "Revolve wine glass".to_string(),
                 description: Some("Revolve a profile to create a wine glass shape".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').revolve()".to_string(),
+                code: "from build123d import *\nresult = revolve(profiles=Circle(10))".to_string(),
                 min_version: None,
             },
             CookbookEntry {
                 title: "Loft between profiles".to_string(),
                 description: Some("Loft between two different cross-section profiles".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').loft()".to_string(),
+                code: "from build123d import *\nresult = loft()".to_string(),
                 min_version: None,
             },
             CookbookEntry {
                 title: "Simple extrude box".to_string(),
                 description: Some("Extrude a rectangle to create a box".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)"
+                code: "from build123d import *\nresult = Box(10, 10, 10)"
                     .to_string(),
                 min_version: None,
             },
@@ -357,7 +357,7 @@ mod tests {
                 description: Some(
                     "Sweep a circular profile along a path to create a pipe".to_string(),
                 ),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').sweep()".to_string(),
+                code: "from build123d import *\nresult = sweep()".to_string(),
                 min_version: None,
             },
         ]
@@ -502,7 +502,7 @@ mod tests {
             cookbook.push(CookbookEntry {
                 title: format!("Recipe {} with extrude and shell and cut", i),
                 description: Some("Uses extrude, shell, cut".to_string()),
-                code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+                code: "from build123d import *\nresult = Box(1, 1, 1)".to_string(),
                 min_version: None,
             });
         }
@@ -526,7 +526,7 @@ mod tests {
                 ],
                 parameters: vec!["INNER_W (mm)".to_string()],
                 base_code:
-                    "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10).shell(1)"
+                    "from build123d import *\nresult = shell(Box(10,10,10).faces(), thickness=1)"
                         .to_string(),
                 variants: vec!["Snap-fit".to_string()],
                 gotchas: vec!["Shell before bosses".to_string()],
@@ -541,7 +541,7 @@ mod tests {
                 ],
                 parameters: vec!["MODULE (mm)".to_string()],
                 base_code:
-                    "import cadquery as cq\nresult = cq.Workplane('XY').circle(10).extrude(5)"
+                    "from build123d import *\nresult = extrude(Circle(10), amount=5)"
                         .to_string(),
                 variants: vec!["Helical".to_string()],
                 gotchas: vec!["Bore last".to_string()],
@@ -584,7 +584,7 @@ mod tests {
             description: "Simple box".to_string(),
             keywords: vec!["enclosure".to_string(), "box".to_string()],
             parameters: vec!["W".to_string()],
-            base_code: "import cadquery as cq\nresult = cq.Workplane('XY').box(1,1,1)".to_string(),
+            base_code: "from build123d import *\nresult = Box(1, 1, 1)".to_string(),
             variants: vec!["v".to_string()],
             gotchas: vec!["g".to_string()],
         });

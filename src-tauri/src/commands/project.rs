@@ -50,16 +50,16 @@ pub async fn export_stl(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let venv_path = state.venv_path.lock().unwrap().clone();
-    let venv_dir = venv_path.ok_or(AppError::CadQueryError(
+    let venv_dir = venv_path.ok_or(AppError::CadError(
         "Python environment not set up".into(),
     ))?;
 
     // Find runner script
     let runner_script = super::find_python_script("runner.py")?;
 
-    // Execute CadQuery to generate STL
+    // Execute Build123d to generate STL
     let result =
-        crate::python::runner::execute_cadquery_isolated(&venv_dir, &runner_script, &code)?;
+        crate::python::runner::execute_cad_isolated(&venv_dir, &runner_script, &code)?;
 
     // Write STL to the specified path
     std::fs::write(&output_path, &result.stl_data)?;
@@ -74,14 +74,14 @@ pub async fn export_step(
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
     let venv_path = state.venv_path.lock().unwrap().clone();
-    let venv_dir = venv_path.ok_or(AppError::CadQueryError(
+    let venv_dir = venv_path.ok_or(AppError::CadError(
         "Python environment not set up".into(),
     ))?;
 
     let runner_script = super::find_python_script("runner.py")?;
 
     // The runner auto-detects .step extension and exports STEP format
-    crate::python::runner::execute_cadquery_to_file(
+    crate::python::runner::execute_cad_to_file(
         &venv_dir,
         &runner_script,
         &code,

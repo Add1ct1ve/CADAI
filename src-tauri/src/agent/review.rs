@@ -3,7 +3,7 @@ use crate::ai::provider::{AiProvider, TokenUsage};
 use crate::config::ReviewerMode;
 use crate::error::AppError;
 
-const REVIEW_SYSTEM_PROMPT: &str = r#"You are a CadQuery code reviewer. Your job is to verify that generated CadQuery code correctly implements what the user requested.
+const REVIEW_SYSTEM_PROMPT: &str = r#"You are a Build123d code reviewer. Your job is to verify that generated Build123d code correctly implements what the user requested.
 
 Review the code against this checklist:
 1. Are ALL requested features present? (e.g. if user asked for "two slots", are there two slots?)
@@ -12,9 +12,9 @@ Review the code against this checklist:
 4. Are face selectors correct? ('>X' vs '<X', '>Z' vs '<Z', etc.)
 5. Are operations applied to the right faces/edges?
 6. Is the final result assigned to 'result'?
-7. Does the code import cadquery as cq?
+7. Does the code import build123d (from build123d import *)?
 
-## CadQuery-Specific Pitfall Checks
+## Build123d-Specific Pitfall Checks
 8. Fillet radius must be SMALLER than the shortest edge it touches — if fillet(r) is called after a boolean, ensure r won't exceed any newly-created short edges
 9. Shell fails on bodies with very thin features or complex topology — if shell() is used after many booleans, flag as risky
 10. Revolve profiles must be entirely on ONE side of the rotation axis — check that no profile point crosses the axis
@@ -57,7 +57,7 @@ IMPORTANT:
 - Do not add features the user didn't ask for
 - Do not change dimensions unless they are clearly wrong
 - Preserve validated generation contract and multipart architecture:
-  - Keep `assy = cq.Assembly()`, `assy.add(part_...)`, and `result = assy.toCompound()` when present
+  - Keep assembly structure (`Compound(...)`, part variables, `result = assy`) when present
   - Do not drop part variables or silently collapse multipart into single-part code
   - Do not replace a robust operation path with a riskier one unless required to fix a real defect
 - When in doubt, APPROVE the code"#;
@@ -86,7 +86,7 @@ fn build_review_user_message(
     content
 }
 
-/// Review generated CadQuery code against the user's original request.
+/// Review generated Build123d code against the user's original request.
 /// Returns the original or corrected code with an explanation.
 pub async fn review_code(
     provider: Box<dyn AiProvider>,
@@ -184,7 +184,7 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT.contains("boolean cuts"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("face selectors"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("assigned to 'result'"));
-        assert!(REVIEW_SYSTEM_PROMPT.contains("import cadquery as cq"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("import build123d"));
     }
 
     #[test]
@@ -264,12 +264,12 @@ mod tests {
 
 FIXED CODE:
 ```python
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10)
+from build123d import *
+result = Box(10, 10, 10)
 ```"#;
         let result = parse_review_response(response, "old code");
         assert!(result.was_modified);
-        assert!(result.code.contains("import cadquery as cq"));
+        assert!(result.code.contains("from build123d import"));
         assert!(result.explanation.contains("Fillet radius"));
     }
 

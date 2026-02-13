@@ -28,7 +28,7 @@ pub async fn generate_drawing_view(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up. Click 'Setup Python' in settings.".into(),
             ));
         }
@@ -69,7 +69,7 @@ pub async fn generate_drawing_view(
 
     if result.exit_code != 0 {
         let error_msg = match result.exit_code {
-            2 => format!("CadQuery execution error:\n{}", result.stderr),
+            2 => format!("Build123d execution error:\n{}", result.stderr),
             3 => "Code must assign final geometry to 'result' variable.".to_string(),
             4 => format!("SVG export error:\n{}", result.stderr),
             5 => format!("Section view error:\n{}", result.stderr),
@@ -81,13 +81,13 @@ pub async fn generate_drawing_view(
         // Cleanup
         let _ = std::fs::remove_file(&input_file);
         let _ = std::fs::remove_file(&output_svg);
-        return Err(AppError::CadQueryError(error_msg));
+        return Err(AppError::CadError(error_msg));
     }
 
     // Read the generated SVG
     if !output_svg.exists() {
         let _ = std::fs::remove_file(&input_file);
-        return Err(AppError::CadQueryError("SVG file was not generated".into()));
+        return Err(AppError::CadError("SVG file was not generated".into()));
     }
 
     let svg_content = std::fs::read_to_string(&output_svg)?;
@@ -121,7 +121,7 @@ pub async fn export_drawing_pdf(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up.".into(),
             ));
         }
@@ -150,7 +150,7 @@ pub async fn export_drawing_pdf(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     Ok(format!("PDF exported to {}", output_path))
@@ -166,7 +166,7 @@ pub async fn export_drawing_dxf(
     let venv_dir = match venv_path {
         Some(p) => p,
         None => {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Python environment not set up.".into(),
             ));
         }
@@ -195,7 +195,7 @@ pub async fn export_drawing_dxf(
                 result.exit_code, result.stderr
             ),
         };
-        return Err(AppError::CadQueryError(msg));
+        return Err(AppError::CadError(msg));
     }
 
     Ok(format!("DXF exported to {}", output_path))

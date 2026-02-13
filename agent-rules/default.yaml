@@ -1,5 +1,5 @@
 # CAD AI Studio - Default Agent Rules
-# This file configures how the AI generates CadQuery code
+# This file configures how the AI generates Build123d code
 # Users can customize this to improve accuracy for their use cases
 
 version: 1
@@ -32,66 +32,65 @@ spatial_rules:
   boolean_cut:
     - "The cutting tool MUST overlap the target body"
     - "Position cutting tool so it extends BEYOND the target surface"
-    - "Use .cut() or .cutBlind() with sufficient depth"
+    - "Use mode=Mode.SUBTRACT within the BuildPart context, or boolean subtraction"
 
   boolean_fuse:
     - "Bodies MUST touch or overlap to fuse"
     - "Verify no air gap between bodies"
 
   extrude:
-    - "Positive height = extrude in +Z direction"
-    - "Negative height = extrude in -Z direction"
+    - "Positive amount = extrude in +Z direction"
+    - "Negative amount = extrude in -Z direction"
     - "Always specify direction explicitly if not along Z"
 
   sketch_placement:
-    - "XY plane = floor (Z=0)"
-    - "XZ plane = front wall (Y=0)"
-    - "YZ plane = side wall (X=0)"
-    - "Use .faces('>Z') to select top face for next operation"
-    - "Use .faces('<Z') to select bottom face"
+    - "XY plane = floor (Z=0) — Plane.XY"
+    - "XZ plane = front wall (Y=0) — Plane.XZ"
+    - "YZ plane = side wall (X=0) — Plane.YZ"
+    - "Use part.faces().sort_by(Axis.Z)[-1] to select top face for next operation"
+    - "Use part.faces().sort_by(Axis.Z)[0] to select bottom face"
 
   natural_language_to_axis:
-    - "upper / lower / top / bottom / above / below → Z axis"
-    - "left / right → Y axis"
-    - "front / back / forward / backward → X axis"
-    - "taller / shorter → Z dimension"
-    - "wider / narrower → Y dimension"
-    - "longer / shorter (depth) → X dimension"
+    - "upper / lower / top / bottom / above / below -> Z axis"
+    - "left / right -> Y axis"
+    - "front / back / forward / backward -> X axis"
+    - "taller / shorter -> Z dimension"
+    - "wider / narrower -> Y dimension"
+    - "longer / shorter (depth) -> X dimension"
 
   splitting_and_halving:
     - "CRITICAL: 'cut in half' means bisect the object along the CENTER of the relevant axis"
-    - "'top half' / 'upper half' / 'bottom half' / 'lower half' → split on XY plane at Z midpoint"
-    - "'left half' / 'right half' → split on XZ plane at Y midpoint"
-    - "'front half' / 'back half' → split on YZ plane at X midpoint"
+    - "'top half' / 'upper half' / 'bottom half' / 'lower half' -> split on XY plane at Z midpoint"
+    - "'left half' / 'right half' -> split on XZ plane at Y midpoint"
+    - "'front half' / 'back half' -> split on YZ plane at X midpoint"
     - "PREFERRED METHOD — use boolean intersection with a box:"
-    - "  Lower half: sphere.intersect(cq.Workplane('XY').box(R*3, R*3, R).translate((0,0,-R/2)))"
-    - "  Upper half: sphere.intersect(cq.Workplane('XY').box(R*3, R*3, R).translate((0,0,R/2)))"
-    - "ALTERNATIVE — use .split() (less reliable): .workplane(offset=0).split(keepBottom=True)"
+    - "  Lower half: build sphere, then add Box in context with mode=Mode.INTERSECT positioned at lower half"
+    - "  Upper half: build sphere, then add Box in context with mode=Mode.INTERSECT positioned at upper half"
     - "COMMON MISTAKE: Do NOT split along X or Y when the user says 'top/bottom' — that produces a vertical D-shape, not a horizontal hemisphere"
     - "For a sphere centered at origin, 'lower half' = everything with Z < 0, 'upper half' = everything with Z > 0"
 
   face_selectors:
-    - "'>Z' = topmost face (highest Z value)"
-    - "'<Z' = bottommost face (lowest Z value)"
-    - "'>Y' = rightmost face"
-    - "'<Y' = leftmost face"
-    - "'>X' = front face (furthest forward)"
-    - "'<X' = back face (furthest backward)"
+    - "part.faces().sort_by(Axis.Z)[-1] = topmost face (highest Z value)"
+    - "part.faces().sort_by(Axis.Z)[0] = bottommost face (lowest Z value)"
+    - "part.faces().sort_by(Axis.Y)[-1] = rightmost face"
+    - "part.faces().sort_by(Axis.Y)[0] = leftmost face"
+    - "part.faces().sort_by(Axis.X)[-1] = front face (furthest forward)"
+    - "part.faces().sort_by(Axis.X)[0] = back face (furthest backward)"
 
 # =============================================================================
-# CADQUERY CODE REQUIREMENTS
+# BUILD123D CODE REQUIREMENTS
 # =============================================================================
 code_requirements:
   mandatory:
-    - "Always import cadquery as cq"
+    - "Always use 'from build123d import *'"
     - "Final result MUST be assigned to variable named 'result'"
-    - "Use CadQuery's fluent API (method chaining)"
+    - "Use Build123d's builder mode with context managers (with BuildPart() as part:)"
     - "All dimensions in millimeters"
-    - "After any 2D sketch (.rect(), .circle(), .polyline(), .moveTo()/.lineTo()), MUST call .extrude()/.revolve()/.sweep()/.loft() to create a 3D solid BEFORE calling .cut(), .fillet(), .chamfer(), or .hole()"
+    - "After creating a 2D sketch (BuildSketch), MUST call extrude()/revolve()/sweep()/loft() to create a 3D solid BEFORE the sketch can participate in further operations"
 
   forbidden:
     - "Do NOT use show_object() or display()"
-    - "Do NOT use cq.exporters directly — the runner handles export"
+    - "Do NOT use export_stl/export_step directly — the runner handles export"
     - "Do NOT use matplotlib or any GUI libraries"
     - "Do NOT read/write files"
 
@@ -132,11 +131,11 @@ on_error:
     - "Calculate exact coordinates for intended operation"
     - "Verify calculation before generating code"
 
-  cadquery_error:
+  build123d_error:
     - "Read the Python traceback carefully"
-    - "Identify which CadQuery operation failed"
+    - "Identify which Build123d operation failed"
     - "Check face/edge selectors are valid"
-    - "Verify the workplane is correct"
+    - "Verify the sketch plane is correct"
     - "Fix and regenerate the complete code"
 
   general:
@@ -164,7 +163,7 @@ code_style:
     - "Use intermediate variables for complex geometry"
 
   example: |
-    import cadquery as cq
+    from build123d import *
 
     # Mounting bracket for sensor
     # Designed for 3D printing in PLA/PETG
@@ -174,15 +173,14 @@ code_style:
     WIDTH = 40.0         # mm
     DEPTH = 30.0         # mm
 
-    result = (
-        cq.Workplane("XY")
-        .box(WIDTH, DEPTH, THICKNESS)
+    with BuildPart() as part:
+        Box(WIDTH, DEPTH, THICKNESS)
         # Mounting holes for M5 bolts
-        .faces(">Z")
-        .workplane()
-        .pushPoints([(15, 10), (15, -10)])
-        .hole(BOLT_HOLE_DIA)
-    )
+        with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+            with Locations([(15, 10), (15, -10)]):
+                Circle(BOLT_HOLE_DIA / 2)
+        extrude(amount=-THICKNESS, mode=Mode.SUBTRACT)
+    result = part.part
 
 # =============================================================================
 # MANUFACTURING AWARENESS
@@ -211,7 +209,7 @@ capabilities:
     - "Precise geometry with exact dimensions"
     - "Profile-based modeling: sketch 2D shape, then extrude/revolve/sweep/loft"
     - "Boolean operations to build complex shapes from simple primitives"
-    - "Patterned features: arrays, mirrors, circular patterns"
+    - "Patterned features: GridLocations, PolarLocations, mirrors"
     - "Filleting, chamfering with precise control; hollowing via boolean subtraction"
   limitations:
     - "CANNOT create true organic/sculpted surfaces (faces, characters, animals)"
@@ -220,7 +218,7 @@ capabilities:
     - "Very complex boolean operations (>10 bodies) may fail or be slow"
   strategy_for_complex_requests:
     - "ALWAYS break complex shapes into simpler sub-parts"
-    - "Use boolean union/cut/intersect to combine sub-parts"
+    - "Use boolean union/cut/intersect to combine sub-parts (mode=Mode.ADD/SUBTRACT/INTERSECT)"
     - "Approximate organic curves with: revolve + polyline profiles, loft between shapes, generous fillets"
     - "For helmet/mask/vehicle shapes: start with spheres/ellipsoids, cut and combine"
     - "If a shape cannot be built, explain the limitation and offer the closest approximation"
@@ -236,18 +234,18 @@ advanced_techniques:
     - "sweep(): Profile follows a path (pipes, channels, rails)"
     - "loft(): Smooth blend between different cross-sections"
   approximating_organic_shapes:
-    - "Hemispheres: sphere + intersect with half-space box"
-    - "Rounded bodies: loft between roundedRect profiles at different heights"
+    - "Hemispheres: sphere + intersect with half-space box using Mode.INTERSECT"
+    - "Rounded bodies: loft between RectangleRounded profiles at different heights"
     - "Smooth transitions: large-radius fillets after boolean unions"
     - "Teardrop/egg shapes: revolve a spline profile"
     - "Complex enclosures: loft outer + loft inner + boolean subtract"
     - "Helmet-like shapes: hemisphere + cylinder extensions + boolean cuts for openings"
   common_pitfalls:
     - "Fillet radius larger than edge length causes crash - use smaller radius"
-    - "Do NOT use .shell() — create inner solid and use .cut() to hollow"
+    - "Do NOT use offset_3d() on complex geometry — create inner solid and use Mode.SUBTRACT to hollow"
     - "Boolean operations on non-overlapping bodies do nothing (no error, no effect)"
     - "Revolve profile must be entirely on one side of the axis"
-    - "Sweep path must be a Wire object (.wire()), not just edges"
+    - "Sweep path must be a valid wire/edge chain"
     - "Loft profiles should have same number of segments for clean results"
     - "Apply fillets/chamfers LAST, after all boolean operations"
 
@@ -257,7 +255,7 @@ advanced_techniques:
 design_thinking:
   mandatory_before_code:
     - "Before writing ANY code, describe the object's geometry in plain English"
-    - "List each geometric feature and what CadQuery operation implements it"
+    - "List each geometric feature and what Build123d operation implements it"
     - "Specify approximate dimensions and positions for each feature"
     - "Plan the build sequence (what order to apply operations)"
     - "Identify the base shape that everything else builds upon"
@@ -283,7 +281,7 @@ design_thinking:
 response_format:
   on_success:
     - "Brief description of what was created"
-    - "The generated CadQuery code wrapped in <CODE>...</CODE> tags"
+    - "The generated Build123d code wrapped in <CODE>...</CODE> tags"
     - "Any warnings or suggestions"
 
   on_clarification_needed:
@@ -297,150 +295,132 @@ response_format:
     - "Never skip validation steps"
 
 # =============================================================================
-# CADQUERY COOKBOOK - REFERENCE PATTERNS
+# BUILD123D COOKBOOK - REFERENCE PATTERNS
 # =============================================================================
-# Use these as reference for correct CadQuery API usage.
+# Use these as reference for correct Build123d API usage.
 # Each recipe is a self-contained working example.
 
 cookbook:
   - title: "Hollow box (boolean subtraction)"
     description: "Create a hollow container by subtracting an inner solid from an outer solid"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 60.0, 40.0, 30.0
       WALL = 2.0
-      outer = cq.Workplane("XY").box(W, D, H)
-      inner = (
-          cq.Workplane("XY")
-          .box(W - 2*WALL, D - 2*WALL, H - WALL)
-          .translate((0, 0, WALL / 2))
-      )
-      result = outer.cut(inner)
+      with BuildPart() as part:
+          Box(W, D, H)
+          with Locations((0, 0, WALL / 2)):
+              Box(W - 2*WALL, D - 2*WALL, H - WALL, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Through-cut slot on a wall face"
     description: "Select a specific face and cut a slot that goes all the way through"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 60.0, 40.0, 30.0
       SLOT_W, SLOT_H = 20.0, 10.0
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          # Select the front face (+X), place workplane, cut through
-          .faces(">X")
-          .workplane()
-          .rect(SLOT_W, SLOT_H)
-          .cutThruAll()
-      )
+      with BuildPart() as part:
+          Box(W, D, H)
+          # Select the front face (+X), sketch on it, cut through
+          with BuildSketch(part.faces().sort_by(Axis.X)[-1]):
+              Rectangle(SLOT_W, SLOT_H)
+          extrude(amount=-D, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Opposing through-slots on two walls"
     description: "Cut matching slots on opposite faces - e.g. entry ports on both short sides of a box"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 40.0, 30.0
       WALL = 2.0
       SLOT_W, SLOT_H = 20.0, 12.0
-      # Start with a hollow box
-      box = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .shell(-WALL)
-      )
-      # Cut slot on front face (+X)
-      box = (
-          box.faces(">X")
-          .workplane()
-          .rect(SLOT_W, SLOT_H)
-          .cutThruAll()
-      )
-      # Cut slot on back face (-X)
-      result = (
-          box.faces("<X")
-          .workplane()
-          .rect(SLOT_W, SLOT_H)
-          .cutThruAll()
-      )
+      with BuildPart() as part:
+          # Start with a hollow box
+          Box(W, D, H)
+          offset_3d(openings=part.faces().sort_by(Axis.Z)[-1], amount=-WALL)
+          # Cut slot on front face (+X)
+          with BuildSketch(part.faces().sort_by(Axis.X)[-1]):
+              Rectangle(SLOT_W, SLOT_H)
+          extrude(amount=-WALL * 2, mode=Mode.SUBTRACT)
+          # Cut slot on back face (-X)
+          with BuildSketch(part.faces().sort_by(Axis.X)[0]):
+              Rectangle(SLOT_W, SLOT_H)
+          extrude(amount=-WALL * 2, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Fillets and chamfers on specific edges"
     description: "Apply fillets or chamfers to selected edges using edge selectors"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 50.0, 30.0, 20.0
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
+      with BuildPart() as part:
+          Box(W, D, H)
           # Fillet only the top edges
-          .edges(">Z")
-          .fillet(2.0)
+          fillet(part.edges().sort_by(Axis.Z)[-4:], radius=2.0)
           # Chamfer only the bottom edges
-          .edges("<Z")
-          .chamfer(1.0)
-      )
+          chamfer(part.edges().sort_by(Axis.Z)[:4], length=1.0)
+      result = part.part
 
-  - title: "Pattern of holes (pushPoints)"
-    description: "Create multiple holes at specific positions using pushPoints"
+  - title: "Pattern of holes (Locations)"
+    description: "Create multiple holes at specific positions using Locations"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 60.0, 5.0
       HOLE_DIA = 5.5
       # Hole positions as (x, y) tuples on the top face
       HOLE_POS = [(30, 20), (-30, 20), (30, -20), (-30, -20)]
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .workplane()
-          .pushPoints(HOLE_POS)
-          .hole(HOLE_DIA)
-      )
+      with BuildPart() as part:
+          Box(W, D, H)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations(HOLE_POS):
+                  Circle(HOLE_DIA / 2)
+          extrude(amount=-H, mode=Mode.SUBTRACT)
+      result = part.part
 
-  - title: "Boolean operations (cut, union, intersect)"
-    description: "Combine two bodies using boolean cut, union, or intersect"
+  - title: "Boolean operations (Mode.ADD, Mode.SUBTRACT, Mode.INTERSECT)"
+    description: "Combine bodies using boolean add, subtract, or intersect"
     code: |
-      import cadquery as cq
-      # Base plate
-      plate = cq.Workplane("XY").box(60, 40, 5)
-      # Cylinder to add on top
-      boss = cq.Workplane("XY").workplane(offset=5).circle(10).extrude(15)
-      # Hole to subtract
-      hole = cq.Workplane("XY").circle(4).extrude(20)
-      # Union the boss onto the plate, then cut the hole
-      result = plate.union(boss).cut(hole)
+      from build123d import *
+      with BuildPart() as part:
+          # Base plate
+          Box(60, 40, 5)
+          # Cylinder to add on top
+          with Locations((0, 0, 5)):
+              Cylinder(radius=10, height=15)
+          # Hole to subtract
+          Cylinder(radius=4, height=25, mode=Mode.SUBTRACT)
+      result = part.part
 
-  - title: "Workplane switching and offsets"
+  - title: "Sketch on different planes and offsets"
     description: "Work on different planes and at offsets from existing geometry"
     code: |
-      import cadquery as cq
+      from build123d import *
       BASE_H = 10.0
-      # Base on XY plane
-      base = cq.Workplane("XY").box(40, 40, BASE_H)
-      # Switch to top face and extrude a smaller block upward
-      result = (
-          base.faces(">Z")
-          .workplane()
-          .rect(20, 20)
-          .extrude(15)
-      )
+      with BuildPart() as part:
+          # Base on XY plane
+          Box(40, 40, BASE_H)
+          # Switch to top face and extrude a smaller block upward
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              Rectangle(20, 20)
+          extrude(amount=15)
+      result = part.part
 
-  - title: "Concentric circles for tubes and rings"
-    description: "Create a tube or ring using concentric circles"
+  - title: "Tube / ring (concentric cylinders)"
+    description: "Create a tube or ring using concentric cylinders with subtraction"
     code: |
-      import cadquery as cq
+      from build123d import *
       OUTER_R = 20.0
       INNER_R = 16.0
       HEIGHT = 30.0
-      result = (
-          cq.Workplane("XY")
-          .circle(OUTER_R)
-          .circle(INNER_R)
-          .extrude(HEIGHT)
-      )
+      with BuildPart() as part:
+          Cylinder(radius=OUTER_R, height=HEIGHT)
+          Cylinder(radius=INNER_R, height=HEIGHT, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Revolve (wine glass)"
     description: "Create axially symmetric shapes by revolving a polyline profile around an axis"
     code: |
-      import cadquery as cq
+      from build123d import *
       # Wine glass profile (half cross-section) - points from bottom to top
       # Profile must be entirely on one side of the revolve axis (positive X here)
       profile_pts = [
@@ -455,50 +435,51 @@ cookbook:
           (23, 82),    # bowl inner
           (0, 65),     # bowl bottom center
       ]
-      result = (
-          cq.Workplane("XZ")
-          .polyline(profile_pts)
-          .close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(profile_pts)
+                  Line(profile_pts[-1], profile_pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
   - title: "Sweep (pipe along path)"
     description: "Sweep a circular profile along a wire path to create a pipe or channel"
     code: |
-      import cadquery as cq
+      from build123d import *
       PIPE_RADIUS = 5.0
-      # Create a path using a series of points with arcs
-      path = (
-          cq.Workplane("XZ")
-          .moveTo(0, 0)
-          .lineTo(0, 30)
-          .threePointArc((15, 45), (30, 45))
-          .lineTo(60, 45)
-          .wire()
-      )
-      # Sweep a circle along the path
-      result = (
-          cq.Workplane("XY")
-          .circle(PIPE_RADIUS)
-          .sweep(path)
-      )
+      with BuildPart() as part:
+          # Create a path
+          with BuildLine() as path:
+              Line((0, 0, 0), (0, 0, 30))
+              RadiusArc((0, 0, 30), (30, 0, 45), radius=15)
+              Line((30, 0, 45), (60, 0, 45))
+          # Create profile perpendicular to path start
+          with BuildSketch(Plane(origin=path.line @ 0, z_dir=path.line % 0)) as profile:
+              Circle(PIPE_RADIUS)
+          sweep()
+      result = part.part
 
   - title: "Loft (square to circle transition)"
     description: "Smooth blend between different cross-section shapes at different heights"
     code: |
-      import cadquery as cq
-      # Bottom profile: 40x40 rounded rectangle
-      bottom = cq.Workplane("XY").rect(40, 40)
-      # Top profile: circle at Z=50
-      top = cq.Workplane("XY").workplane(offset=50).circle(15)
-      # Loft between the two profiles
-      result = bottom.loft(top)
+      from build123d import *
+      with BuildPart() as part:
+          # Bottom profile: 40x40 rectangle
+          with BuildSketch() as sk1:
+              Rectangle(40, 40)
+          # Top profile: circle at Z=50
+          with BuildSketch(Plane.XY.offset(50)) as sk2:
+              Circle(15)
+          loft()
+      result = part.part
 
   - title: "Spline curves (ergonomic shape)"
     description: "Use splines for smooth organic-ish curves, then revolve for 3D shape"
     code: |
-      import cadquery as cq
-      # Spline profile for an egg/teardrop shape (revolve around Y axis)
+      from build123d import *
+      # Spline profile for an egg/teardrop shape (revolve around Z axis)
       spline_pts = [
           (0, 0),
           (12, 10),
@@ -507,347 +488,257 @@ cookbook:
           (8, 55),
           (0, 60),
       ]
-      result = (
-          cq.Workplane("XZ")
-          .spline(spline_pts)
-          .close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Spline(spline_pts)
+                  Line(spline_pts[-1], spline_pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
   - title: "Advanced edge selectors"
-    description: "Select edges by direction, position, and compound filters"
+    description: "Select edges by direction, position, and filtering"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 60.0, 40.0, 30.0
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          # '|Z' selects edges parallel to Z axis (vertical edges)
-          .edges("|Z")
-          .fillet(3.0)
-          # '>Z' selects edges at the maximum Z (top edges)
-          .edges(">Z")
-          .chamfer(1.0)
-      )
+      with BuildPart() as part:
+          Box(W, D, H)
+          # Filter edges parallel to Z axis (vertical edges)
+          fillet(part.edges().filter_by(Axis.Z), radius=3.0)
+          # Select edges at the maximum Z (top edges)
+          chamfer(part.edges().sort_by(Axis.Z)[-4:], length=1.0)
+      result = part.part
 
-  - title: "Shell with face removal and ports"
-    description: "Create a hollow enclosure by shelling then cutting access ports"
+  - title: "Hollow enclosure with port (boolean subtraction)"
+    description: "Create a hollow enclosure by boolean subtraction then cut access port"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 50.0, 40.0
       WALL = 2.5
       PORT_DIA = 15.0
-      # Shell removes material from inside, opening the selected face
-      enclosure = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .shell(-WALL)
-      )
-      # Cut a circular port on the front face
-      result = (
-          enclosure.faces(">X")
-          .workplane()
-          .hole(PORT_DIA)
-      )
+      with BuildPart() as part:
+          # Create outer box and hollow it
+          Box(W, D, H)
+          with Locations((0, 0, WALL / 2)):
+              Box(W - 2*WALL, D - 2*WALL, H - WALL, mode=Mode.SUBTRACT)
+          # Cut a circular port on the front face (+X)
+          with BuildSketch(part.faces().sort_by(Axis.X)[-1]):
+              Circle(PORT_DIA / 2)
+          extrude(amount=-WALL * 2, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Complex boolean composition (helmet shape)"
     description: "Build complex shapes from simple primitives using boolean operations"
     code: |
-      import cadquery as cq
+      from build123d import *
       R = 50.0       # head radius
       WALL = 3.0     # shell thickness
       VISOR_W = 60.0
       VISOR_H = 25.0
 
-      # Start with a sphere
-      sphere = cq.Workplane("XY").sphere(R)
-      # Cut bottom half to get hemisphere (dome)
-      cut_box = cq.Workplane("XY").box(R * 3, R * 3, R).translate((0, 0, -R / 2))
-      dome = sphere.cut(cut_box)
-      # Extend downward with a cylinder for the jaw area
-      jaw = cq.Workplane("XY").circle(R).extrude(-20)
-      helmet_solid = dome.union(jaw)
-      # Shell it to make it hollow
-      helmet = helmet_solid.shell(-WALL)
-      # Cut visor opening on front face
-      visor_cut = (
-          cq.Workplane("XZ")
-          .workplane(offset=R)
-          .rect(VISOR_W, VISOR_H)
-          .extrude(-WALL * 3)
-      )
-      result = helmet.cut(visor_cut)
+      # Build outer shell
+      with BuildPart() as part:
+          # Start with a sphere
+          Sphere(R)
+          # Cut bottom half to get hemisphere (dome)
+          with Locations((0, 0, -R / 2)):
+              Box(R * 3, R * 3, R, mode=Mode.SUBTRACT)
+          # Extend downward with a cylinder for the jaw area
+          Cylinder(radius=R, height=20, align=(Align.CENTER, Align.CENTER, Align.MAX))
+          # Hollow it out
+          Sphere(R - WALL, mode=Mode.SUBTRACT)
+          Cylinder(radius=R - WALL, height=25, align=(Align.CENTER, Align.CENTER, Align.MAX), mode=Mode.SUBTRACT)
+          # Cut visor opening on front face
+          with Locations((0, R, R * 0.3)):
+              Box(VISOR_W, WALL * 6, VISOR_H, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Circular pattern (polar array of holes)"
-    description: "Create features arranged in a circular pattern using polarArray"
+    description: "Create features arranged in a circular pattern using PolarLocations"
     code: |
-      import cadquery as cq
+      from build123d import *
       DISC_R = 40.0
       DISC_H = 8.0
       HOLE_DIA = 6.0
       HOLE_CIRCLE_R = 30.0
       NUM_HOLES = 6
 
-      result = (
-          cq.Workplane("XY")
-          .circle(DISC_R)
-          .extrude(DISC_H)
-          .faces(">Z")
-          .workplane()
-          .polarArray(HOLE_CIRCLE_R, 0, 360, NUM_HOLES)
-          .hole(HOLE_DIA)
-      )
+      with BuildPart() as part:
+          Cylinder(radius=DISC_R, height=DISC_H)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with PolarLocations(HOLE_CIRCLE_R, NUM_HOLES):
+                  Circle(HOLE_DIA / 2)
+          extrude(amount=-DISC_H, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Text embossing on a face"
     description: "Add raised or engraved text to a face of a solid"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 30.0, 5.0
       FONT_SIZE = 10.0
-      TEXT_DEPTH = 1.0   # positive = raised, negative would need .cutBlind
+      TEXT_DEPTH = 1.0
 
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .workplane()
-          .text("HELLO", FONT_SIZE, TEXT_DEPTH)
-      )
+      with BuildPart() as part:
+          Box(W, D, H)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              Text("HELLO", font_size=FONT_SIZE)
+          extrude(amount=TEXT_DEPTH)
+      result = part.part
 
-  - title: "Rounded enclosure (loft between rounded rectangles)"
-    description: "Create a smooth enclosure by lofting between rounded rectangles at different heights"
+  - title: "Rounded enclosure (loft between rectangles)"
+    description: "Create a smooth enclosure by lofting between rectangles at different heights"
     code: |
-      import cadquery as cq
-      W_BOT, D_BOT = 60.0, 40.0  # bottom dimensions
-      W_TOP, D_TOP = 50.0, 35.0  # top dimensions (slightly smaller)
+      from build123d import *
+      W_BOT, D_BOT = 60.0, 40.0
+      W_TOP, D_TOP = 50.0, 35.0
       HEIGHT = 30.0
       CORNER_R = 5.0
       WALL = 2.0
 
-      # Bottom profile
-      bottom = cq.Workplane("XY").rect(W_BOT, D_BOT).val()
-      # Top profile
-      top = cq.Workplane("XY").workplane(offset=HEIGHT).rect(W_TOP, D_TOP).val()
-      # Loft and shell
-      result = (
-          cq.Workplane("XY")
-          .rect(W_BOT, D_BOT)
-          .workplane(offset=HEIGHT)
-          .rect(W_TOP, D_TOP)
-          .loft()
-          .edges("|Z")
-          .fillet(CORNER_R)
-          .faces(">Z")
-          .shell(-WALL)
-      )
+      with BuildPart() as part:
+          # Bottom profile
+          with BuildSketch() as sk1:
+              Rectangle(W_BOT, D_BOT)
+          # Top profile
+          with BuildSketch(Plane.XY.offset(HEIGHT)) as sk2:
+              Rectangle(W_TOP, D_TOP)
+          loft()
+          fillet(part.edges().filter_by(Axis.Z), radius=CORNER_R)
+          # Hollow via subtraction
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              offset(amount=-WALL)
+          extrude(amount=-(HEIGHT - WALL), mode=Mode.SUBTRACT)
+      result = part.part
 
-  - title: "Countersink and counterbore holes"
-    description: "Create standard countersink (cskHole) and counterbore (cboreHole) holes for fasteners"
+  - title: "Counterbore and countersink holes"
+    description: "Create standard counterbore and countersink holes for fasteners"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 40.0, 10.0
 
-      result = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .workplane()
-          # Counterbore hole: hole_dia, cbore_dia, cbore_depth
-          .pushPoints([(-20, 0)])
-          .cboreHole(5.0, 10.0, 3.0)
-          # Countersink hole: hole_dia, csk_dia, csk_angle (82 or 90 deg typical)
-          .pushPoints([(20, 0)])
-          .cskHole(5.0, 10.0, 82)
-      )
+      with BuildPart() as part:
+          Box(W, D, H)
+          # Counterbore hole at (-20, 0)
+          with Locations((-20, 0)):
+              CounterBoreHole(radius=2.5, counter_bore_radius=5.0, counter_bore_depth=3.0, depth=H)
+          # Countersink hole at (20, 0)
+          with Locations((20, 0)):
+              CounterSinkHole(radius=2.5, counter_sink_radius=5.0, depth=H)
+      result = part.part
 
   - title: "Multi-body workflow (separate parts combined)"
-    description: "Build complex models from separate bodies using translate and boolean union"
+    description: "Build complex models from separate bodies combined into one"
     code: |
-      import cadquery as cq
-      # Body 1: base plate
-      base = cq.Workplane("XY").box(80, 60, 5)
-      # Body 2: left pillar
-      pillar_l = (
-          cq.Workplane("XY")
-          .workplane(offset=5)
-          .center(-30, 0)
-          .circle(8)
-          .extrude(40)
-      )
-      # Body 3: right pillar
-      pillar_r = (
-          cq.Workplane("XY")
-          .workplane(offset=5)
-          .center(30, 0)
-          .circle(8)
-          .extrude(40)
-      )
-      # Body 4: top bridge
-      bridge = cq.Workplane("XY").workplane(offset=45).box(76, 16, 5)
-      # Combine all parts, then fillet the joints
-      combined = base.union(pillar_l).union(pillar_r).union(bridge)
-      # Apply fillets LAST after all booleans
-      result = combined.edges("|Z").fillet(2.0)
+      from build123d import *
+      with BuildPart() as part:
+          # Base plate
+          Box(80, 60, 5)
+          # Left pillar
+          with Locations((-30, 0, 5)):
+              Cylinder(radius=8, height=40, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Right pillar
+          with Locations((30, 0, 5)):
+              Cylinder(radius=8, height=40, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Top bridge
+          with Locations((0, 0, 47.5)):
+              Box(76, 16, 5)
+          # Apply fillets LAST after all geometry
+          fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+      result = part.part
 
   - title: "Helmet shape via multi-height loft + boolean cuts"
-    description: "Build a helmet-like shape by lofting between oval profiles at different heights, then cutting visor and mouth openings. Much better than sphere + cuts."
+    description: "Build a helmet-like shape by lofting between oval profiles at different heights, then cutting visor and mouth openings."
     code: |
-      import cadquery as cq
+      from build123d import *
 
-      # Helmet dimensions
-      H_WIDTH = 180.0    # side to side
-      H_DEPTH = 220.0    # front to back
-      H_HEIGHT = 200.0   # bottom to top
+      H_WIDTH = 180.0
+      H_DEPTH = 220.0
+      H_HEIGHT = 200.0
       WALL = 4.0
 
-      # Build helmet shell by lofting oval profiles at different heights
-      helmet = (
-          cq.Workplane("XY")
-          # Bottom opening (neck) - wide oval
-          .ellipse(H_WIDTH / 2, H_DEPTH / 2)
-          # Mid section - fullest part
-          .workplane(offset=H_HEIGHT * 0.4)
-          .ellipse(H_WIDTH / 2 * 1.05, H_DEPTH / 2 * 1.05)
-          # Upper section - starts tapering
-          .workplane(offset=H_HEIGHT * 0.35)
-          .ellipse(H_WIDTH / 2 * 0.85, H_DEPTH / 2 * 0.9)
-          # Top - narrow dome
-          .workplane(offset=H_HEIGHT * 0.25)
-          .ellipse(H_WIDTH / 2 * 0.4, H_DEPTH / 2 * 0.5)
-          .loft()
-      )
-
-      # Shell it to make it hollow
-      helmet = helmet.faces("<Z").shell(-WALL)
-
-      # Cut visor opening (wide slot on front face)
-      VISOR_W = 140.0
-      VISOR_H = 40.0
-      VISOR_Z = H_HEIGHT * 0.55  # eye level
-
-      visor_cutter = (
-          cq.Workplane("XZ")
-          .center(0, VISOR_Z)
-          .rect(VISOR_W, VISOR_H)
-          .extrude(H_DEPTH)
-      )
-      helmet = helmet.cut(visor_cutter)
-
-      # Cut mouth vent (smaller, lower)
-      MOUTH_W = 60.0
-      MOUTH_H = 15.0
-      MOUTH_Z = H_HEIGHT * 0.3
-
-      mouth_cutter = (
-          cq.Workplane("XZ")
-          .center(0, MOUTH_Z)
-          .rect(MOUTH_W, MOUTH_H)
-          .extrude(H_DEPTH)
-      )
-      helmet = helmet.cut(mouth_cutter)
-
-      # Smooth edges — try/except because fillet on complex loft+boolean geometry can fail
+      with BuildPart() as part:
+          # Outer shell by lofting oval profiles at different heights
+          with BuildSketch() as sk1:
+              Ellipse(H_WIDTH / 2, H_DEPTH / 2)
+          with BuildSketch(Plane.XY.offset(H_HEIGHT * 0.4)) as sk2:
+              Ellipse(H_WIDTH / 2 * 1.05, H_DEPTH / 2 * 1.05)
+          with BuildSketch(Plane.XY.offset(H_HEIGHT * 0.75)) as sk3:
+              Ellipse(H_WIDTH / 2 * 0.85, H_DEPTH / 2 * 0.9)
+          with BuildSketch(Plane.XY.offset(H_HEIGHT)) as sk4:
+              Ellipse(H_WIDTH / 2 * 0.4, H_DEPTH / 2 * 0.5)
+          loft()
+          # Hollow via offset_3d (open at bottom)
+          offset_3d(openings=part.faces().sort_by(Axis.Z)[0], amount=-WALL)
+          # Cut visor opening
+          VISOR_W = 140.0
+          VISOR_H = 40.0
+          VISOR_Z = H_HEIGHT * 0.55
+          with Locations((0, H_DEPTH / 2, VISOR_Z)):
+              Box(VISOR_W, WALL * 6, VISOR_H, mode=Mode.SUBTRACT)
+          # Cut mouth vent
+          MOUTH_W = 60.0
+          MOUTH_H = 15.0
+          MOUTH_Z = H_HEIGHT * 0.3
+          with Locations((0, H_DEPTH / 2, MOUTH_Z)):
+              Box(MOUTH_W, WALL * 6, MOUTH_H, mode=Mode.SUBTRACT)
       try:
-          result = helmet.edges().fillet(2.0)
-      except:
-          result = helmet
+          fillet(part.edges(), radius=2.0)
+      except Exception:
+          pass
+      result = part.part
 
   - title: "Ergonomic handle via revolve with spline profile"
-    description: "Create a grip/handle shape using revolve with a spline profile curve. Good for tool handles, joystick grips, etc."
+    description: "Create a grip/handle shape using revolve with a spline profile curve."
     code: |
-      import cadquery as cq
+      from build123d import *
 
-      # Handle profile points (X=radius from axis, Y=height along axis)
-      # Describe the silhouette: narrow neck, bulging grip, tapered end
       PROFILE_PTS = [
-          (0, 0),        # bottom center (on axis)
-          (12, 0),       # bottom edge
-          (14, 10),      # slight flare at base
-          (16, 30),      # widest grip point
-          (15, 50),      # still wide
-          (12, 70),      # taper toward top
-          (8, 90),       # neck
-          (10, 100),     # slight flange at top
-          (10, 105),     # top rim
-          (0, 105),      # top center (on axis)
+          (0, 0), (12, 0), (14, 10), (16, 30), (15, 50),
+          (12, 70), (8, 90), (10, 100), (10, 105), (0, 105),
       ]
 
-      # Build profile as a wire, then revolve
-      handle_profile = (
-          cq.Workplane("XZ")
-          .moveTo(*PROFILE_PTS[0])
-      )
-      # Add spline through profile points
-      handle_profile = handle_profile.spline(PROFILE_PTS[1:], includeCurrent=True)
-      # Close back to axis
-      handle_profile = handle_profile.close()
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Spline(PROFILE_PTS)
+                  Line(PROFILE_PTS[-1], PROFILE_PTS[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
-      result = handle_profile.revolve(360, (0, 0, 0), (0, 0, 1))
-
-  - title: "Phone case using loft + shell + boolean cuts for ports"
-    description: "Build a phone case shape by lofting rounded rectangles, shelling, then cutting openings for screen, camera, and ports."
+  - title: "Phone case using loft + boolean cuts for ports"
+    description: "Build a phone case shape by lofting rectangles, hollowing, then cutting openings."
     code: |
-      import cadquery as cq
+      from build123d import *
 
-      # Phone dimensions
-      PH_W = 75.0    # width
-      PH_D = 155.0   # height/length
-      PH_T = 10.0    # thickness (with case)
+      PH_W = 75.0
+      PH_D = 155.0
+      PH_T = 10.0
       WALL = 1.5
       CORNER_R = 8.0
 
-      # Build case body by lofting rounded rectangles
-      case_body = (
-          cq.Workplane("XY")
-          .rect(PH_W, PH_D)
-          .workplane(offset=PH_T)
-          .rect(PH_W + 1.0, PH_D + 1.0)  # slightly wider at top for draft
-          .loft()
-          .edges("|Z")
-          .fillet(CORNER_R)
-      )
-
-      # Shell from top (screen side)
-      case_body = case_body.faces(">Z").shell(-WALL)
-
-      # Cut camera hole (top-left corner on back)
-      CAM_W = 30.0
-      CAM_H = 35.0
-      CAM_X = -PH_W / 2 + 20.0
-      CAM_Y = PH_D / 2 - 25.0
-
-      cam_cutter = (
-          cq.Workplane("XY")
-          .center(CAM_X, CAM_Y)
-          .rect(CAM_W, CAM_H)
-          .extrude(-WALL * 2)  # cut through bottom wall
-      )
-      case_body = case_body.cut(cam_cutter)
-
-      # Cut charging port (bottom edge)
-      PORT_W = 15.0
-      PORT_H = 5.0
-      port_cutter = (
-          cq.Workplane("XZ")
-          .workplane(offset=-PH_D / 2)
-          .rect(PORT_W, PORT_H)
-          .extrude(-WALL * 2)
-      )
-      case_body = case_body.cut(port_cutter)
-
-      # Cut volume button slot (right side)
-      BTN_W = 25.0
-      BTN_H = 3.0
-      BTN_Z = PH_T * 0.5
-      btn_cutter = (
-          cq.Workplane("YZ")
-          .workplane(offset=PH_W / 2)
-          .center(PH_D * 0.15, BTN_Z)
-          .rect(BTN_W, BTN_H)
-          .extrude(WALL * 2)
-      )
-      result = case_body.cut(btn_cutter)
+      with BuildPart() as part:
+          with BuildSketch() as sk1:
+              Rectangle(PH_W, PH_D)
+          with BuildSketch(Plane.XY.offset(PH_T)) as sk2:
+              Rectangle(PH_W + 1.0, PH_D + 1.0)
+          loft()
+          fillet(part.edges().filter_by(Axis.Z), radius=CORNER_R)
+          # Hollow from top (screen side)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              offset(amount=-WALL)
+          extrude(amount=-(PH_T - WALL), mode=Mode.SUBTRACT)
+          # Cut camera hole on back
+          CAM_X = -PH_W / 2 + 20.0
+          CAM_Y = PH_D / 2 - 25.0
+          with Locations((CAM_X, CAM_Y, 0)):
+              Box(30.0, 35.0, WALL * 4, mode=Mode.SUBTRACT)
+          # Cut charging port on bottom edge
+          with Locations((0, -PH_D / 2, PH_T / 2)):
+              Box(15.0, WALL * 4, 5.0, mode=Mode.SUBTRACT)
+      result = part.part
 
   # --- Phase 1.1: Expanded Recipes (25 new) ---
 
@@ -856,318 +747,240 @@ cookbook:
   - title: "Pipe elbow (90-degree swept bend)"
     description: "Sweep a circular profile along a 90-degree arc to create a pipe elbow"
     code: |
-      import cadquery as cq
+      from build123d import *
       PIPE_OD = 20.0
       PIPE_WALL = 2.0
-      BEND_R = 40.0  # center-line bend radius
-      # 90-degree arc path in XZ plane
-      path = (
-          cq.Workplane("XZ")
-          .radiusArc((BEND_R, BEND_R), -BEND_R)
-          .wire()
-      )
-      # Sweep annular profile (outer - inner circle)
-      result = (
-          cq.Workplane("XY")
-          .circle(PIPE_OD / 2)
-          .circle(PIPE_OD / 2 - PIPE_WALL)
-          .sweep(path)
-      )
+      BEND_R = 40.0
+
+      with BuildPart() as part:
+          # Outer pipe
+          with BuildLine() as path:
+              RadiusArc((0, 0, 0), (BEND_R, 0, BEND_R), radius=BEND_R)
+          with BuildSketch(Plane(origin=path.line @ 0, z_dir=path.line % 0)):
+              Circle(PIPE_OD / 2)
+          sweep()
+          # Inner void
+          with BuildLine() as path2:
+              RadiusArc((0, 0, 0), (BEND_R, 0, BEND_R), radius=BEND_R)
+          with BuildSketch(Plane(origin=path2.line @ 0, z_dir=path2.line % 0)):
+              Circle(PIPE_OD / 2 - PIPE_WALL)
+          sweep(mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Pipe T-junction"
-    description: "Create a hollow T-junction from outer and inner cylinder booleans (shell on complex unions is unreliable)"
+    description: "Create a hollow T-junction from outer and inner cylinder booleans"
     code: |
-      import cadquery as cq
+      from build123d import *
       OD = 20.0
       WALL = 2.0
       ID = OD - 2 * WALL
       LENGTH = 60.0
       BRANCH_L = 40.0
-      # Outer solid T-shape
-      main_outer = cq.Workplane("XY").circle(OD / 2).extrude(LENGTH).translate((0, 0, -LENGTH / 2))
-      branch_outer = cq.Workplane("XZ").circle(OD / 2).extrude(BRANCH_L)
-      outer = main_outer.union(branch_outer)
-      # Inner void T-shape (slightly longer to ensure clean cut)
-      main_inner = cq.Workplane("XY").circle(ID / 2).extrude(LENGTH + 2).translate((0, 0, -LENGTH / 2 - 1))
-      branch_inner = cq.Workplane("XZ").circle(ID / 2).extrude(BRANCH_L + 1)
-      inner = main_inner.union(branch_inner)
-      result = outer.cut(inner)
+      with BuildPart() as part:
+          # Outer solid T-shape
+          Cylinder(radius=OD / 2, height=LENGTH)
+          with Locations((0, 0, 0)):
+              Cylinder(radius=OD / 2, height=BRANCH_L,
+                       rotation=(90, 0, 0),
+                       align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Inner void T-shape
+          Cylinder(radius=ID / 2, height=LENGTH + 2, mode=Mode.SUBTRACT)
+          with Locations((0, 0, 0)):
+              Cylinder(radius=ID / 2, height=BRANCH_L + 1,
+                       rotation=(90, 0, 0),
+                       align=(Align.CENTER, Align.CENTER, Align.MIN),
+                       mode=Mode.SUBTRACT)
+      result = part.part
 
   # B. Fasteners & Hardware
 
   - title: "Hex bolt (simplified, no threads)"
-    description: "Hex head polygon extruded + cylindrical shaft with chamfered tip. No real threads — helix sweep is unreliable in CadQuery."
+    description: "Hex head polygon extruded + cylindrical shaft with chamfered tip."
     code: |
-      import cadquery as cq
-      # M8 approximate dimensions
+      from build123d import *
       HEAD_AF = 13.0   # across-flats (wrench size)
       HEAD_H = 5.3
       SHAFT_D = 8.0
       SHAFT_L = 30.0
-      # Hex head: inscribed polygon (6 sides)
-      head = (
-          cq.Workplane("XY")
-          .polygon(6, HEAD_AF)
-          .extrude(HEAD_H)
-      )
-      # Shaft below head
-      shaft = (
-          cq.Workplane("XY")
-          .circle(SHAFT_D / 2)
-          .extrude(-SHAFT_L)
-      )
-      result = (
-          head.union(shaft)
-          .edges("<Z")
-          .chamfer(0.8)
-      )
-
-  - title: "Compression spring (helix sweep)"
-    description: "Sweep a small circle along a helix path to create a compression spring"
-    code: |
-      import cadquery as cq
-      WIRE_DIA = 2.0
-      COIL_OD = 20.0
-      PITCH = 6.0
-      N_COILS = 5
-      HEIGHT = PITCH * N_COILS
-      COIL_R = (COIL_OD - WIRE_DIA) / 2
-      # Create helix path
-      helix = cq.Wire.makeHelix(PITCH, HEIGHT, COIL_R)
-      # Sweep wire cross-section along helix
-      result = (
-          cq.Workplane("XZ")
-          .center(COIL_R, 0)
-          .circle(WIRE_DIA / 2)
-          .sweep(helix, isFrenet=True)
-      )
+      with BuildPart() as part:
+          # Hex head
+          with BuildSketch() as sk:
+              RegularPolygon(radius=HEAD_AF / 2, side_count=6, major_radius=False)
+          extrude(amount=HEAD_H)
+          # Shaft below head
+          with Locations((0, 0, 0)):
+              Cylinder(radius=SHAFT_D / 2, height=SHAFT_L,
+                       align=(Align.CENTER, Align.CENTER, Align.MAX))
+          # Chamfer bottom edges
+          chamfer(part.edges().sort_by(Axis.Z)[:4], length=0.8)
+      result = part.part
 
   - title: "Standoff / spacer with hex base"
     description: "Hex base polygon + hollow cylindrical body + through-hole for a screw"
     code: |
-      import cadquery as cq
+      from build123d import *
       HEX_AF = 8.0     # across-flats
       HEX_H = 3.0
       BODY_OD = 6.0
       BODY_H = 10.0
       BORE_D = 3.2     # M3 clearance
-      # Hex base
-      base = cq.Workplane("XY").polygon(6, HEX_AF).extrude(HEX_H)
-      # Round body on top
-      body = cq.Workplane("XY").workplane(offset=HEX_H).circle(BODY_OD / 2).extrude(BODY_H)
-      # Union, then drill through-hole
-      result = (
-          base.union(body)
-          .faces(">Z").workplane()
-          .hole(BORE_D)
-      )
+      with BuildPart() as part:
+          # Hex base
+          with BuildSketch() as sk:
+              RegularPolygon(radius=HEX_AF / 2, side_count=6, major_radius=False)
+          extrude(amount=HEX_H)
+          # Round body on top
+          with Locations((0, 0, HEX_H)):
+              Cylinder(radius=BODY_OD / 2, height=BODY_H,
+                       align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Through-hole
+          Cylinder(radius=BORE_D / 2, height=HEX_H + BODY_H + 1, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Bearing seat (revolved stepped bore)"
     description: "Revolve a stepped bore profile with shoulder and snap-ring groove for a bearing housing"
     code: |
-      import cadquery as cq
-      # Profile (half cross-section) for revolve around Z axis
-      # OD=40, bearing bore=22, shoulder, snap-ring groove
+      from build123d import *
       pts = [
-          (0, 0), (20, 0), (20, 5),           # bottom flange
-          (16, 5), (16, 8),                     # step to bore
-          (11, 8), (11, 25),                    # bearing bore wall
-          (12, 25), (12, 27), (11, 27),         # snap-ring groove
-          (11, 30), (20, 30), (20, 35),         # top flange
-          (0, 35),                              # top center
+          (0, 0), (20, 0), (20, 5),
+          (16, 5), (16, 8),
+          (11, 8), (11, 25),
+          (12, 25), (12, 27), (11, 27),
+          (11, 30), (20, 30), (20, 35),
+          (0, 35),
       ]
-      result = (
-          cq.Workplane("XZ")
-          .polyline(pts)
-          .close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
   # C. Joints & Connections
 
   - title: "Snap-fit hook (cantilever with barb)"
     description: "A cantilever arm with an angled barb tip, extruded from a polyline profile"
     code: |
-      import cadquery as cq
+      from build123d import *
       ARM_L = 15.0
       ARM_T = 1.5
       ARM_W = 5.0
       BARB_H = 2.0
-      BARB_ANGLE_RUN = 1.5  # horizontal run of barb slope
+      BARB_ANGLE_RUN = 1.5
       BASE_H = 5.0
-      # Side profile of snap-fit hook (XZ plane)
       pts = [
-          (0, 0), (ARM_T, 0), (ARM_T, BASE_H),         # base block
-          (ARM_T, BASE_H + ARM_L),                       # arm tip
-          (ARM_T + BARB_ANGLE_RUN, BASE_H + ARM_L + BARB_H),  # barb peak
-          (ARM_T, BASE_H + ARM_L + BARB_H),             # barb inner
-          (0, BASE_H + ARM_L + BARB_H),                 # back of barb
-          (0, BASE_H),                                   # back to base top
+          (0, 0), (ARM_T, 0), (ARM_T, BASE_H),
+          (ARM_T, BASE_H + ARM_L),
+          (ARM_T + BARB_ANGLE_RUN, BASE_H + ARM_L + BARB_H),
+          (ARM_T, BASE_H + ARM_L + BARB_H),
+          (0, BASE_H + ARM_L + BARB_H),
+          (0, BASE_H),
       ]
-      result = (
-          cq.Workplane("XZ")
-          .polyline(pts)
-          .close()
-          .extrude(ARM_W)
-      )
-
-  - title: "Snap-fit clip (U-shaped with detent bumps)"
-    description: "U-shaped clip body with small detent bumps on inner arms for push-fit retention"
-    code: |
-      import cadquery as cq
-      W = 12.0      # overall width
-      H = 15.0      # arm height
-      T = 1.5       # wall thickness
-      GAP = 6.0     # inner gap
-      DEPTH = 8.0   # extrusion depth
-      BUMP_R = 0.8
-      # U-shape profile
-      pts = [
-          (0, 0), (W, 0), (W, H),
-          (W - T, H), (W - T, T), (T, T),
-          (T, H), (0, H),
-      ]
-      clip = (
-          cq.Workplane("XZ")
-          .polyline(pts)
-          .close()
-          .extrude(DEPTH)
-      )
-      # Add detent bumps on inner faces of arms
-      bump_l = cq.Workplane("XY").workplane(offset=H * 0.7).center(T, DEPTH / 2).sphere(BUMP_R)
-      bump_r = cq.Workplane("XY").workplane(offset=H * 0.7).center(W - T, DEPTH / 2).sphere(BUMP_R)
-      result = clip.union(bump_l).union(bump_r)
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          extrude(amount=ARM_W)
+      result = part.part
 
   - title: "Dovetail joint (male and female pieces)"
     description: "Trapezoidal male dovetail piece and matching female block with trapezoidal cutout"
     code: |
-      import cadquery as cq
-      # Dovetail cross-section (trapezoid)
+      from build123d import *
       BASE_W = 10.0
       TOP_W = 14.0
       DT_H = 8.0
       LENGTH = 40.0
       BLOCK = 30.0
-      # Male dovetail piece
       tail_pts = [
           (-BASE_W / 2, 0), (BASE_W / 2, 0),
           (TOP_W / 2, DT_H), (-TOP_W / 2, DT_H),
       ]
-      male = (
-          cq.Workplane("XZ")
-          .polyline(tail_pts).close()
-          .extrude(LENGTH)
-      )
-      # Female piece: block with dovetail slot cut through
-      block = cq.Workplane("XY").box(BLOCK, LENGTH, BLOCK)
-      slot_cutter = (
-          cq.Workplane("XZ")
-          .polyline(tail_pts).close()
-          .extrude(LENGTH * 1.1)
-          .translate((0, -LENGTH * 0.05, 0))
-      )
-      female = block.cut(slot_cutter)
-      # Return male piece (change to female if needed)
-      result = male
-
-  - title: "Finger joint (box joint)"
-    description: "Two interlocking boards with rectangular finger tabs cut in a loop"
-    code: |
-      import cadquery as cq
-      BOARD_W = 60.0
-      BOARD_H = 40.0
-      BOARD_T = 5.0
-      N_FINGERS = 5
-      FINGER_W = BOARD_W / (N_FINGERS * 2 + 1)
-      # Board A: fingers at even positions
-      board_a = cq.Workplane("XY").box(BOARD_W, BOARD_T, BOARD_H)
-      for i in range(N_FINGERS):
-          x_pos = -BOARD_W / 2 + FINGER_W * (2 * i + 1) + FINGER_W / 2
-          cutter = (
-              cq.Workplane("XY")
-              .center(x_pos, 0)
-              .rect(FINGER_W, BOARD_T * 2)
-              .extrude(BOARD_T)
-              .translate((0, 0, -BOARD_T / 2))
-          )
-          board_a = board_a.cut(cutter)
-      result = board_a
+      # Male dovetail piece
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(tail_pts)
+                  Line(tail_pts[-1], tail_pts[0])
+              make_face()
+          extrude(amount=LENGTH)
+      result = part.part
 
   # D. Brackets & Structural
 
   - title: "L-bracket with gusset and mounting holes"
     description: "L-profile from polyline extrude, triangular gusset for stiffness, and mounting holes"
     code: |
-      import cadquery as cq
-      W = 40.0      # width (extrusion)
-      LEG = 50.0    # leg lengths
-      T = 4.0       # thickness
-      HOLE_D = 5.5  # M5 clearance
-      # L-profile
+      from build123d import *
+      W = 40.0
+      LEG = 50.0
+      T = 4.0
+      HOLE_D = 5.5
       l_pts = [
           (0, 0), (LEG, 0), (LEG, T),
           (T, T), (T, LEG), (0, LEG),
       ]
-      bracket = cq.Workplane("XZ").polyline(l_pts).close().extrude(W)
-      # Triangular gusset
-      gusset_pts = [(T, T), (T + 15, T), (T, T + 15)]
-      gusset = (
-          cq.Workplane("XZ").polyline(gusset_pts).close()
-          .extrude(W * 0.3).translate((0, W * 0.35, 0))
-      )
-      bracket = bracket.union(gusset)
-      # Mounting holes on horizontal leg
-      bracket = (
-          bracket.faces("<Z").workplane()
-          .pushPoints([(20, W / 2 - 10), (40, W / 2 - 10)])
-          .hole(HOLE_D)
-      )
-      result = bracket
+      with BuildPart() as part:
+          # L-profile
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(l_pts)
+                  Line(l_pts[-1], l_pts[0])
+              make_face()
+          extrude(amount=W)
+          # Triangular gusset
+          gusset_pts = [(T, T), (T + 15, T), (T, T + 15)]
+          with BuildSketch(Plane.XZ.offset(W * 0.35)) as sk2:
+              with BuildLine() as ln2:
+                  Polyline(gusset_pts)
+                  Line(gusset_pts[-1], gusset_pts[0])
+              make_face()
+          extrude(amount=W * 0.3)
+          # Mounting holes on horizontal leg
+          with BuildSketch(part.faces().sort_by(Axis.Z)[0]):
+              with Locations([(20, W / 2 - 10), (40, W / 2 - 10)]):
+                  Circle(HOLE_D / 2)
+          extrude(amount=-T, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Shelf bracket (triangular plate with fillet)"
     description: "Triangular bracket plate from polyline profile with fillet and two mounting holes"
     code: |
-      import cadquery as cq
-      ARM_H = 80.0   # vertical arm
-      ARM_W = 60.0   # horizontal arm
-      T = 5.0         # thickness
+      from build123d import *
+      ARM_H = 80.0
+      ARM_W = 60.0
+      T = 5.0
       HOLE_D = 6.0
       FILLET_R = 15.0
-      # Triangular profile
       pts = [(0, 0), (ARM_W, 0), (0, ARM_H)]
-      bracket = (
-          cq.Workplane("XZ")
-          .polyline(pts).close()
-          .extrude(T)
-      )
-      # Fillet the hypotenuse edge (longest edge at mid-height)
-      bracket = bracket.edges("|Y").fillet(FILLET_R)
-      # Mounting holes on the vertical leg
-      result = (
-          bracket.faces("<X").workplane()
-          .pushPoints([(T / 2, 15), (T / 2, ARM_H - 15)])
-          .hole(HOLE_D)
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          extrude(amount=T)
+          # Fillet the hypotenuse
+          edges_y = part.edges().filter_by(Axis.Y)
+          if len(edges_y) > 0:
+              fillet(edges_y, radius=FILLET_R)
+      result = part.part
 
   # E. Enclosures & Cases
 
   - title: "Electronics enclosure with standoffs"
-    description: "Rectangular box with shell, corner standoff cylinders, and screw holes"
+    description: "Rectangular box with hollow interior, corner standoff cylinders, and screw holes"
     code: |
-      import cadquery as cq
+      from build123d import *
       W, D, H = 80.0, 60.0, 30.0
       WALL = 2.0
       STANDOFF_D = 6.0
       STANDOFF_H = 5.0
-      SCREW_D = 2.5   # M2.5
-      # Shell the box
-      enclosure = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .faces(">Z")
-          .shell(-WALL)
-      )
-      # Corner standoff positions (inset from corners)
+      SCREW_D = 2.5
       INSET = 6.0
       corners = [
           (W / 2 - INSET, D / 2 - INSET),
@@ -1175,93 +988,39 @@ cookbook:
           (W / 2 - INSET, -D / 2 + INSET),
           (-W / 2 + INSET, -D / 2 + INSET),
       ]
-      # Add standoff cylinders on inside floor
-      standoffs = cq.Workplane("XY").workplane(offset=WALL)
-      for cx, cy in corners:
-          post = cq.Workplane("XY").workplane(offset=WALL).center(cx, cy).circle(STANDOFF_D / 2).extrude(STANDOFF_H)
-          enclosure = enclosure.union(post)
-      # Drill screw holes through standoffs
-      result = (
-          enclosure.faces(">Z").workplane(offset=-H + WALL + STANDOFF_H)
-          .pushPoints(corners)
-          .hole(SCREW_D)
-      )
-
-  - title: "Raspberry Pi case (real dimensions)"
-    description: "92x63x25mm case with shell, USB-C / HDMI / SD card cutouts, and standoffs at Pi mounting holes"
-    code: |
-      import cadquery as cq
-      # Pi 5 approximate board + case dims
-      W, D, H = 92.0, 63.0, 25.0
-      WALL = 2.0
-      # Standoff positions (Pi mounting holes, relative to center)
-      MOUNTS = [(24.5, 24.5), (-24.5, 24.5), (24.5, -24.5), (-24.5, -24.5)]
-      case = (
-          cq.Workplane("XY").box(W, D, H)
-          .edges("|Z").fillet(3.0)
-          .faces(">Z").shell(-WALL)
-      )
-      # Add standoffs
-      for mx, my in MOUNTS:
-          post = cq.Workplane("XY").workplane(offset=WALL).center(mx, my).circle(3.0).extrude(4.0)
-          case = case.union(post)
-      # USB-C cutout on front face
-      case = case.faces(">X").workplane().center(0, -3).rect(9.0, 3.5).cutBlind(-WALL * 2)
-      # Micro-HDMI cutout
-      case = case.faces(">X").workplane().center(-15, -3).rect(7.5, 3.5).cutBlind(-WALL * 2)
-      # SD card slot on left side
-      case = case.faces("<Y").workplane().center(10, -3).rect(14.0, 2.5).cutBlind(-WALL * 2)
-      result = case
-
-  - title: "Battery holder (AA size)"
-    description: "Rectangular cavity sized for AA battery with end clips and terminal contact slots"
-    code: |
-      import cadquery as cq
-      # AA battery: 14.5mm dia x 50.5mm length
-      BAT_D = 14.5
-      BAT_L = 50.5
-      WALL = 2.0
-      CLIP_T = 1.0
-      CLIP_H = 8.0
-      SLOT_W = 4.0
-      # Outer box around battery
-      OW = BAT_D + WALL * 2
-      OD = BAT_L + WALL * 2 + 4.0  # extra for spring contact
-      OH = BAT_D / 2 + WALL + 2.0
-      holder = cq.Workplane("XY").box(OW, OD, OH)
-      # Cavity for battery (cylindrical)
-      cavity = (
-          cq.Workplane("YZ")
-          .center(0, WALL + BAT_D / 2)
-          .circle(BAT_D / 2 + 0.3)  # clearance
-          .extrude(BAT_L + 2.0)
-          .translate((0, -BAT_L / 2 - 1.0, 0))
-      )
-      holder = holder.cut(cavity)
-      # Terminal slots on both ends
-      slot1 = cq.Workplane("XY").box(SLOT_W, WALL * 2, CLIP_H).translate((0, OD / 2, CLIP_H / 2))
-      slot2 = cq.Workplane("XY").box(SLOT_W, WALL * 2, CLIP_H).translate((0, -OD / 2, CLIP_H / 2))
-      result = holder.cut(slot1).cut(slot2)
+      with BuildPart() as part:
+          # Outer shell
+          Box(W, D, H)
+          with Locations((0, 0, WALL / 2)):
+              Box(W - 2*WALL, D - 2*WALL, H - WALL, mode=Mode.SUBTRACT)
+          # Corner standoffs
+          for cx, cy in corners:
+              with Locations((cx, cy, -H/2 + WALL)):
+                  Cylinder(radius=STANDOFF_D / 2, height=STANDOFF_H,
+                           align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Screw holes through standoffs
+          for cx, cy in corners:
+              with Locations((cx, cy, 0)):
+                  Hole(radius=SCREW_D / 2, depth=H)
+      result = part.part
 
   # F. Rotational Parts
 
   - title: "Spur gear (simplified involute)"
-    description: "Simplified spur gear with 12 teeth using polyline tooth profile and polarArray, plus center bore"
+    description: "Simplified spur gear with 12 teeth using polyline tooth profile, plus center bore"
     code: |
-      import cadquery as cq
+      from build123d import *
       import math
       N_TEETH = 12
       MODULE = 2.5
       FACE_W = 8.0
       BORE_D = 10.0
-      PD = MODULE * N_TEETH       # pitch diameter
-      OD = PD + 2 * MODULE        # outer diameter
-      RD = PD - 2.5 * MODULE      # root diameter
+      PD = MODULE * N_TEETH
+      OD = PD + 2 * MODULE
+      RD = PD - 2.5 * MODULE
       TOOTH_ARC = 360.0 / N_TEETH
-      HALF_T = TOOTH_ARC / 4      # half tooth angular width in degrees
-      # Build a single tooth profile (simplified trapezoidal)
+      HALF_T = TOOTH_ARC / 4
       r_root = RD / 2
-      r_pitch = PD / 2
       r_tip = OD / 2
       a = math.radians(HALF_T)
       tooth_pts = [
@@ -1270,526 +1029,434 @@ cookbook:
           (r_tip * math.cos(a * 0.4), r_tip * math.sin(a * 0.4)),
           (r_root * math.cos(a * 1.2), r_root * math.sin(a * 1.2)),
       ]
-      # Root circle disc
-      gear = cq.Workplane("XY").circle(r_root).extrude(FACE_W)
-      # Add one tooth and pattern it
-      tooth = cq.Workplane("XY").polyline(tooth_pts).close().extrude(FACE_W)
-      for i in range(N_TEETH):
-          angle = i * TOOTH_ARC
-          rotated = tooth.rotate((0, 0, 0), (0, 0, 1), angle)
-          gear = gear.union(rotated)
-      # Center bore
-      result = gear.faces(">Z").workplane().hole(BORE_D)
+      with BuildPart() as part:
+          # Root circle disc
+          Cylinder(radius=r_root, height=FACE_W)
+          # Add teeth
+          for i in range(N_TEETH):
+              angle = i * TOOTH_ARC
+              cos_a = math.cos(math.radians(angle))
+              sin_a = math.sin(math.radians(angle))
+              rotated = [(x * cos_a - y * sin_a, x * sin_a + y * cos_a) for x, y in tooth_pts]
+              with BuildSketch() as tsk:
+                  with BuildLine() as tln:
+                      Polyline(rotated)
+                      Line(rotated[-1], rotated[0])
+                  make_face()
+              extrude(amount=FACE_W)
+          # Center bore
+          Hole(radius=BORE_D / 2, depth=FACE_W)
+      result = part.part
 
   - title: "Pulley wheel (revolve with V-groove)"
     description: "Revolve a profile with a V-groove to create a pulley wheel with center bore"
     code: |
-      import cadquery as cq
+      from build123d import *
       OD = 50.0
       W = 15.0
       GROOVE_D = 8.0
-      GROOVE_ANGLE_W = 6.0
       BORE_D = 10.0
-      HUB_D = 20.0
-      # Half cross-section profile for revolve
       pts = [
           (BORE_D / 2, 0), (OD / 2, 0), (OD / 2, W * 0.3),
-          (OD / 2 - GROOVE_D, W / 2),  # groove bottom
+          (OD / 2 - GROOVE_D, W / 2),
           (OD / 2, W * 0.7), (OD / 2, W),
           (BORE_D / 2, W),
       ]
-      result = (
-          cq.Workplane("XZ")
-          .polyline(pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-          .faces(">Z").workplane()
-          .hole(BORE_D)
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+          Hole(radius=BORE_D / 2, depth=W + 1)
+      result = part.part
 
-  - title: "Cam profile (eccentric revolve)"
-    description: "Revolve an eccentric profile to create a cam with shaft bore"
+  - title: "Cam profile (eccentric disc)"
+    description: "Create an eccentric disc cam with shaft bore"
     code: |
-      import cadquery as cq
-      CAM_R = 25.0    # max radius
-      CAM_MIN = 15.0  # min radius
+      from build123d import *
+      CAM_R = 25.0
+      CAM_MIN = 15.0
       THICKNESS = 10.0
       BORE_D = 8.0
-      # Build cam using offset circle (eccentric disc)
       ECCENTRICITY = (CAM_R - CAM_MIN) / 2
       MEAN_R = (CAM_R + CAM_MIN) / 2
-      cam = (
-          cq.Workplane("XY")
-          .center(ECCENTRICITY, 0)
-          .circle(MEAN_R)
-          .extrude(THICKNESS)
-      )
-      # Bore at true center (0,0)
-      bore = cq.Workplane("XY").circle(BORE_D / 2).extrude(THICKNESS)
-      result = cam.cut(bore)
+      with BuildPart() as part:
+          with Locations((ECCENTRICITY, 0, 0)):
+              Cylinder(radius=MEAN_R, height=THICKNESS)
+          # Bore at true center (0,0)
+          Hole(radius=BORE_D / 2, depth=THICKNESS)
+      result = part.part
 
   # G. Hinge & Flexure
-
-  - title: "Pin hinge (two plates with knuckles)"
-    description: "Two plates with alternating cylinder knuckles (3 total) sharing a common pin hole"
-    code: |
-      import cadquery as cq
-      PLATE_W = 30.0
-      PLATE_L = 40.0
-      PLATE_T = 3.0
-      KNUCKLE_R = 4.0
-      KNUCKLE_L = 10.0
-      PIN_D = 3.0
-      # Left plate with 2 knuckles at positions 0 and 2
-      plate_l = cq.Workplane("XY").box(PLATE_W, PLATE_L, PLATE_T)
-      for i in [0, 2]:
-          k = (
-              cq.Workplane("XZ")
-              .workplane(offset=PLATE_L / 2)
-              .center(0, PLATE_T)
-              .circle(KNUCKLE_R)
-              .extrude(KNUCKLE_L)
-              .translate((0, -i * KNUCKLE_L, 0))
-          )
-          plate_l = plate_l.union(k)
-      # Right plate with 1 knuckle at position 1
-      plate_r = cq.Workplane("XY").box(PLATE_W, PLATE_L, PLATE_T).translate((PLATE_W + 2, 0, 0))
-      k_mid = (
-          cq.Workplane("XZ")
-          .workplane(offset=PLATE_L / 2)
-          .center(0, PLATE_T)
-          .circle(KNUCKLE_R)
-          .extrude(KNUCKLE_L)
-          .translate((PLATE_W + 2, -KNUCKLE_L, 0))
-      )
-      plate_r = plate_r.union(k_mid)
-      # Return left plate (both plates shown separately)
-      result = plate_l
 
   - title: "Living hinge (thin flexure bridge)"
     description: "Two rigid blocks connected by a thin (0.4mm) flexure bridge for fold-over hinge"
     code: |
-      import cadquery as cq
+      from build123d import *
       BLOCK_W = 40.0
       BLOCK_D = 30.0
       BLOCK_H = 5.0
-      HINGE_T = 0.4    # thin flex section
-      HINGE_L = 2.0    # length of flex zone
+      HINGE_T = 0.4
+      HINGE_L = 2.0
       GAP = HINGE_L
-      # Left block
-      left = cq.Workplane("XY").box(BLOCK_W, BLOCK_D, BLOCK_H)
-      # Right block offset by gap
-      right = cq.Workplane("XY").box(BLOCK_W, BLOCK_D, BLOCK_H).translate((BLOCK_W + GAP, 0, 0))
-      # Thin bridge connecting them at top surface
-      bridge = (
-          cq.Workplane("XY")
-          .workplane(offset=BLOCK_H / 2 - HINGE_T)
-          .center(BLOCK_W / 2 + GAP / 2, 0)
-          .rect(GAP + 2, BLOCK_D)
-          .extrude(HINGE_T)
-      )
-      result = left.union(right).union(bridge)
+      with BuildPart() as part:
+          # Left block
+          Box(BLOCK_W, BLOCK_D, BLOCK_H)
+          # Right block
+          with Locations((BLOCK_W + GAP, 0, 0)):
+              Box(BLOCK_W, BLOCK_D, BLOCK_H)
+          # Thin bridge
+          with Locations((BLOCK_W / 2 + GAP / 2, 0, BLOCK_H / 2 - HINGE_T / 2)):
+              Box(GAP + 2, BLOCK_D, HINGE_T)
+      result = part.part
 
   # H. Surface Features & Cutouts
 
-  - title: "Knurled grip (simplified circumferential grooves)"
-    description: "Cylinder with circumferential V-grooves via polarArray of small cuts for grip texture"
-    code: |
-      import cadquery as cq
-      GRIP_D = 25.0
-      GRIP_H = 40.0
-      N_GROOVES = 24
-      GROOVE_DEPTH = 1.0
-      GROOVE_W = 1.5
-      # Solid cylinder
-      grip = cq.Workplane("XY").circle(GRIP_D / 2).extrude(GRIP_H)
-      # Cut vertical grooves arranged radially
-      groove = (
-          cq.Workplane("XY")
-          .center(GRIP_D / 2, 0)
-          .rect(GROOVE_DEPTH * 2, GROOVE_W)
-          .extrude(GRIP_H)
-      )
-      for i in range(N_GROOVES):
-          angle = i * (360.0 / N_GROOVES)
-          rotated = groove.rotate((0, 0, 0), (0, 0, 1), angle)
-          grip = grip.cut(rotated)
-      result = grip
-
   - title: "USB-C port cutout"
-    description: "Panel plate with a USB-C shaped rounded-rectangle cutout (8.94 x 3.26mm, R=1.0)"
+    description: "Panel plate with a USB-C shaped rounded-rectangle cutout (8.94 x 3.26mm)"
     code: |
-      import cadquery as cq
+      from build123d import *
       PANEL_W = 40.0
       PANEL_H = 30.0
       PANEL_T = 2.0
       USB_W = 8.94
       USB_H = 3.26
-      USB_R = 1.0  # corner radius
-      result = (
-          cq.Workplane("XY")
-          .box(PANEL_W, PANEL_H, PANEL_T)
-          .faces(">Z").workplane()
-          .slot2D(USB_W, USB_H)
-          .cutThruAll()
-      )
+      with BuildPart() as part:
+          Box(PANEL_W, PANEL_H, PANEL_T)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              SlotOverall(USB_W, USB_H)
+          extrude(amount=-PANEL_T, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "D-sub connector cutout (DE-9)"
-    description: "Panel plate with trapezoidal D-sub cutout using real DE-9 dimensions (17.7 x 10.0mm)"
+    description: "Panel plate with trapezoidal D-sub cutout using real DE-9 dimensions"
     code: |
-      import cadquery as cq
+      from build123d import *
       PANEL_W = 50.0
       PANEL_H = 30.0
       PANEL_T = 2.0
-      # DE-9 D-sub approximate outline (trapezoidal)
       TOP_W = 16.0
       BOT_W = 12.5
       D_H = 10.0
-      # Trapezoidal cutout profile
       trap_pts = [
           (-BOT_W / 2, -D_H / 2),
           (BOT_W / 2, -D_H / 2),
           (TOP_W / 2, D_H / 2),
           (-TOP_W / 2, D_H / 2),
       ]
-      panel = cq.Workplane("XY").box(PANEL_W, PANEL_H, PANEL_T)
-      cutout = (
-          cq.Workplane("XY")
-          .workplane(offset=PANEL_T)
-          .polyline(trap_pts).close()
-          .extrude(-PANEL_T * 2)
-      )
-      result = panel.cut(cutout)
+      with BuildPart() as part:
+          Box(PANEL_W, PANEL_H, PANEL_T)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with BuildLine() as ln:
+                  Polyline(trap_pts)
+                  Line(trap_pts[-1], trap_pts[0])
+              make_face()
+          extrude(amount=-PANEL_T, mode=Mode.SUBTRACT)
+      result = part.part
 
   # I. Small Items
 
   - title: "Cable gland / grommet (revolved stepped profile)"
     description: "Revolve a stepped profile to create a cable gland with flange, body, and bore"
     code: |
-      import cadquery as cq
-      # Profile: flange + body + thread-like steps
+      from build123d import *
       BORE_R = 4.0
       BODY_R = 8.0
       FLANGE_R = 12.0
       pts = [
-          (BORE_R, 0), (FLANGE_R, 0), (FLANGE_R, 3),   # flange
-          (BODY_R, 3), (BODY_R, 7),                      # neck
-          (BODY_R + 1, 7), (BODY_R + 1, 9),              # step/ridge
-          (BODY_R, 9), (BODY_R, 18),                     # body
-          (BORE_R, 18),                                   # top bore
+          (BORE_R, 0), (FLANGE_R, 0), (FLANGE_R, 3),
+          (BODY_R, 3), (BODY_R, 7),
+          (BODY_R + 1, 7), (BODY_R + 1, 9),
+          (BODY_R, 9), (BODY_R, 18),
+          (BORE_R, 18),
       ]
-      result = (
-          cq.Workplane("XZ")
-          .polyline(pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
   - title: "Keychain tag (rounded plate + text + ring hole)"
     description: "Rounded rectangle plate with embossed text and a ring attachment hole"
     code: |
-      import cadquery as cq
+      from build123d import *
       TAG_W = 50.0
       TAG_H = 25.0
       TAG_T = 3.0
       CORNER_R = 5.0
       RING_HOLE_D = 5.0
-      tag = (
-          cq.Workplane("XY")
-          .rect(TAG_W, TAG_H)
-          .extrude(TAG_T)
-          .edges("|Z").fillet(CORNER_R)
-      )
-      # Ring hole on one end
-      tag = tag.faces(">Z").workplane().center(-TAG_W / 2 + 8, 0).hole(RING_HOLE_D)
-      # Text on top face
-      result = tag.faces(">Z").workplane().center(5, 0).text("TAG", 8.0, 0.5)
+      with BuildPart() as part:
+          with BuildSketch() as sk:
+              RectangleRounded(TAG_W, TAG_H, CORNER_R)
+          extrude(amount=TAG_T)
+          # Ring hole on one end
+          with Locations((-TAG_W / 2 + 8, 0)):
+              Hole(radius=RING_HOLE_D / 2, depth=TAG_T)
+          # Text on top face
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations((5, 0)):
+                  Text("TAG", font_size=8.0)
+          extrude(amount=0.5)
+      result = part.part
 
 # =============================================================================
-# ANTI-PATTERN LIBRARY — Common CadQuery Mistakes
+# ANTI-PATTERN LIBRARY - Common Build123d Mistakes
 # =============================================================================
 # Each entry shows wrong code, the error it produces, why it fails, and the fix.
 
 anti_patterns:
   - title: "Fillet before boolean"
     wrong_code: |
-      box = cq.Workplane("XY").box(20, 20, 10).edges("|Z").fillet(2.0)
-      result = box.union(cq.Workplane("XY").workplane(offset=10).box(10, 10, 5))
-    error_message: "StdFail_NotDone: BRep_Tool — filleted edges conflict with boolean operation"
-    explanation: "Fillet modifies edge topology. When you union after filleting, the kernel cannot reconcile the changed edges. Always apply fillets and chamfers as the LAST operation, after all booleans are complete."
+      with BuildPart() as part:
+          Box(20, 20, 10)
+          fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+          with Locations((0, 0, 10)):
+              Box(10, 10, 5)  # boolean union after fillet
+    error_message: "StdFail_NotDone: BRep_Tool - filleted edges conflict with boolean operation"
+    explanation: "Fillet modifies edge topology. When you add geometry after filleting, the kernel cannot reconcile the changed edges. Always apply fillets and chamfers as the LAST operation, after all booleans are complete."
     correct_code: |
-      box = cq.Workplane("XY").box(20, 20, 10)
-      combined = box.union(cq.Workplane("XY").workplane(offset=10).box(10, 10, 5))
-      result = combined.edges("|Z").fillet(2.0)
+      with BuildPart() as part:
+          Box(20, 20, 10)
+          with Locations((0, 0, 10)):
+              Box(10, 10, 5)
+          fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+      result = part.part
 
-  - title: "Shell on complex boolean body"
+  - title: "offset_3d on complex boolean body"
     wrong_code: |
-      body = cq.Workplane("XY").box(40, 40, 20)
-      for i in range(5):
-          body = body.union(cq.Workplane("XY").center(i*8, 0).circle(3).extrude(25))
-      result = body.faces(">Z").shell(-2.0)
-    error_message: "StdFail_NotDone: BRep_API — shell operation failed on complex body"
-    explanation: "Shell struggles with bodies that have many boolean seams. The kernel cannot offset complex intersecting surfaces reliably. Either shell EARLY (before booleans) or use manual hollowing by cutting a slightly smaller solid from the inside."
+      with BuildPart() as part:
+          Box(40, 40, 20)
+          for i in range(5):
+              with Locations((i*8 - 16, 0, 0)):
+                  Cylinder(radius=3, height=25)
+          offset_3d(openings=part.faces().sort_by(Axis.Z)[-1], amount=-2.0)
+    error_message: "StdFail_NotDone: BRep_API - offset_3d operation failed on complex body"
+    explanation: "offset_3d (shell equivalent) struggles with bodies that have many boolean seams. The kernel cannot offset complex intersecting surfaces reliably. Either offset_3d EARLY (on a simple shape) or use manual hollowing by subtracting a smaller inner solid."
     correct_code: |
-      body = cq.Workplane("XY").box(40, 40, 20)
-      # Shell the simple box FIRST, then add features
-      body = body.faces(">Z").shell(-2.0)
-      for i in range(5):
-          body = body.union(cq.Workplane("XY").center(i*8, 0).circle(3).extrude(25))
-      result = body
+      with BuildPart() as part:
+          Box(40, 40, 20)
+          # Hollow first, then add features
+          with Locations((0, 0, 1)):
+              Box(36, 36, 19, mode=Mode.SUBTRACT)
+          for i in range(5):
+              with Locations((i*8 - 16, 0, 0)):
+                  Cylinder(radius=3, height=25)
+      result = part.part
 
   - title: "Revolve profile crossing axis"
     wrong_code: |
       pts = [(-5, 0), (15, 0), (15, 30), (-5, 30)]
-      result = (
-          cq.Workplane("XZ").polyline(pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
     error_message: "Standard_ConstructionError: profile crosses the revolve axis"
-    explanation: "The profile extends to X=-5, which crosses the revolve axis at X=0. ALL profile points must be on the same side of the axis (positive X for revolve around Y). Move the profile so its minimum X coordinate is >= 0."
+    explanation: "The profile extends to X=-5, which crosses the revolve axis at X=0. ALL profile points must be on the same side of the axis (positive X for revolve around Z on XZ plane). Move the profile so its minimum X coordinate is >= 0."
     correct_code: |
       pts = [(0, 0), (15, 0), (15, 30), (0, 30)]
-      result = (
-          cq.Workplane("XZ").polyline(pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(pts)
+                  Line(pts[-1], pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+      result = part.part
 
   - title: "Boolean on non-overlapping bodies"
     wrong_code: |
-      plate = cq.Workplane("XY").box(40, 40, 5)
-      # Cutter sits exactly on top surface — does not penetrate
-      cutter = cq.Workplane("XY").workplane(offset=5).box(10, 10, 10)
-      result = plate.cut(cutter)
-    error_message: "No error — but the cut has no visible effect (silent no-op)"
+      with BuildPart() as part:
+          Box(40, 40, 5)
+          # Cutter sits exactly on top surface - does not penetrate
+          with Locations((0, 0, 5)):
+              Box(10, 10, 10, mode=Mode.SUBTRACT)
+    error_message: "No error - but the cut has no visible effect (silent no-op)"
     explanation: "The cutting tool must OVERLAP the target body. If it only touches a face or sits outside, the boolean produces no change. Always extend the cutter BEYOND the target surface by at least 0.1mm."
     correct_code: |
-      plate = cq.Workplane("XY").box(40, 40, 5)
-      # Cutter extends 1mm below the top surface into the plate
-      cutter = cq.Workplane("XY").workplane(offset=4).box(10, 10, 10)
-      result = plate.cut(cutter)
-
-  - title: "translate() wrong signature"
-    wrong_code: |
-      box = cq.Workplane("XY").box(10, 10, 10)
-      result = box.translate(10, 20, 0)
-    error_message: "TypeError: translate() takes 2 positional arguments but 4 were given"
-    explanation: "CadQuery's translate() expects a SINGLE tuple argument, not three separate numbers. The signature is .translate((x, y, z)) with double parentheses."
-    correct_code: |
-      box = cq.Workplane("XY").box(10, 10, 10)
-      result = box.translate((10, 20, 0))
-
-  - title: "Loft with mismatched profiles"
-    wrong_code: |
-      result = (
-          cq.Workplane("XY").rect(40, 40)
-          .workplane(offset=50).circle(20)
-          .loft()
-      )
-    error_message: "Loft produces twisted or self-intersecting geometry"
-    explanation: "Lofting between profiles with very different edge counts (4-sided rect to smooth circle) can produce twisted results. Use ruled=True for a cleaner linear transition, or use similar profile types (e.g. roundedRect to circle, or polygons with similar vertex counts)."
-    correct_code: |
-      result = (
-          cq.Workplane("XY").rect(40, 40)
-          .workplane(offset=50).circle(20)
-          .loft(ruled=True)
-      )
+      with BuildPart() as part:
+          Box(40, 40, 5)
+          # Cutter extends into the plate
+          with Locations((0, 0, 4)):
+              Box(10, 10, 10, mode=Mode.SUBTRACT)
+      result = part.part
 
   - title: "Fillet radius too large"
     wrong_code: |
-      result = (
-          cq.Workplane("XY").box(10, 10, 5)
-          .edges("|Z").fillet(8.0)
-      )
-    error_message: "StdFail_NotDone: BRep_Tool — fillet radius exceeds edge length"
+      with BuildPart() as part:
+          Box(10, 10, 5)
+          fillet(part.edges().filter_by(Axis.Z), radius=8.0)
+    error_message: "StdFail_NotDone: BRep_Tool - fillet radius exceeds edge length"
     explanation: "The box is 10mm wide but the fillet radius is 8mm. The fillet radius must be LESS than half the shortest adjacent edge. For a 10mm edge, max safe fillet is ~4.5mm. Always keep fillet radius well below half the smallest dimension."
     correct_code: |
-      result = (
-          cq.Workplane("XY").box(10, 10, 5)
-          .edges("|Z").fillet(2.0)
-      )
+      with BuildPart() as part:
+          Box(10, 10, 5)
+          fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+      result = part.part
 
   - title: "Blanket fillet on complex geometry"
     wrong_code: |
-      helmet = helmet.cut(visor_cutter)
-      helmet = helmet.cut(mouth_cutter)
-      result = helmet.edges().fillet(2.0)
+      # After building complex loft+boolean geometry
+      fillet(part.edges(), radius=2.0)
     error_message: "StdFail_NotDone: BRep_API: command not done"
-    explanation: "Calling .edges().fillet() on geometry built from loft, shell, and multiple boolean operations tries to fillet EVERY edge including tiny internal edges. The kernel cannot compute fillets on many of these edges. Wrap in try/except for graceful degradation, or use selective edge fillet."
+    explanation: "Calling fillet() on ALL edges of geometry built from loft, offset_3d, and multiple boolean operations tries to fillet EVERY edge including tiny internal edges. The kernel cannot compute fillets on many of these edges. Wrap in try/except for graceful degradation, or use selective edge fillet."
     correct_code: |
-      helmet = helmet.cut(visor_cutter)
-      helmet = helmet.cut(mouth_cutter)
       try:
-          result = helmet.edges().fillet(2.0)
-      except:
-          result = helmet
-
-  - title: "Sweep path without .wire()"
-    wrong_code: |
-      path = (
-          cq.Workplane("XZ")
-          .moveTo(0, 0).lineTo(0, 30)
-          .threePointArc((15, 45), (30, 45))
-      )
-      result = cq.Workplane("XY").circle(3).sweep(path)
-    error_message: "ValueError: Cannot sweep — path is not a Wire object"
-    explanation: "Sweep requires a Wire object as path, but chaining line/arc operations produces edges, not a wire. You must call .wire() at the end to combine edges into a single wire before sweeping."
-    correct_code: |
-      path = (
-          cq.Workplane("XZ")
-          .moveTo(0, 0).lineTo(0, 30)
-          .threePointArc((15, 45), (30, 45))
-          .wire()
-      )
-      result = cq.Workplane("XY").circle(3).sweep(path)
+          fillet(part.edges(), radius=2.0)
+      except Exception:
+          pass  # graceful degradation
+      result = part.part
 
   - title: "Too many chained booleans"
     wrong_code: |
-      base = cq.Workplane("XY").box(80, 80, 5)
-      for i in range(15):
-          col = cq.Workplane("XY").center(i*5 - 35, 0).circle(2).extrude(20)
-          base = base.union(col)
-      result = base.edges("|Z").fillet(1.0)
-    error_message: "OCP kernel crash or tolerance drift — geometry becomes invalid after many booleans"
-    explanation: "Each boolean operation accumulates floating-point tolerance errors. After 10+ unions the geometry may become invalid, causing downstream operations (fillet, shell) to crash. Merge in groups of 3-4, or simplify the design to use fewer boolean operations."
+      with BuildPart() as part:
+          Box(80, 80, 5)
+          for i in range(15):
+              with Locations((i*5 - 35, 0, 5)):
+                  Cylinder(radius=2, height=20, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          fillet(part.edges().filter_by(Axis.Z), radius=1.0)
+    error_message: "OCP kernel crash or tolerance drift - geometry becomes invalid after many booleans"
+    explanation: "Each boolean operation accumulates floating-point tolerance errors. After 10+ unions the geometry may become invalid, causing downstream operations (fillet) to crash. Use GridLocations or batch patterns instead of individual boolean loops."
     correct_code: |
-      base = cq.Workplane("XY").box(80, 80, 5)
-      # Build columns as a single compound, then union once
-      cols = cq.Workplane("XY").pushPoints([(i*5 - 35, 0) for i in range(15)])
-      cols = cols.circle(2).extrude(20)
-      result = base.union(cols)
+      with BuildPart() as part:
+          Box(80, 80, 5)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations([(i*5 - 35, 0) for i in range(15)]):
+                  Circle(2)
+          extrude(amount=20)
+      result = part.part
 
-  - title: "Hole on wrong face"
+  - title: "Wrong face selection"
     wrong_code: |
-      # Intent: drill holes on TOP face of a box
-      result = (
-          cq.Workplane("XY").box(40, 40, 10)
-          .faces(">X")  # WRONG: this selects the front face, not top
-          .workplane()
-          .pushPoints([(10, 0), (-10, 0)])
-          .hole(5.0)
-      )
-    error_message: "No crash — but holes appear on the wrong face (front instead of top)"
-    explanation: "Face selectors use axis directions: >Z = top, <Z = bottom, >X = front, <X = back, >Y = right, <Y = left. Mixing up axes puts features on the wrong face. Always verify: >Z means the face with the highest Z value (top)."
+      with BuildPart() as part:
+          Box(40, 40, 10)
+          # Intent: drill holes on TOP face
+          with BuildSketch(part.faces().sort_by(Axis.X)[-1]):  # WRONG: selects front face
+              with Locations([(10, 0), (-10, 0)]):
+                  Circle(2.5)
+          extrude(amount=-10, mode=Mode.SUBTRACT)
+    error_message: "No crash - but holes appear on the wrong face (front instead of top)"
+    explanation: "Face selectors use sort_by(Axis.Z)[-1] for top, sort_by(Axis.Z)[0] for bottom, sort_by(Axis.X)[-1] for front. Mixing up axes puts features on the wrong face."
     correct_code: |
-      # Correct: use >Z to select the TOP face
-      result = (
-          cq.Workplane("XY").box(40, 40, 10)
-          .faces(">Z")  # CORRECT: top face
-          .workplane()
-          .pushPoints([(10, 0), (-10, 0)])
-          .hole(5.0)
-      )
+      with BuildPart() as part:
+          Box(40, 40, 10)
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):  # CORRECT: top face
+              with Locations([(10, 0), (-10, 0)]):
+                  Circle(2.5)
+          extrude(amount=-10, mode=Mode.SUBTRACT)
+      result = part.part
 
-  - title: "3D operation on 2D sketch (no solid on stack)"
+  - title: "Missing make_face() in sketch with BuildLine"
     wrong_code: |
-      import cadquery as cq
-      plate = cq.Workplane("XY").rect(40, 20)
-      cutter = cq.Workplane("XY").rect(10, 5).extrude(5)
-      result = plate.cut(cutter)
-    error_message: "ValueError: Cannot find a solid on the stack or in the parent chain"
-    explanation: "After .rect(), .circle(), .polyline(), or .moveTo()/.lineTo(), CadQuery's stack holds 2D wires, NOT a solid. You MUST call .extrude(), .revolve(), .sweep(), or .loft() to produce a 3D solid BEFORE calling .cut(), .fillet(), .chamfer(), .shell(), or .hole(). Primitive constructors like .box() and .sphere() already produce solids."
+      with BuildPart() as part:
+          with BuildSketch() as sk:
+              with BuildLine() as ln:
+                  Polyline([(0, 0), (10, 0), (10, 10), (0, 10)])
+                  Line((0, 10), (0, 0))
+              # Missing make_face()!
+          extrude(amount=5)
+    error_message: "ValueError: No faces to extrude"
+    explanation: "When using BuildLine inside BuildSketch, you must call make_face() after closing the line to convert the wire into a face that can be extruded."
     correct_code: |
-      import cadquery as cq
-      plate = cq.Workplane("XY").rect(40, 20).extrude(5)
-      cutter = cq.Workplane("XY").rect(10, 5).extrude(10)
-      result = plate.cut(cutter)
+      with BuildPart() as part:
+          with BuildSketch() as sk:
+              with BuildLine() as ln:
+                  Polyline([(0, 0), (10, 0), (10, 10), (0, 10)])
+                  Line((0, 10), (0, 0))
+              make_face()
+          extrude(amount=5)
+      result = part.part
 
 # =============================================================================
-# CADQUERY API QUICK-REFERENCE
+# BUILD123D API QUICK-REFERENCE
 # =============================================================================
 # Compact reference for error-prone operations.
-# Each entry covers signature, key params, and gotchas.
 
 api_reference:
   - operation: "loft()"
-    signature: "Workplane.loft(ruled=False, combine=True)"
-    returns: "Workplane with a solid lofted between pending wires on different workplanes"
+    signature: "loft(ruled=False) inside BuildPart context with multiple BuildSketch sections"
+    returns: "Adds a lofted solid between pending sketches on different planes"
     params:
       - "ruled (bool): True for straight ruled surface between profiles, False for smooth"
-      - "combine (bool): True to union with existing solid, False for standalone"
     gotchas:
-      - "All profiles must be on separate workplanes at different offsets — use .workplane(offset=N) between each"
-      - "Profiles with very different edge counts (e.g. rect→circle) may twist — use ruled=True or similar vertex counts"
+      - "Each profile must be in its own BuildSketch on a separate plane (use Plane.XY.offset(N))"
+      - "Profiles with very different edge counts (e.g. Rectangle to Circle) may twist - use ruled=True"
       - "Minimum 2 profiles required; profiles must not self-intersect"
 
   - operation: "sweep()"
-    signature: "Workplane.sweep(path, isFrenet=False, transition='right', combine=True)"
-    returns: "Workplane with a solid swept along the path wire"
+    signature: "sweep() inside BuildPart context after BuildLine (path) + BuildSketch (profile)"
+    returns: "Adds a swept solid"
     params:
-      - "path (Wire): MUST be a Wire object — call .wire() on your edge chain"
-      - "isFrenet (bool): True for Frenet frame (better for helical paths), False for default"
-      - "transition ('right'|'round'|'transformed'): how profile handles path curvature"
+      - "Define path first with BuildLine, then profile with BuildSketch perpendicular to path start"
     gotchas:
-      - "Path MUST be a Wire — forgetting .wire() is the #1 sweep error"
+      - "Path must be defined first as a BuildLine"
       - "Profile should be perpendicular to the path start tangent"
       - "Self-intersecting sweep (tight curves with large profile) produces invalid geometry"
 
   - operation: "revolve()"
-    signature: "Workplane.revolve(angleDegrees=360, axisStart=(0,0,0), axisEnd=(0,1,0), combine=True)"
-    returns: "Workplane with a solid of revolution"
+    signature: "revolve(axis=Axis.Z, revolution_arc=360) inside BuildPart context"
+    returns: "Adds a revolved solid from the pending sketch"
     params:
-      - "angleDegrees (float): rotation angle, 360 for full revolution"
-      - "axisStart, axisEnd: two points defining the revolve axis direction"
+      - "axis: Axis of revolution (Axis.X, Axis.Y, Axis.Z)"
+      - "revolution_arc (float): rotation angle in degrees, 360 for full revolution"
     gotchas:
-      - "CRITICAL: Profile must be ENTIRELY on one side of the revolve axis — any point crossing it causes Standard_ConstructionError"
-      - "For XZ plane revolve around Y: all X coordinates must be >= 0"
-      - "Profile must be a closed wire (use .close() after polyline/spline)"
+      - "CRITICAL: Profile must be ENTIRELY on one side of the revolve axis"
+      - "For XZ plane revolve around Z: all X coordinates must be >= 0"
+      - "Profile must be a closed face (use make_face() after BuildLine)"
 
-  - operation: "shell()"
-    signature: "Workplane.shell(thickness)"
-    returns: "Workplane with a hollowed-out solid"
+  - operation: "offset_3d()"
+    signature: "offset_3d(openings=face, amount=-thickness)"
+    returns: "Hollows the current solid, opening at the specified face"
     params:
-      - "thickness (float): negative = shell inward (common), positive = shell outward"
-      - "The face the operation is called on (.faces('>Z').shell()) is the face REMOVED (opened)"
+      - "openings: face(s) to remove (e.g. part.faces().sort_by(Axis.Z)[-1])"
+      - "amount (float): negative = shell inward (common), positive = shell outward"
     gotchas:
-      - "Shell FAILS on bodies with complex boolean seams — shell BEFORE booleans when possible"
-      - "Thin features or sharp internal corners cause kernel failures — simplify geometry first"
-      - "Only one face can be removed per shell call; for multiple openings, shell then cut"
+      - "offset_3d FAILS on bodies with complex boolean seams - use it EARLY or use boolean subtraction"
+      - "Thin features or sharp internal corners cause kernel failures"
+      - "Prefer boolean subtraction (outer - inner) for complex geometry"
 
-  - operation: "Selector strings"
-    signature: ".faces(selector) / .edges(selector) / .wires(selector)"
-    returns: "Filtered set of faces, edges, or wires"
+  - operation: "Face/edge selectors"
+    signature: "part.faces().sort_by(Axis.Z)[-1] / part.edges().filter_by(Axis.Z)"
+    returns: "Selected faces or edges"
     params:
-      - ">Z / <Z: max / min along axis (top/bottom face)"
-      - "|Z: parallel to Z axis (vertical edges/faces)"
-      - "#Z: perpendicular to Z axis (horizontal edges/faces)"
+      - "sort_by(Axis.Z)[-1]: topmost face (highest Z)"
+      - "sort_by(Axis.Z)[0]: bottommost face (lowest Z)"
+      - "filter_by(Axis.Z): edges parallel to Z axis (vertical edges)"
+      - "sort_by(Axis.Z)[-4:]: top 4 edges (e.g. top horizontal edges of a box)"
     gotchas:
-      - ">X is FRONT face (max X), <X is BACK — not left/right"
-      - ">Y is RIGHT, <Y is LEFT — easy to confuse with X"
-      - "Compound selectors not supported — chain .faces('>Z').faces('>X') does NOT intersect, it replaces"
+      - "sort_by returns ordered list - [-1] is max, [0] is min"
+      - "filter_by returns edges parallel to the given axis"
+      - "After booleans, face counts change - be careful with indices"
 
-  - operation: "Workplane constructor & offsets"
-    signature: "cq.Workplane('XY') / .workplane(offset=N) / .transformed(offset, rotate) / .center(x, y)"
-    returns: "New workplane for sketching or feature placement"
+  - operation: "Locations / GridLocations / PolarLocations"
+    signature: "with Locations(pts) / with GridLocations(x_spacing, y_spacing, x_count, y_count) / with PolarLocations(radius, count)"
+    returns: "Context manager placing subsequent objects at each location"
     params:
-      - "'XY'/'XZ'/'YZ': base plane selection — XY is floor, XZ is front wall, YZ is side wall"
-      - "offset (float): distance along plane normal from current position"
-      - ".center(x, y): shifts the workplane origin within the current plane"
+      - "Locations: list of (x,y) or (x,y,z) tuples"
+      - "GridLocations: rectangular grid by spacing and count"
+      - "PolarLocations: points on a circle - radius and count"
     gotchas:
-      - ".workplane(offset=N) is relative to current context face, not absolute Z"
-      - ".transformed(offset=(0,0,10), rotate=(45,0,0)) for combined translate+rotate"
-      - ".center() does NOT move existing geometry — it only shifts where the NEXT sketch is drawn"
+      - "Locations are relative to the current context (BuildPart or BuildSketch)"
+      - "Operations inside the Locations context execute once at EACH location"
 
-  - operation: "pushPoints / rarray / polarArray"
-    signature: ".pushPoints(pts) / .rarray(xSpacing, ySpacing, xCount, yCount) / .polarArray(radius, startAngle, angle, count)"
-    returns: "Workplane with pending points for the next operation (hole, circle, cboreHole, etc.)"
+  - operation: "BuildPart / BuildSketch / BuildLine"
+    signature: "with BuildPart() as part: / with BuildSketch(plane) as sk: / with BuildLine() as ln:"
+    returns: "Context managers for 3D part, 2D sketch, or 1D line construction"
     params:
-      - "pushPoints: list of (x,y) tuples for arbitrary positions"
-      - "rarray: rectangular grid by spacing and count per axis"
-      - "polarArray: points on a circle — radius, start angle, sweep angle, count"
+      - "BuildPart: no required params; result is part.part"
+      - "BuildSketch: optional plane arg (Plane.XY, face, Plane.XY.offset(N))"
+      - "BuildLine: no required params; used inside BuildSketch for complex profiles"
     gotchas:
-      - "Points are relative to the CURRENT workplane origin, not global coordinates"
-      - "The next operation (hole, circle, etc.) executes once at EACH pending point"
-      - "polarArray angle=360 distributes evenly around full circle; angle<360 for arc segment"
-
-  - operation: ".tag() / .faces(tag=)"
-    signature: ".tag('name') / .faces(tag='name') / .edges(tag='name')"
-    returns: "tag() stores a reference to the current state; tag= recalls it for selection"
-    params:
-      - ".tag('name'): snapshot the current solid state under a name"
-      - ".faces('>Z', tag='name'): select faces from the tagged state, not current state"
-    gotchas:
-      - "Tags survive boolean operations — tag BEFORE a union/cut to reference original faces"
-      - "Essential pattern: .tag('base') ... .union(other) ... .faces('>Z', tag='base') to find faces that got merged"
-      - "Tag names are strings — must match exactly (case-sensitive)"
+      - "BuildSketch inside BuildPart automatically adds sketch for subsequent extrude()"
+      - "BuildLine inside BuildSketch requires make_face() to close and fill"
+      - "Always extract result as part.part from the outermost BuildPart"
 
 # =============================================================================
 # REAL-WORLD DIMENSION TABLES
@@ -1848,10 +1515,10 @@ dimension_tables:
   - category: "Clearance and Press-Fit Tolerances (ISO 286)"
     description: "Standard tolerance pairs for shaft-in-hole fits. Gap values for nominal 10-50mm range."
     data:
-      - "H7/g6 (sliding fit): gap=+0.010 to +0.050 — shaft turns freely, good for bearings"
-      - "H7/h6 (location fit): gap=0.000 to +0.039 — snug, locates accurately, removable by hand"
-      - "H7/k6 (transition fit): gap=-0.018 to +0.021 — may need light press, slight interference possible"
-      - "H7/p6 (press fit): gap=-0.042 to -0.001 — requires press or heat, permanent assembly"
+      - "H7/g6 (sliding fit): gap=+0.010 to +0.050 - shaft turns freely, good for bearings"
+      - "H7/h6 (location fit): gap=0.000 to +0.039 - snug, locates accurately, removable by hand"
+      - "H7/k6 (transition fit): gap=-0.018 to +0.021 - may need light press, slight interference possible"
+      - "H7/p6 (press fit): gap=-0.042 to -0.001 - requires press or heat, permanent assembly"
       - "Rule of thumb: clearance=+0.1mm per 25mm nominal for easy sliding; press=-0.02 to -0.05mm"
       - "For 3D prints: add +0.2mm to clearance fits to compensate for layer squish and shrinkage"
 
@@ -1870,20 +1537,17 @@ dimension_tables:
   - category: "Sheet Metal Bend Radii"
     description: "Minimum inside bend radii by material and thickness. All values in mm."
     data:
-      - "Aluminum 5052-H32: t<=1.6 → R=0, t=2.0 → R=1.0, t=3.0 → R=1.5"
-      - "Aluminum 6061-T6: t<=1.6 → R=1.0t, t=2.0 → R=1.5t, t=3.0 → R=2.0t"
-      - "Mild steel (A36): t<=1.6 → R=0.5t, t=2.0 → R=1.0t, t=3.0 → R=1.5t"
-      - "Stainless 304: t<=1.6 → R=1.0t, t=2.0 → R=1.5t, t=3.0 → R=2.0t"
+      - "Aluminum 5052-H32: t<=1.6 -> R=0, t=2.0 -> R=1.0, t=3.0 -> R=1.5"
+      - "Aluminum 6061-T6: t<=1.6 -> R=1.0t, t=2.0 -> R=1.5t, t=3.0 -> R=2.0t"
+      - "Mild steel (A36): t<=1.6 -> R=0.5t, t=2.0 -> R=1.0t, t=3.0 -> R=1.5t"
+      - "Stainless 304: t<=1.6 -> R=1.0t, t=2.0 -> R=1.5t, t=3.0 -> R=2.0t"
       - "K-factor (neutral axis): 0.33 for air bend, 0.44 for bottoming, 0.50 for coining"
-      - "Minimum flange length: 4t + R (material thickness × 4 + bend radius)"
+      - "Minimum flange length: 4t + R (material thickness x 4 + bend radius)"
       - "Hole-to-bend distance: >=2.5t + R to avoid distortion"
 
 # =============================================================================
 # DIMENSION ESTIMATION GUIDANCE
 # =============================================================================
-# Decision rules for when to guess dimensions vs ask, size-class mappings,
-# scale anchors, and relative sizing rules.
-
 dimension_guidance:
   when_to_estimate:
     - "For real-world objects (mug, bolt, phone case, bracket), use typical dimensions from the dimension tables or common knowledge"
@@ -1926,151 +1590,159 @@ dimension_guidance:
     - "Fillet radius: typically 10-20% of the smallest adjacent feature dimension"
 
 # =============================================================================
-# FAILURE PREVENTION — Proactive "If X Then Y" Rules
+# FAILURE PREVENTION - Proactive "If X Then Y" Rules
 # =============================================================================
-# These rules help the AI avoid common CadQuery failures BEFORE they happen.
-# Read these before generating code and follow them proactively.
-
 failure_prevention:
   self_diagnosis:
-    - "If fillet() fails, first check if the code uses .edges().fillet() on complex geometry (loft/shell/booleans) — if so, the pattern itself is the problem. Wrap in try/except or use selective edge fillet. If geometry is simple, reduce radius to 1/5 of shortest adjacent edge"
-    - "If shell() raises 'Standard_ConstructionError', geometry has thin walls, sharp internal corners, or non-manifold edges — simplify first"
-    - "If loft() fails with 'profiles are incompatible', sections have different edge counts — use same number of points/edges in each profile"
-    - "If revolve() produces unexpected geometry, the profile likely crosses the rotation axis — ensure all profile points are on one side"
-    - "If a boolean cut produces no visible change, the cutting tool does not intersect the target body — check position and size"
-    - "If sweep() fails, the path is probably not a valid Wire — ensure .wire() is called and path does not self-intersect"
-    - "If chamfer() fails after multiple booleans, OpenCascade cannot resolve edge topology — apply chamfer earlier or use fillet instead"
-    - "If error says 'Cannot find a solid on the stack' or 'no pending wires': you called a 3D operation (.cut, .fillet, .shell, .hole) on a 2D sketch that was never extruded. Add the missing .extrude()/.revolve()/.sweep()/.loft() call. Also check for cq.Workplane() calls that accidentally create a fresh 2D context instead of continuing from the existing solid."
+    - "If fillet() fails, first check if you are filleting ALL edges on complex geometry (loft/offset_3d/booleans) - if so, wrap in try/except or use selective edge fillet. If geometry is simple, reduce radius to 1/5 of shortest adjacent edge"
+    - "If offset_3d() raises 'Standard_ConstructionError', geometry has thin walls, sharp internal corners, or non-manifold edges - use boolean subtraction hollowing instead"
+    - "If loft() fails with 'profiles are incompatible', sections have different edge counts - use same number of points/edges in each profile"
+    - "If revolve() produces unexpected geometry, the profile likely crosses the rotation axis - ensure all profile points are on one side"
+    - "If a boolean cut (Mode.SUBTRACT) produces no visible change, the cutting tool does not intersect the target body - check position and size"
+    - "If sweep() fails, the path is probably not valid - ensure BuildLine creates a connected wire"
+    - "If chamfer() fails after multiple booleans, OpenCascade cannot resolve edge topology - apply chamfer earlier or use fillet instead"
+    - "If error says 'no pending faces' or similar: you likely forgot make_face() after BuildLine, or the sketch has no geometry to extrude"
 
   preemptive_warnings:
-    - "If you are about to use shell() after more than 3 boolean operations, STOP — simplify by reducing booleans, or apply shell() before the cuts"
-    - "If you are about to fillet edges at a boolean intersection, STOP — do booleans first, THEN fillet the result (never fillet before boolean)"
+    - "If you are about to use offset_3d() after more than 3 boolean operations, STOP - use boolean subtraction hollowing instead"
+    - "If you are about to fillet edges at a boolean intersection, STOP - do booleans first, THEN fillet the result"
     - "If you are about to loft() between more than 3 profiles, consider whether stacked extrudes with fillets would be more robust"
-    - "If your design requires more than 6 boolean operations, split into sub-bodies: build each region separately, then union at the end"
-    - "If you are using nested .faces() selectors more than 2 levels deep, use .tag() to name important faces instead"
-    - "If a wall thickness in your design is below 1.5mm, shell() and boolean operations become very fragile — increase thickness or skip shell"
-    - "If you are about to use .edges().fillet() on a body built with loft, shell, or more than 2 booleans, STOP — wrap it in try/except for graceful degradation"
+    - "If your design requires more than 6 boolean operations, use Locations/GridLocations/PolarLocations to batch them"
+    - "If a wall thickness in your design is below 1.5mm, offset_3d and boolean operations become very fragile - increase thickness or use boolean subtraction"
+    - "If you are about to fillet ALL edges on a body built with loft, offset_3d, or more than 2 booleans, STOP - wrap in try/except"
 
   alternative_operations:
     - "If loft() fails between two profiles: extrude the base profile, then use fillet/chamfer to approximate the shape transition"
-    - "If shell() fails on a complex body: build the shape as hollow from the start using boolean subtraction of an inner body"
-    - "If a complex sweep() fails: break the path into straight segments and use extrude + rotate + union for each segment"
+    - "If offset_3d() fails on a complex body: build the shape as hollow from the start using boolean subtraction of an inner body"
+    - "If a complex sweep() fails: break the path into straight segments and use extrude + Location for each segment"
     - "If fillet() fails on specific edges: try chamfer() instead (more tolerant of edge topology issues)"
-    - "If a circular pattern fails: build one instance and use a Python loop with .rotate() and .union() to replicate"
+    - "If a circular pattern fails: use PolarLocations instead of manual rotation loops"
     - "If a complex 2D profile causes extrude to fail: simplify the profile to straight lines and arcs only (no splines)"
 
   complexity_assessment:
     - "If your code exceeds 50 lines, consider whether it can be split into named helper variables for each major feature"
     - "If you are planning more than 8 distinct operations, list them in a comment block first to verify the sequence"
-    - "If the object has more than 4 distinct feature types (holes, slots, fillets, bosses, ribs), plan build order: base shape → large features → small details → fillets last"
-    - "If you are tempted to use more than 2 workplane offsets, use .tag() on key faces and reference them by tag instead"
-    - "If you need to select a face that is not a simple min/max face, use .tag() during construction rather than complex selector strings"
+    - "If the object has more than 4 distinct feature types (holes, slots, fillets, bosses, ribs), plan build order: base shape -> large features -> small details -> fillets last"
 
   pre_output_checklist:
     - "Before outputting code, verify: Does every fillet radius stay below half the smallest adjacent edge?"
     - "Before outputting code, verify: Are all boolean cutting tools positioned to actually intersect the target body?"
-    - "Before outputting code, verify: Is shell() applied BEFORE small features and holes are cut (or not at all)?"
-    - "Before outputting code, verify: Does the code assign the final solid to 'result'?"
+    - "Before outputting code, verify: Is offset_3d() applied BEFORE small features (or not at all - prefer boolean subtraction)?"
+    - "Before outputting code, verify: Does the code assign the final solid to 'result = part.part'?"
     - "Before outputting code, verify: Are all dimensions realistic (no zero-thickness walls, no negative sizes, no features larger than the body)?"
     - "Before outputting code, verify: If using loft(), do all profiles have the same number of edges/points?"
     - "Before outputting code, verify: If using revolve(), is the profile entirely on one side of the rotation axis?"
     - "Before outputting code, verify: Are fillets and chamfers applied as the LAST operations (after all booleans)?"
-    - "Before outputting code, verify: If using .edges().fillet() after loft/shell/multiple booleans, is it wrapped in try/except?"
-    - "Before outputting code, verify: Does every 2D sketch (.rect, .circle, .polyline) get extruded/revolved/swept/lofted into a 3D solid BEFORE any .cut(), .fillet(), .chamfer(), .shell(), or .hole() is called on it?"
+    - "Before outputting code, verify: If filleting ALL edges after loft/offset_3d/multiple booleans, is it wrapped in try/except?"
+    - "Before outputting code, verify: Does every BuildLine inside BuildSketch end with make_face()?"
 
 # =============================================================================
 # FEW-SHOT EXAMPLES: Design-to-Code Workflow
 # =============================================================================
-# Complete workflow demonstrations: user request → design plan → working code.
-# These teach the AI the full reasoning chain by example.
-
 few_shot_examples:
   - user_request: "Make me a coffee mug"
     design_plan: |
       Revolve a polyline half-profile to form the mug body (cylinder with thick base).
-      Shell the body to create the hollow interior.
+      Hollow the body using boolean subtraction.
       Sweep a circle along a C-shaped arc to form the handle.
-      Union handle to body, then fillet the joint edges last.
+      Add handle to body, then fillet joint edges last.
     code: |
-      import cadquery as cq
-      # Mug body via revolve of half cross-section
+      from build123d import *
       MUG_OD = 82.0
       MUG_H = 95.0
-      BASE_T = 4.0
       WALL = 3.0
       HANDLE_R = 3.5
       body_pts = [
           (0, 0), (MUG_OD / 2, 0), (MUG_OD / 2, MUG_H), (0, MUG_H),
       ]
-      body = (
-          cq.Workplane("XZ")
-          .polyline(body_pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0))
-      )
-      # Shell from top, leaving base thick
-      body = body.faces(">Z").shell(-WALL)
-      # Handle: sweep circle along arc path
-      handle_path = (
-          cq.Workplane("XZ")
-          .moveTo(MUG_OD / 2, MUG_H * 0.75)
-          .threePointArc((MUG_OD / 2 + 22, MUG_H * 0.5), (MUG_OD / 2, MUG_H * 0.25))
-          .wire()
-      )
-      handle = cq.Workplane("XY").center(MUG_OD / 2, 0).circle(HANDLE_R).sweep(handle_path)
-      mug = body.union(handle)
+      with BuildPart() as part:
+          # Mug body via revolve
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(body_pts)
+                  Line(body_pts[-1], body_pts[0])
+              make_face()
+          revolve(axis=Axis.Z)
+          # Hollow interior (boolean subtraction)
+          inner_pts = [
+              (0, WALL), (MUG_OD / 2 - WALL, WALL),
+              (MUG_OD / 2 - WALL, MUG_H + 1), (0, MUG_H + 1),
+          ]
+          with BuildSketch(Plane.XZ) as sk2:
+              with BuildLine() as ln2:
+                  Polyline(inner_pts)
+                  Line(inner_pts[-1], inner_pts[0])
+              make_face()
+          revolve(axis=Axis.Z, mode=Mode.SUBTRACT)
+          # Handle: sweep circle along arc path
+          with BuildLine(Plane.XZ) as handle_path:
+              ThreePointArc(
+                  (MUG_OD / 2, MUG_H * 0.75),
+                  (MUG_OD / 2 + 22, MUG_H * 0.5),
+                  (MUG_OD / 2, MUG_H * 0.25),
+              )
+          with BuildSketch(Plane(origin=handle_path.line @ 0, z_dir=handle_path.line % 0)):
+              Circle(HANDLE_R)
+          sweep()
       try:
-          result = mug.edges().fillet(1.0)
-      except:
-          result = mug
+          fillet(part.edges(), radius=1.0)
+      except Exception:
+          pass
+      result = part.part
 
   - user_request: "Design a motor mount bracket"
     design_plan: |
       Extrude an L-shaped polyline profile for the bracket body.
       Add a polar array of bolt holes on the vertical face for the motor.
-      Add two mounting holes on the horizontal base via pushPoints.
-      Apply fillets to all vertical edges last for strength.
+      Add two mounting holes on the horizontal base.
+      Apply fillets to vertical edges last for strength.
     code: |
-      import cadquery as cq
-      T = 4.0           # plate thickness
-      BASE_W = 60.0     # horizontal base width
-      BASE_D = 50.0     # depth (extrusion)
-      WALL_H = 55.0     # vertical wall height
+      from build123d import *
+      T = 4.0
+      BASE_W = 60.0
+      BASE_D = 50.0
+      WALL_H = 55.0
       MOTOR_BOLT_R = 18.0
       MOTOR_BORE = 24.0
       N_BOLTS = 4
-      BOLT_D = 4.5      # M4 clearance
-      MOUNT_D = 5.5     # M5 clearance
-      # L-profile
+      BOLT_D = 4.5
+      MOUNT_D = 5.5
       l_pts = [
           (0, 0), (BASE_W, 0), (BASE_W, T),
           (T, T), (T, WALL_H), (0, WALL_H),
       ]
-      bracket = cq.Workplane("XZ").polyline(l_pts).close().extrude(BASE_D)
-      # Motor bolt circle on vertical face
-      bracket = (
-          bracket.faces("<X").workplane()
-          .polarArray(MOTOR_BOLT_R, 0, 360, N_BOLTS)
-          .hole(BOLT_D)
-      )
-      # Center bore for motor shaft
-      bracket = bracket.faces("<X").workplane().hole(MOTOR_BORE)
-      # Mounting holes on base
-      bracket = (
-          bracket.faces("<Z").workplane()
-          .pushPoints([(15, BASE_D / 2 - 10), (BASE_W - 15, BASE_D / 2 - 10)])
-          .hole(MOUNT_D)
-      )
-      result = bracket.edges("|Z").fillet(2.0)
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(l_pts)
+                  Line(l_pts[-1], l_pts[0])
+              make_face()
+          extrude(amount=BASE_D)
+          # Motor bolt holes on vertical face
+          with BuildSketch(part.faces().sort_by(Axis.X)[0]):
+              with PolarLocations(MOTOR_BOLT_R, N_BOLTS):
+                  Circle(BOLT_D / 2)
+          extrude(amount=-T, mode=Mode.SUBTRACT)
+          # Motor center bore
+          with BuildSketch(part.faces().sort_by(Axis.X)[0]):
+              Circle(MOTOR_BORE / 2)
+          extrude(amount=-T, mode=Mode.SUBTRACT)
+          # Mounting holes on base
+          with BuildSketch(part.faces().sort_by(Axis.Z)[0]):
+              with Locations([(15, BASE_D / 2 - 10), (BASE_W - 15, BASE_D / 2 - 10)]):
+                  Circle(MOUNT_D / 2)
+          extrude(amount=-T, mode=Mode.SUBTRACT)
+          fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+      result = part.part
 
   - user_request: "Create an SD card holder"
     design_plan: |
       Start with a box slightly larger than an SD card (26 x 34 x 6mm).
-      Fillet vertical edges for rounded corners, then shell from top.
-      Cut a slot on the front face for card insertion (24 x 2.5mm).
+      Fillet vertical edges for rounded corners, then hollow via boolean subtraction.
+      Cut a slot on the front face for card insertion.
       Cut a thumb notch on the back wall so the card can be pushed out.
     code: |
-      import cadquery as cq
-      # SD card: 24x32x2.1mm — holder slightly larger
+      from build123d import *
       W = 28.0
       D = 36.0
       H = 6.0
@@ -2079,30 +1751,19 @@ few_shot_examples:
       SLOT_H = 2.5
       NOTCH_W = 12.0
       NOTCH_H = 4.0
-      holder = (
-          cq.Workplane("XY")
-          .box(W, D, H)
-          .edges("|Z").fillet(3.0)
-          .faces(">Z").shell(-WALL)
-      )
-      # Card insertion slot on front face
-      slot_cutter = (
-          cq.Workplane("XZ")
-          .workplane(offset=D / 2)
-          .center(0, H / 2 - WALL - SLOT_H / 2)
-          .rect(SLOT_W, SLOT_H)
-          .extrude(-WALL * 3)
-      )
-      holder = holder.cut(slot_cutter)
-      # Thumb notch on back wall
-      notch_cutter = (
-          cq.Workplane("XZ")
-          .workplane(offset=-D / 2)
-          .center(0, H / 2)
-          .rect(NOTCH_W, NOTCH_H)
-          .extrude(WALL * 3)
-      )
-      result = holder.cut(notch_cutter)
+      with BuildPart() as part:
+          Box(W, D, H)
+          fillet(part.edges().filter_by(Axis.Z), radius=3.0)
+          # Hollow interior
+          with Locations((0, 0, WALL / 2)):
+              Box(W - 2*WALL, D - 2*WALL, H - WALL, mode=Mode.SUBTRACT)
+          # Card insertion slot on front face
+          with Locations((0, D / 2, 0)):
+              Box(SLOT_W, WALL * 3, SLOT_H, mode=Mode.SUBTRACT)
+          # Thumb notch on back wall
+          with Locations((0, -D / 2, H / 4)):
+              Box(NOTCH_W, WALL * 3, NOTCH_H, mode=Mode.SUBTRACT)
+      result = part.part
 
   - user_request: "Make a gear"
     design_plan: |
@@ -2111,7 +1772,7 @@ few_shot_examples:
       Rotate and union the tooth N times around the center.
       Drill a center bore for the shaft.
     code: |
-      import cadquery as cq
+      from build123d import *
       import math
       N_TEETH = 16
       MODULE = 2.0
@@ -2131,22 +1792,31 @@ few_shot_examples:
           (r_tip * math.cos(a * 0.4), r_tip * math.sin(a * 0.4)),
           (r_root * math.cos(a * 1.2), r_root * math.sin(a * 1.2)),
       ]
-      gear = cq.Workplane("XY").circle(r_root).extrude(FACE_W)
-      tooth = cq.Workplane("XY").polyline(tooth_pts).close().extrude(FACE_W)
-      for i in range(N_TEETH):
-          rotated = tooth.rotate((0, 0, 0), (0, 0, 1), i * TOOTH_ARC)
-          gear = gear.union(rotated)
-      result = gear.faces(">Z").workplane().hole(BORE_D)
+      with BuildPart() as part:
+          Cylinder(radius=r_root, height=FACE_W)
+          for i in range(N_TEETH):
+              angle = i * TOOTH_ARC
+              cos_a = math.cos(math.radians(angle))
+              sin_a = math.sin(math.radians(angle))
+              rotated = [(x * cos_a - y * sin_a, x * sin_a + y * cos_a)
+                         for x, y in tooth_pts]
+              with BuildSketch() as tsk:
+                  with BuildLine() as tln:
+                      Polyline(rotated)
+                      Line(rotated[-1], rotated[0])
+                  make_face()
+              extrude(amount=FACE_W)
+          Hole(radius=BORE_D / 2, depth=FACE_W)
+      result = part.part
 
   - user_request: "Design a phone stand"
     design_plan: |
       Create a flat rectangular base for stability.
       Loft between two angled rectangular profiles to form the upright support.
       Add a small lip/ledge at the bottom of the support to cradle the phone.
-      Union all parts together, then fillet edges last.
+      Combine all parts, then fillet edges last.
     code: |
-      import cadquery as cq
-      # Base plate
+      from build123d import *
       BASE_W = 80.0
       BASE_D = 60.0
       BASE_H = 5.0
@@ -2154,40 +1824,29 @@ few_shot_examples:
       SUPPORT_H = 70.0
       LIP_D = 15.0
       LIP_H = 3.0
-      ANGLE = 15  # lean-back angle in degrees
-      base = cq.Workplane("XY").box(BASE_W, BASE_D, BASE_H)
-      # Angled support via loft between bottom and top profiles
-      support = (
-          cq.Workplane("XY")
-          .workplane(offset=BASE_H)
-          .center(0, -BASE_D / 2 + SUPPORT_T / 2)
-          .rect(BASE_W * 0.8, SUPPORT_T)
-          .workplane(offset=SUPPORT_H)
-          .center(0, SUPPORT_H * 0.26)  # lean back
-          .rect(BASE_W * 0.7, SUPPORT_T)
-          .loft()
-      )
-      # Lip at bottom-front of support to hold the phone
-      lip = (
-          cq.Workplane("XY")
-          .workplane(offset=BASE_H)
-          .center(0, -BASE_D / 2 + LIP_D / 2)
-          .rect(BASE_W * 0.6, LIP_D)
-          .extrude(LIP_H)
-      )
-      stand = base.union(support).union(lip)
+      with BuildPart() as part:
+          # Base plate
+          Box(BASE_W, BASE_D, BASE_H)
+          # Angled support via loft
+          with BuildSketch(Plane.XY.offset(BASE_H)) as sk1:
+              with Locations((0, -BASE_D / 2 + SUPPORT_T / 2)):
+                  Rectangle(BASE_W * 0.8, SUPPORT_T)
+          with BuildSketch(Plane.XY.offset(BASE_H + SUPPORT_H)) as sk2:
+              with Locations((0, -BASE_D / 2 + SUPPORT_T / 2 + SUPPORT_H * 0.26)):
+                  Rectangle(BASE_W * 0.7, SUPPORT_T)
+          loft()
+          # Lip to hold the phone
+          with Locations((0, -BASE_D / 2 + LIP_D / 2, BASE_H)):
+              Box(BASE_W * 0.6, LIP_D, LIP_H, align=(Align.CENTER, Align.CENTER, Align.MIN))
       try:
-          result = stand.edges().fillet(1.5)
-      except:
-          result = stand
+          fillet(part.edges(), radius=1.5)
+      except Exception:
+          pass
+      result = part.part
 
 # =============================================================================
-# DESIGN PATTERNS — Parameterized Templates
+# DESIGN PATTERNS - Parameterized Templates
 # =============================================================================
-# Higher-level templates for common object categories. Each pattern describes
-# a category of objects with named parameters, base code, variants, and gotchas.
-# Use these as starting points and customize parameters to match the user request.
-
 design_patterns:
   - name: "Enclosure"
     description: "Box-shaped housing with base + lid, screw bosses, lip/groove alignment"
@@ -2201,83 +1860,38 @@ design_patterns:
       - "BOSS_OD (mm): Screw boss outer diameter"
       - "BOSS_ID (mm): Screw hole diameter (M3=3.2, M2.5=2.7)"
     base_code: |
-      import cadquery as cq
+      from build123d import *
       INNER_W, INNER_D, INNER_H = 60.0, 40.0, 25.0
       WALL, LIP_H = 2.5, 2.0
       BOSS_OD, BOSS_ID = 7.0, 3.2
-      LID_H = 8.0
-      # Base box — shell it BEFORE adding bosses
-      base = (cq.Workplane("XY")
-          .box(INNER_W + 2*WALL, INNER_D + 2*WALL, INNER_H + WALL)
-          .faces(">Z").shell(-WALL))
-      # Corner screw bosses inside the base
-      bx, by = INNER_W/2 - BOSS_OD/2, INNER_D/2 - BOSS_OD/2
-      bosses = (cq.Workplane("XY")
-          .pushPoints([(bx,by),(-bx,by),(-bx,-by),(bx,-by)])
-          .circle(BOSS_OD/2).extrude(INNER_H)
-          .pushPoints([(bx,by),(-bx,by),(-bx,-by),(bx,-by)])
-          .circle(BOSS_ID/2).cutThruAll())
-      base = base.union(bosses)
-      # Alignment lip
-      lip = (cq.Workplane("XY").workplane(offset=INNER_H + WALL)
-          .rect(INNER_W - 0.4, INNER_D - 0.4).extrude(LIP_H))
-      base = base.union(lip)
-      # Lid
-      lid = (cq.Workplane("XY")
-          .box(INNER_W + 2*WALL, INNER_D + 2*WALL, LID_H))
-      result = base.union(lid.translate((0, 0, INNER_H + WALL + LIP_H + 5)))
+      OW, OD_val, OH = INNER_W + 2*WALL, INNER_D + 2*WALL, INNER_H + WALL
+      with BuildPart() as part:
+          # Outer box, hollowed
+          Box(OW, OD_val, OH)
+          with Locations((0, 0, WALL / 2)):
+              Box(INNER_W, INNER_D, INNER_H, mode=Mode.SUBTRACT)
+          # Corner screw bosses
+          bx, by = INNER_W/2 - BOSS_OD/2, INNER_D/2 - BOSS_OD/2
+          for cx, cy in [(bx,by),(-bx,by),(-bx,-by),(bx,-by)]:
+              with Locations((cx, cy, -OH/2 + WALL)):
+                  Cylinder(radius=BOSS_OD/2, height=INNER_H, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          for cx, cy in [(bx,by),(-bx,by),(-bx,-by),(bx,-by)]:
+              with Locations((cx, cy, 0)):
+                  Hole(radius=BOSS_ID/2, depth=OH)
+          # Alignment lip
+          with Locations((0, 0, OH/2)):
+              with BuildSketch() as lip_sk:
+                  Rectangle(INNER_W - 0.4, INNER_D - 0.4)
+              extrude(amount=LIP_H)
+      result = part.part
     variants:
       - "Snap-fit: replace screw bosses with snap-fit hooks on walls"
       - "Gasket groove: add 1mm wide, 0.8mm deep groove around lip"
       - "Ventilation: add slot array on side walls"
     gotchas:
-      - "Shell the base BEFORE adding screw bosses (shell fails on complex topology)"
+      - "Hollow the base BEFORE adding screw bosses"
       - "Lip height must be less than base interior height"
       - "Leave 0.3-0.5mm clearance between lip and lid groove for fit"
-
-  - name: "Shaft / Axle"
-    description: "Cylindrical body with stepped diameters, keyway, snap ring grooves"
-    keywords: ["shaft", "axle", "spindle", "rod", "pin", "stepped shaft"]
-    parameters:
-      - "TOTAL_LEN (mm): Overall shaft length"
-      - "MAIN_DIA (mm): Main body diameter"
-      - "STEP_DIA (mm): Reduced step diameter"
-      - "STEP_LEN (mm): Length of reduced step"
-      - "KEY_W (mm): Keyway width"
-      - "KEY_D (mm): Keyway depth"
-      - "KEY_L (mm): Keyway length"
-    base_code: |
-      import cadquery as cq
-      TOTAL_LEN, MAIN_DIA = 80.0, 20.0
-      STEP_DIA, STEP_LEN = 12.0, 20.0
-      KEY_W, KEY_D, KEY_L = 5.0, 2.5, 25.0
-      GROOVE_W, GROOVE_D = 1.5, 1.0
-      # Main shaft body
-      shaft = (cq.Workplane("XY")
-          .circle(MAIN_DIA / 2).extrude(TOTAL_LEN - STEP_LEN))
-      # Stepped-down end
-      step = (cq.Workplane("XY").workplane(offset=TOTAL_LEN - STEP_LEN)
-          .circle(STEP_DIA / 2).extrude(STEP_LEN))
-      shaft = shaft.union(step)
-      # Keyway slot cut into main section
-      shaft = (shaft.faces(">Z").workplane(offset=-(TOTAL_LEN - STEP_LEN) / 2)
-          .center(MAIN_DIA / 2 - KEY_D / 2, 0)
-          .rect(KEY_D, KEY_W).cutBlind(-KEY_L))
-      # Snap ring groove near step transition
-      groove_pos = TOTAL_LEN - STEP_LEN - 3.0
-      shaft = (shaft.faces("<Z").workplane(offset=groove_pos)
-          .circle(MAIN_DIA / 2 + 0.1)
-          .circle(MAIN_DIA / 2 - GROOVE_D)
-          .cutBlind(GROOVE_W))
-      result = shaft
-    variants:
-      - "Hollow shaft: add center bore with .circle(bore_dia/2).cutThruAll()"
-      - "D-shaft: cut flat on one side for set-screw attachment"
-      - "Splined shaft: multiple keyways evenly spaced via polarArray"
-    gotchas:
-      - "Build shaft along Z (vertical) — easier face selection"
-      - "Cut keyway AFTER union of all cylindrical sections"
-      - "Snap ring groove width is typically 1.0-1.5mm for standard rings"
 
   - name: "Rotational Body"
     description: "Revolve a 2D profile: bottles, cups, vases, turned parts"
@@ -2287,27 +1901,26 @@ design_patterns:
       - "WALL_T (mm): Wall thickness if hollow (0 for solid)"
       - "ANGLE (deg): Revolve angle, 360 for full rotation"
     base_code: |
-      import cadquery as cq
-      # Profile points (radius, z) — a simple vase shape
+      from build123d import *
       PROFILE = [(0, 0), (30, 0), (25, 20), (15, 60), (18, 90), (20, 100), (0, 100)]
       WALL_T = 2.5
-      # Build wire from profile points
-      pts = [(r, z) for r, z in PROFILE]
-      body = (cq.Workplane("XZ")
-          .polyline(pts).close()
-          .revolve(360, (0, 0, 0), (0, 1, 0)))
-      # Hollow out if wall thickness specified
-      if WALL_T > 0:
-          body = body.faces(">Z").shell(-WALL_T)
-      result = body
+      with BuildPart() as part:
+          with BuildSketch(Plane.XZ) as sk:
+              with BuildLine() as ln:
+                  Polyline(PROFILE)
+                  Line(PROFILE[-1], PROFILE[0])
+              make_face()
+          revolve(axis=Axis.Z)
+          if WALL_T > 0:
+              offset_3d(openings=part.faces().sort_by(Axis.Z)[-1], amount=-WALL_T)
+      result = part.part
     variants:
-      - "Solid body: set WALL_T = 0, skip shell step"
-      - "Threaded neck: add helix thread on top cylindrical section"
+      - "Solid body: set WALL_T = 0, skip hollowing"
       - "Flanged base: widen bottom profile points for a stable foot"
     gotchas:
       - "Profile must stay entirely on one side of the rotation axis (all r >= 0)"
-      - "Close the profile by returning to (0, z_top) then the polyline .close() connects back"
-      - "Shell after revolve can fail on thin sections — check min wall vs shell thickness"
+      - "Close the profile by returning to (0, z_top) then the line closes back"
+      - "offset_3d after revolve can fail on thin sections - check min wall vs shell thickness"
 
   - name: "Plate / Bracket"
     description: "Flat plate with holes, stiffening ribs, mounting features"
@@ -2320,31 +1933,29 @@ design_patterns:
       - "HOLE_SPACING (mm): Distance between holes"
       - "RIB_T (mm): Rib thickness (0 for no ribs)"
     base_code: |
-      import cadquery as cq
+      from build123d import *
       WIDTH, HEIGHT, THICK = 80.0, 60.0, 4.0
       HOLE_DIA, HOLE_MARGIN = 5.0, 10.0
       RIB_T, RIB_H = 2.0, 8.0
-      # Main plate
-      plate = cq.Workplane("XY").box(WIDTH, HEIGHT, THICK)
-      # 4-corner mounting holes
-      hx, hy = WIDTH/2 - HOLE_MARGIN, HEIGHT/2 - HOLE_MARGIN
-      plate = (plate.faces(">Z").workplane()
-          .pushPoints([(hx,hy),(-hx,hy),(-hx,-hy),(hx,-hy)])
-          .hole(HOLE_DIA))
-      # Stiffening ribs on underside
-      if RIB_T > 0:
-          rib = (cq.Workplane("XY").workplane(offset=-THICK/2 - RIB_H/2)
-              .rect(WIDTH * 0.8, RIB_T).extrude(RIB_H))
-          plate = plate.union(rib)
-      result = plate
+      with BuildPart() as part:
+          Box(WIDTH, HEIGHT, THICK)
+          hx, hy = WIDTH/2 - HOLE_MARGIN, HEIGHT/2 - HOLE_MARGIN
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations([(hx,hy),(-hx,hy),(-hx,-hy),(hx,-hy)]):
+                  Circle(HOLE_DIA / 2)
+          extrude(amount=-THICK, mode=Mode.SUBTRACT)
+          if RIB_T > 0:
+              with Locations((0, 0, -THICK/2 - RIB_H/2)):
+                  Box(WIDTH * 0.8, RIB_T, RIB_H)
+      result = part.part
     variants:
-      - "L-bracket: add a perpendicular flange via second extrusion on an edge face"
+      - "L-bracket: add a perpendicular flange"
       - "T-bracket: add flanges on both sides"
-      - "Slotted holes: use .slot2D(length, dia) instead of .hole() for adjustment"
+      - "Slotted holes: use SlotOverall instead of Circle for adjustment"
     gotchas:
-      - "Place holes AFTER creating the plate (not before boolean ops)"
+      - "Place holes AFTER creating the plate"
       - "Rib height should not exceed 3x plate thickness for printability"
-      - "Use pushPoints for hole patterns — more reliable than rarray for non-rectangular layouts"
+      - "Use Locations for hole patterns"
 
   - name: "Tube / Pipe"
     description: "Hollow cylinder with optional bends, flanges, fittings"
@@ -2353,73 +1964,20 @@ design_patterns:
       - "OUTER_DIA (mm): Outer diameter"
       - "INNER_DIA (mm): Inner diameter (wall = (outer-inner)/2)"
       - "LENGTH (mm): Straight length"
-      - "BEND_RADIUS (mm): Center-line bend radius (0 for straight)"
-      - "BEND_ANGLE (deg): Bend angle (90 for standard elbow)"
     base_code: |
-      import cadquery as cq
+      from build123d import *
       OUTER_DIA, INNER_DIA, LENGTH = 25.0, 20.0, 60.0
-      BEND_RADIUS, BEND_ANGLE = 40.0, 90.0
-      WALL = (OUTER_DIA - INNER_DIA) / 2
-      if BEND_RADIUS > 0 and BEND_ANGLE > 0:
-          # Bent pipe: sweep annular profile along arc
-          import math
-          path = (cq.Workplane("XZ")
-              .radiusArc((BEND_RADIUS * (1 - math.cos(math.radians(BEND_ANGLE))),
-                          BEND_RADIUS * math.sin(math.radians(BEND_ANGLE))),
-                         -BEND_RADIUS)
-              .val())
-          pipe = (cq.Workplane("XY")
-              .circle(OUTER_DIA / 2).circle(INNER_DIA / 2)
-              .sweep(path))
-      else:
-          # Straight pipe
-          pipe = (cq.Workplane("XY")
-              .circle(OUTER_DIA / 2).circle(INNER_DIA / 2)
-              .extrude(LENGTH))
-      result = pipe
+      with BuildPart() as part:
+          Cylinder(radius=OUTER_DIA / 2, height=LENGTH)
+          Cylinder(radius=INNER_DIA / 2, height=LENGTH + 1, mode=Mode.SUBTRACT)
+      result = part.part
     variants:
-      - "Flanged ends: union a larger-diameter disc at each end"
-      - "T-junction: union a perpendicular pipe with boolean cuts for flow path"
+      - "Flanged ends: add larger-diameter discs at each end"
+      - "T-junction: add perpendicular pipe with boolean cuts for flow path"
       - "Reducer: loft between two different-diameter annular profiles"
     gotchas:
-      - "Inner circle MUST be drawn on same workplane as outer (concentric annulus)"
-      - "Bend radius should be >= 1.5x outer diameter to avoid self-intersection"
-      - "For T-junction, use boolean cylinder subtraction rather than shell (more reliable)"
-
-  - name: "Spring"
-    description: "Helical geometry: compression, extension, torsion springs"
-    keywords: ["spring", "coil", "helix", "compression spring", "extension spring"]
-    parameters:
-      - "WIRE_DIA (mm): Wire cross-section diameter"
-      - "COIL_DIA (mm): Mean coil diameter (center of wire)"
-      - "NUM_COILS: Number of active coils"
-      - "PITCH (mm): Distance between coil centers"
-      - "FREE_LEN (mm): Free length (= num_coils * pitch + wire_dia)"
-    base_code: |
-      import cadquery as cq
-      WIRE_DIA = 2.0
-      COIL_DIA = 15.0
-      NUM_COILS = 6
-      PITCH = 5.0
-      FREE_LEN = NUM_COILS * PITCH + WIRE_DIA
-      # Create helix path
-      helix = cq.Wire.makeHelix(
-          pitch=PITCH,
-          height=FREE_LEN - WIRE_DIA,
-          radius=COIL_DIA / 2)
-      # Sweep wire cross-section along helix
-      result = (cq.Workplane("XY")
-          .center(COIL_DIA / 2, 0)
-          .circle(WIRE_DIA / 2)
-          .sweep(helix, isFrenet=True))
-    variants:
-      - "Ground ends: add flat half-coils at top and bottom (pitch=0 for end coils)"
-      - "Extension spring: use pitch = wire_dia (tight coils) + add hooks at ends"
-      - "Torsion spring: add straight leg tangent lines at each end"
-    gotchas:
-      - "Use Wire.makeHelix(), not Edge — sweep needs a Wire path"
-      - "isFrenet=True prevents twist artifacts on helix sweeps"
-      - "Keep wire_dia < pitch, otherwise coils will self-intersect"
+      - "Inner cylinder must be slightly longer to ensure clean through-cut"
+      - "For T-junction, use boolean cylinder subtraction (more reliable)"
 
   - name: "Gear"
     description: "Toothed wheel: spur gear with involute-approximation teeth"
@@ -2431,99 +1989,87 @@ design_patterns:
       - "PRESSURE_ANGLE (deg): Typically 20"
       - "BORE_DIA (mm): Center bore diameter"
     base_code: |
-      import cadquery as cq
+      from build123d import *
       import math
       MODULE = 2.0
       TEETH = 20
       FACE_W = 10.0
       PA = math.radians(20)
       BORE = 8.0
-      # Derived dimensions
       R_PITCH = MODULE * TEETH / 2
-      R_BASE = R_PITCH * math.cos(PA)
       R_OUTER = R_PITCH + MODULE
       R_ROOT = R_PITCH - 1.25 * MODULE
-      # Simplified tooth profile (one tooth as a polyline wedge)
       tooth_half_angle = math.pi / TEETH
       pts = []
       for i in range(8):
           a = -tooth_half_angle + i * (2 * tooth_half_angle / 7)
           r = R_ROOT + (R_OUTER - R_ROOT) * (1 - abs(2 * i / 7 - 1))
           pts.append((r * math.cos(a), r * math.sin(a)))
-      # Build one tooth and polar-pattern it
-      gear = cq.Workplane("XY").circle(R_ROOT)
-      for t in range(TEETH):
-          angle = t * 360 / TEETH
-          rotated = [(x * math.cos(math.radians(angle)) - y * math.sin(math.radians(angle)),
-                       x * math.sin(math.radians(angle)) + y * math.cos(math.radians(angle)))
-                      for x, y in pts]
-          tooth = cq.Workplane("XY").polyline(rotated).close().extrude(FACE_W)
-          gear = gear.extrude(FACE_W) if t == 0 else gear
-          gear = gear.union(tooth)
-      # Center bore
-      gear = gear.faces(">Z").workplane().hole(BORE)
-      result = gear
+      with BuildPart() as part:
+          Cylinder(radius=R_ROOT, height=FACE_W)
+          for t in range(TEETH):
+              angle = t * 360 / TEETH
+              cos_a = math.cos(math.radians(angle))
+              sin_a = math.sin(math.radians(angle))
+              rotated = [(x*cos_a - y*sin_a, x*sin_a + y*cos_a) for x, y in pts]
+              with BuildSketch() as tsk:
+                  with BuildLine() as tln:
+                      Polyline(rotated)
+                      Line(rotated[-1], rotated[0])
+                  make_face()
+              extrude(amount=FACE_W)
+          Hole(radius=BORE / 2, depth=FACE_W)
+      result = part.part
     variants:
       - "Hub with keyway: add a raised hub cylinder and keyway slot"
       - "Gear pair: generate two meshing gears at correct center distance"
-      - "Helical gear: twist the tooth extrusion using a swept profile"
     gotchas:
-      - "This is a simplified involute — adequate for 3D printing, not for precision machining"
-      - "Use polyline tooth profile + union loop — polarArray on complex profiles is unreliable"
+      - "This is a simplified involute - adequate for 3D printing, not for precision machining"
       - "Bore hole should be cut LAST after all tooth unions complete"
 
 # =============================================================================
-# OPERATION INTERACTIONS — CROSS-OPERATION REASONING RULES
+# OPERATION INTERACTIONS - CROSS-OPERATION REASONING RULES
 # =============================================================================
-# These rules codify how CadQuery operations interact with each other in
-# sequence. Unlike anti-patterns (single-operation failures) or failure
-# prevention (proactive conditional rules), these focus on operation A followed
-# by operation B producing unexpected results.
-
 operation_interactions:
   fillet_after_boolean:
-    - "New edges created by boolean operations (cut/union) are often very short — use a smaller fillet radius (<=1mm) on boolean-created edges"
+    - "New edges created by boolean operations are often very short - use a smaller fillet radius (<=1mm) on boolean-created edges"
     - "Fillet as the very last step, not after each individual boolean operation"
-    - "CRITICAL: On complex geometry (loft+shell+boolean combinations), .edges().fillet() frequently fails because the kernel cannot fillet ALL edges at once. ALWAYS wrap blanket fillet calls in try/except to degrade gracefully"
-    - "If fillet fails on boolean edges, try chamfer as an alternative — chamfer is more tolerant of short edges"
-    - "For complex geometry, prefer selective edge fillet (e.g. .edges('>Z').fillet(r)) over blanket .edges().fillet(r)"
+    - "CRITICAL: On complex geometry (loft+offset_3d+boolean combinations), fillet(part.edges(), ...) frequently fails. ALWAYS wrap blanket fillet calls in try/except"
+    - "If fillet fails on boolean edges, try chamfer as an alternative"
+    - "For complex geometry, prefer selective edge fillet over blanket fillet"
 
   shell_after_fillet:
-    - "Do NOT use .shell() — it fails on complex geometry and produces non-manifold meshes"
-    - "Instead: create outer solid, create smaller inner solid offset by wall thickness, use .cut()"
+    - "Do NOT use offset_3d() after fillets - it fails on complex geometry"
+    - "Instead: create outer solid, create smaller inner solid offset by wall thickness, use Mode.SUBTRACT"
     - "This boolean-subtraction approach works reliably on filleted, lofted, and swept bodies"
 
   loft_then_shell:
-    - "Do NOT use .shell() on lofted bodies — lofted geometry has variable wall thickness that breaks the shell algorithm"
+    - "Do NOT use offset_3d() on lofted bodies - lofted geometry has variable curvature that breaks the algorithm"
     - "Instead: loft both an outer and an inner profile set, then boolean-subtract the inner from the outer"
 
   boolean_chain_limit:
-    - "After 5+ consecutive boolean operations, geometric tolerances accumulate and later operations may fail — union intermediate results in groups of 2-3 first"
-    - "Build complex geometry in groups: create 2-3 features, union them into one solid, then continue adding the next group"
-    - "If a late boolean fails unexpectedly, rebuild the model with fewer intermediate boolean steps by grouping features"
+    - "After 5+ consecutive boolean operations, geometric tolerances accumulate - use Locations/GridLocations/PolarLocations to batch features"
+    - "Build complex geometry in groups: create features via sketch patterns, then extrude once"
 
   extrude_on_face:
-    - "Face selectors like '>Z' become ambiguous after boolean operations create new faces — use .tag() on important faces before performing booleans"
-    - "After a boolean cut, '>Z' may select a different face than expected because the cut created a new topmost face"
-    - "Tag key working faces during construction with .tag('top_face'), then re-select them reliably with .faces(tag='top_face')"
+    - "Face selectors become ambiguous after boolean operations create new faces"
+    - "After a boolean cut, sort_by(Axis.Z)[-1] may select a different face than expected"
+    - "Build features in a logical order: base shape first, then features from top down"
 
   sweep_with_boolean:
-    - "Swept bodies have complex underlying topology — avoid applying fillet() directly to sweep results; to hollow, use boolean subtraction"
-    - "Boolean cuts on swept geometry can fail due to the complex curved surface representation"
-    - "If you need to cut a swept body, keep the cuts simple (through-holes or straight cutBlind) — avoid pockets or complex cut profiles on swept surfaces"
+    - "Swept bodies have complex underlying topology - avoid applying fillet() directly to sweep results"
+    - "Boolean cuts on swept geometry can fail - keep cuts simple (through-holes or straight cuts)"
 
   revolve_then_cut:
-    - "Revolved bodies create multiple symmetric faces — standard selectors like '>X' or '>Y' may pick the wrong symmetric face"
-    - "Use workplane offsets or .tag() instead of face selectors when placing features on revolved geometry"
+    - "Revolved bodies create multiple symmetric faces - sort_by selectors may pick the wrong symmetric face"
     - "Cuts perpendicular to the revolution axis are more reliable than cuts tangential to the curved surface"
 
   operation_ordering:
-    - "General safe operation order: base shape → additive features (boss, pad) → subtractive features (holes, pockets) → fillets/chamfers"
-    - "Never fillet before boolean operations — always apply fillets as the LAST modeling step"
-    - "Never use .shell() — always hollow via boolean subtraction (outer.cut(inner))"
+    - "General safe operation order: base shape -> additive features (bosses) -> subtractive features (holes, pockets) -> fillets/chamfers"
+    - "Never fillet before boolean operations - always apply fillets as the LAST modeling step"
+    - "Never use offset_3d() after fillets - always hollow via boolean subtraction (outer - inner)"
     - "If sweep or loft is needed, perform it early in the build sequence before any boolean operations"
 
   cut_body_integrity:
-    - "After EVERY .cut() operation, assert result.solids().size() == 1. If it is >1, your cut went through a wall and split the body — reduce cut depth or widen the body before cutting"
-    - "Grooves, ledges, and o-ring channels are common culprits — ensure cut depth < wall thickness at that point"
-    - "If building a hollow box first, verify wall thickness is sufficient BEFORE cutting features into walls"
+    - "After EVERY Mode.SUBTRACT operation, the result should remain a single solid. If a cut goes through a wall and splits the body, reduce cut depth or widen the body"
+    - "Grooves, ledges, and o-ring channels are common culprits - ensure cut depth < wall thickness"

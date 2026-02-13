@@ -46,7 +46,7 @@ pub fn create_venv(python_path: &Path, venv_dir: &Path) -> Result<(), AppError> 
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::CadQueryError(format!(
+        return Err(AppError::CadError(format!(
             "Failed to create venv: {}",
             stderr
         )));

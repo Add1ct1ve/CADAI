@@ -10,7 +10,7 @@ use crate::error::AppError;
 const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30_000;
 const POLL_INTERVAL_MS: u64 = 25;
 
-/// Result of executing CadQuery code
+/// Result of executing CAD code
 pub struct ExecutionResult {
     pub stl_data: Vec<u8>,
     pub stdout: String,
@@ -27,7 +27,7 @@ fn create_execution_dir() -> Result<PathBuf, AppError> {
 
 fn timeout_error(timeout_ms: u64) -> AppError {
     let timeout_s = timeout_ms as f64 / 1000.0;
-    AppError::CadQueryError(format!(
+    AppError::CadError(format!(
         "Execution timed out after {:.1} seconds",
         timeout_s
     ))
@@ -35,13 +35,13 @@ fn timeout_error(timeout_ms: u64) -> AppError {
 
 fn map_runner_error(exit_code: i32, stderr: &str, export_error_label: &str) -> AppError {
     let error_msg = match exit_code {
-        2 => format!("CadQuery execution error:\n{}", stderr),
+        2 => format!("CAD execution error:\n{}", stderr),
         3 => "Code must assign final geometry to 'result' variable.".to_string(),
         4 => format!("{export_error_label}:\n{}", stderr),
         5 => "Result contains multiple disconnected solids — a cut likely went through a wall and split the body. Reduce cut depth or increase wall thickness.".to_string(),
         _ => format!("Python error (exit code {}):\n{}", exit_code, stderr),
     };
-    AppError::CadQueryError(error_msg)
+    AppError::CadError(error_msg)
 }
 
 fn run_runner_with_timeout(
@@ -88,22 +88,22 @@ fn run_runner_with_timeout(
     Ok((status, stdout, stderr))
 }
 
-/// Execute CadQuery Python code and return the resulting STL data.
+/// Execute Build123d Python code and return the resulting STL data.
 ///
 /// This writes the code to a temp file, runs the Python runner script,
 /// and reads back the generated STL file.
-pub fn execute_cadquery(
+pub fn execute_cad_code(
     venv_dir: &Path,
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
-    execute_cadquery_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
+    execute_cad_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
 }
 
-/// Execute CadQuery Python code and return STL data, with a hard timeout.
+/// Execute Build123d Python code and return STL data, with a hard timeout.
 ///
 /// Uses a unique per-call temp directory to avoid collisions between concurrent runs.
-pub fn execute_cadquery_with_timeout_ms(
+pub fn execute_cad_with_timeout_ms(
     venv_dir: &Path,
     runner_script: &Path,
     code: &str,
@@ -137,7 +137,7 @@ pub fn execute_cadquery_with_timeout_ms(
         }
 
         if !output_file.exists() {
-            return Err(AppError::CadQueryError("STL file was not generated".into()));
+            return Err(AppError::CadError("STL file was not generated".into()));
         }
 
         let stl_data = std::fs::read(&output_file)?;
@@ -251,7 +251,7 @@ pub fn execute_python_script_with_timeout(
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(AppError::CadQueryError(format!(
+                    return Err(AppError::CadError(format!(
                         "Script timed out after {:.1}s",
                         timeout_ms as f64 / 1000.0
                     )));
@@ -263,22 +263,22 @@ pub fn execute_python_script_with_timeout(
     }
 }
 
-/// Execute CadQuery Python code in an isolated temp subdirectory.
+/// Execute Build123d Python code in an isolated temp subdirectory.
 ///
 /// Kept for API compatibility with call sites that explicitly request isolation.
-pub fn execute_cadquery_isolated(
+pub fn execute_cad_isolated(
     venv_dir: &Path,
     runner_script: &Path,
     code: &str,
 ) -> Result<ExecutionResult, AppError> {
-    execute_cadquery_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
+    execute_cad_with_timeout_ms(venv_dir, runner_script, code, DEFAULT_EXECUTION_TIMEOUT_MS)
 }
 
-/// Execute CadQuery Python code and export directly to a specific file path.
+/// Execute Build123d Python code and export directly to a specific file path.
 ///
 /// The runner script auto-detects the export format based on the output file extension
 /// (.step/.stp → STEP, otherwise STL).
-pub fn execute_cadquery_to_file(
+pub fn execute_cad_to_file(
     venv_dir: &Path,
     runner_script: &Path,
     code: &str,
@@ -312,7 +312,7 @@ pub fn execute_cadquery_to_file(
         }
 
         if !output_file.exists() {
-            return Err(AppError::CadQueryError(
+            return Err(AppError::CadError(
                 "Export file was not generated".into(),
             ));
         }

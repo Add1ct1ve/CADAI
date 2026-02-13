@@ -52,8 +52,8 @@ def ensure_ezdxf():
         return ezdxf
 
 
-def exec_cadquery_code(code_file):
-    """Execute a CadQuery code file and return the namespace."""
+def exec_cad_code(code_file):
+    """Execute a Build123d code file and return the namespace."""
     if not os.path.exists(code_file):
         print(f"Input file not found: {code_file}", file=sys.stderr)
         sys.exit(1)
@@ -77,11 +77,11 @@ def exec_cadquery_code(code_file):
 
 
 def tessellate_result(result, tolerance=0.1):
-    """Tessellate a CadQuery result into vertices and faces."""
+    """Tessellate a Build123d result into vertices and faces."""
     try:
         shape = shape_from_result(result)
         vertices, faces = shape.tessellate(tolerance)
-        # Convert CadQuery Vector objects to tuples
+        # Convert Build123d Vector objects to tuples
         verts = [(v.x, v.y, v.z) for v in vertices]
         # Faces are already tuples of indices
         tris = [tuple(f) for f in faces]
@@ -92,14 +92,26 @@ def tessellate_result(result, tolerance=0.1):
 
 
 def shape_from_result(result):
-    """Normalize CadQuery output into a tessellatable shape.
+    """Normalize Build123d output into a tessellatable shape.
 
     Supports common result forms across generation paths:
-    - Workplane-like objects exposing .val()
+    - BuildPart context manager results (via .part)
+    - BuildSketch context manager results (via .sketch)
+    - Workplane-like objects exposing .val() (CadQuery backward compat)
     - Shape/Compound objects directly
     - Assembly-like objects exposing .toCompound()
     """
-    # Workplane / selector result
+    # Build123d BuildPart context result
+    part_attr = getattr(result, "part", None)
+    if part_attr is not None:
+        return part_attr
+
+    # Build123d BuildSketch context result
+    sketch_attr = getattr(result, "sketch", None)
+    if sketch_attr is not None:
+        return sketch_attr
+
+    # Workplane / selector result (CadQuery backward compat)
     val_fn = getattr(result, "val", None)
     if callable(val_fn):
         shape = val_fn()
@@ -117,7 +129,7 @@ def shape_from_result(result):
     if hasattr(result, "tessellate") and hasattr(result, "wrapped"):
         return result
 
-    raise TypeError(f"Unsupported CadQuery result type for tessellation: {type(result).__name__}")
+    raise TypeError(f"Unsupported Build123d result type for tessellation: {type(result).__name__}")
 
 
 def _count_face_selector(values):
@@ -225,7 +237,7 @@ def cmd_export_3mf(args):
     trimesh = ensure_trimesh()
     import numpy as np
 
-    result = exec_cadquery_code(code_file)
+    result = exec_cad_code(code_file)
     verts, tris = tessellate_result(result)
 
     mesh = trimesh.Trimesh(vertices=verts, faces=tris)
@@ -271,7 +283,7 @@ def cmd_mesh_check(args):
     code_file = args[0]
     trimesh = ensure_trimesh()
 
-    result = exec_cadquery_code(code_file)
+    result = exec_cad_code(code_file)
     verts, tris = tessellate_result(result)
 
     mesh = trimesh.Trimesh(vertices=verts, faces=tris)
@@ -334,7 +346,7 @@ def cmd_orient(args):
     import numpy as np
     from scipy.spatial.transform import Rotation
 
-    result = exec_cadquery_code(code_file)
+    result = exec_cad_code(code_file)
     verts, tris = tessellate_result(result)
 
     mesh = trimesh.Trimesh(vertices=verts, faces=tris)
@@ -435,15 +447,15 @@ def cmd_unfold(args):
 
     ezdxf = ensure_ezdxf()
 
-    # Execute CadQuery code
-    result = exec_cadquery_code(code_file)
+    # Execute Build123d code
+    result = exec_cad_code(code_file)
 
     try:
-        import cadquery as cq
+        from build123d import Shape
 
         shape = shape_from_result(result)
-        faces = shape.Faces()
-        edges = shape.Edges()
+        faces = shape.faces()
+        edges = shape.edges()
 
         face_count = len(faces)
         planar_count = 0
@@ -453,7 +465,7 @@ def cmd_unfold(args):
         flat_edges = []
 
         for face in faces:
-            face_type = face.geomType()
+            face_type = face.geom_type()
             if face_type == "PLANE":
                 planar_count += 1
             elif face_type == "CYLINDER":
@@ -475,7 +487,7 @@ def cmd_unfold(args):
             }))
             sys.exit(0)
 
-        # Use CadQuery section to project edges onto XY plane as a simple flat pattern
+        # Project edges onto XY plane as a simple flat pattern
         # This is a simplified approach: project all edges onto a 2D plane
         doc = ezdxf.new('R2010')
         msp = doc.modelspace()
@@ -489,10 +501,10 @@ def cmd_unfold(args):
         edge_data = []
         for edge in edges:
             try:
-                start = edge.startPoint()
-                end = edge.endPoint()
-                x1, y1 = start.x, start.y
-                x2, y2 = end.x, end.y
+                start = edge.position_at(0)
+                end = edge.position_at(1)
+                x1, y1 = start.X, start.Y
+                x2, y2 = end.X, end.Y
                 edge_data.append(((x1, y1), (x2, y2)))
                 min_x = min(min_x, x1, x2)
                 min_y = min(min_y, y1, y2)

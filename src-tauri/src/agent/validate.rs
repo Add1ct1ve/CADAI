@@ -139,7 +139,7 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
         "NameError" | "ModuleNotFoundError" | "ImportError" => ErrorCategory::ImportRuntime,
         "AttributeError" => ErrorCategory::ApiMisuse,
         "TypeError" => {
-            if lower.contains("cadquery") || lower.contains("workplane") || lower.contains("cq.") {
+            if lower.contains("build123d") || lower.contains("buildpart") || lower.contains("build_line") {
                 ErrorCategory::ApiMisuse
             } else {
                 ErrorCategory::Unknown
@@ -178,8 +178,8 @@ fn classify_error(error_type: &str, message: &str, full_stderr: &str) -> ErrorCa
     }
 }
 
-/// Known CadQuery operations for extraction from tracebacks.
-const CQ_OPERATIONS: &[&str] = &[
+/// Known CAD operations for extraction from tracebacks.
+const CAD_OPERATIONS: &[&str] = &[
     "fillet",
     "chamfer",
     "shell",
@@ -199,7 +199,8 @@ const CQ_OPERATIONS: &[&str] = &[
     "combine",
 ];
 
-/// Extract the failing CadQuery operation from a traceback by scanning user code lines.
+/// Extract the failing CAD operation from a traceback by scanning user code lines.
+/// Matches both standalone function calls (Build123d) and method-chain patterns.
 #[allow(dead_code)]
 fn extract_failing_operation(full_stderr: &str) -> Option<String> {
     // Match lines from user code files in the traceback
@@ -219,14 +220,37 @@ fn extract_failing_operation(full_stderr: &str) -> Option<String> {
         }
     }
 
-    // Look for .operation( patterns matching known CQ operations
-    let op_re = Regex::new(r"\.(\w+)\s*\(").ok()?;
+    // Look for operation( patterns matching known CAD operations
+    // Match both `.operation(` (method chain) and standalone `operation(` (Build123d)
+    let op_re = Regex::new(r"(?:^|[^.\w])(\w+)\s*\(").ok()?;
     for line in user_lines.iter().rev() {
         for cap in op_re.captures_iter(line) {
             let op = &cap[1];
-            if CQ_OPERATIONS.contains(&op) {
+            if CAD_OPERATIONS.contains(&op) {
                 return Some(op.to_string());
             }
+        }
+    }
+
+    // Also check library traceback lines for operation names in paths
+    // e.g., "build123d/operations_generic.py", line 234, in fillet"
+    let lib_re = Regex::new(r"in (\w+)\s*$").ok()?;
+    for line in full_stderr.lines() {
+        if let Some(cap) = lib_re.captures(line.trim()) {
+            let op = &cap[1];
+            if CAD_OPERATIONS.contains(&op) {
+                return Some(op.to_string());
+            }
+        }
+    }
+
+    // Check if the error message itself names an operation
+    // e.g., "Boolean operation (cut) failed"
+    let msg_re = Regex::new(r"(?i)\b(fillet|chamfer|shell|loft|sweep|revolve|cut|union|intersect|extrude|hole|translate|rotate|mirror)\b").ok()?;
+    if let Some(cap) = msg_re.captures(full_stderr) {
+        let op = cap[1].to_lowercase();
+        if CAD_OPERATIONS.contains(&op.as_str()) {
+            return Some(op);
         }
     }
 
@@ -271,7 +295,7 @@ fn extract_error_context(full_stderr: &str, message: &str) -> Option<ErrorContex
 /// - `AttributeError: ...`
 /// - `TypeError: ...`
 /// - `ValueError: ...`
-/// - CadQuery-specific `OCP.StdFail_NotDone`
+/// - OCCT-specific `OCP.StdFail_NotDone`
 /// - Generic fallback for unknown errors
 #[allow(dead_code)]
 pub fn parse_traceback(stderr: &str) -> StructuredError {
@@ -361,7 +385,7 @@ fn generate_suggestion(
     match category {
         ErrorCategory::Topology(TopologySubKind::MissingSolid) => {
             return Some(
-                "A 3D operation was called on a 2D sketch that was never extruded. Add .extrude()/.revolve()/.sweep()/.loft() after 2D sketch operations before calling .cut()/.fillet()/.shell()/.hole().".to_string(),
+                "A 3D operation requires a solid body. Ensure you're inside a `with BuildPart():` context and have added 3D geometry before applying operations.".to_string(),
             );
         }
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
@@ -425,7 +449,7 @@ fn generate_suggestion(
             Some("A variable or function name is not defined. Check for typos.".to_string())
         }
         "AttributeError" => Some(
-            "An object does not have the expected attribute or method. Check the CadQuery API documentation.".to_string(),
+            "An object does not have the expected attribute or method. Check the Build123d API documentation.".to_string(),
         ),
         "TypeError" => Some(
             "Wrong argument types or number of arguments. Check function signatures.".to_string(),
@@ -435,7 +459,7 @@ fn generate_suggestion(
                 .to_string(),
         ),
         "ModuleNotFoundError" | "ImportError" => Some(
-            "A required module could not be found. Only cadquery and standard library modules are available.".to_string(),
+            "A required module could not be found. Only build123d and standard library modules are available.".to_string(),
         ),
         _ => None,
     }
@@ -455,9 +479,9 @@ fn match_anti_pattern(error: &StructuredError, code: Option<&str>) -> Option<Str
             Some("3D operation on 2D sketch (no solid on stack)".to_string())
         }
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
-            // Check if code uses blanket .edges().fillet() pattern
+            // Check if code uses blanket fillet() with .edges() pattern
             let is_blanket = code
-                .map(|c| c.contains(".edges().fillet") || c.contains(".edges().chamfer"))
+                .map(|c| (c.contains("fillet(") && c.contains(".edges()")) || (c.contains("chamfer(") && c.contains(".edges()")))
                 .unwrap_or(false);
             if is_blanket {
                 Some("Blanket fillet on complex geometry".to_string())
@@ -556,24 +580,23 @@ pub fn get_retry_strategy(
             vec![],
         ),
         ErrorCategory::Topology(TopologySubKind::MissingSolid) => (
-            "You called a 3D operation (.cut, .fillet, .chamfer, .shell, .hole) on a 2D sketch \
-             that was never extruded into a solid. Find the .rect()/.circle()/.polyline() that \
-             is missing its .extrude()/.revolve()/.sweep()/.loft() and add it. Primitive \
-             constructors like .box() and .sphere() already produce solids."
+            "A 3D operation requires a solid body. Ensure you're inside a `with BuildPart():` \
+             context and have added 3D geometry (Box, Cylinder, extrude, etc.) before applying \
+             operations like fillet, chamfer, or boolean cuts."
                 .to_string(),
             vec![],
         ),
         ErrorCategory::Topology(TopologySubKind::FilletFailure) => {
             let is_blanket = code
-                .map(|c| c.contains(".edges().fillet") || c.contains(".edges().chamfer"))
+                .map(|c| (c.contains("fillet(") && c.contains(".edges()")) || (c.contains("chamfer(") && c.contains(".edges()")))
                 .unwrap_or(false);
             if is_blanket {
                 (
-                    "The .edges().fillet() pattern CANNOT fillet ALL edges on complex geometry \
+                    "The fillet() on all edges pattern CANNOT fillet ALL edges on complex geometry \
                      (loft+shell+boolean). Do NOT reduce the radius — that won't fix this. \
                      Instead wrap the fillet in try/except: \
-                     `try: result = body.edges().fillet(r)` / `except: result = body`. \
-                     Or use selective edge fillet like .edges('>Z').fillet(r)."
+                     `try: result = fillet(body.edges(), radius=r)` / `except: result = body`. \
+                     Or use selective edge filtering."
                         .to_string(),
                     vec![],
                 )
@@ -635,17 +658,16 @@ pub fn get_retry_strategy(
                 && msg.to_lowercase().contains("planar faces")
             {
                 (
-                    "workplane() is being called after faces() that selects multiple faces. \
-                     Select one face explicitly before workplane, e.g. \
-                     `.faces(selector).first().workplane(...)` or use a tighter selector."
+                    "A face selection returned multiple faces. Use a more specific selector \
+                     or filter to a single face before proceeding."
                         .to_string(),
                     vec![],
                 )
             } else {
                 (
                     format!(
-                        "There is an API usage error: {}. Check the CadQuery API — verify method names, \
-                         argument types, and tuple signatures (e.g. .translate((x,y,z)) needs double parens).",
+                        "There is an API usage error: {}. Check the Build123d API — verify method names, \
+                         argument types, and builder context usage.",
                         msg
                     ),
                     vec![],
@@ -654,7 +676,7 @@ pub fn get_retry_strategy(
         }
         ErrorCategory::ImportRuntime => (
             format!(
-                "Fix the import/name error: {}. Only cadquery and standard library modules are \
+                "Fix the import/name error: {}. Only build123d and standard library modules are \
                  available. Check variable names for typos.",
                 msg
             ),
@@ -708,23 +730,25 @@ pub fn get_retry_strategy(
     }
 }
 
-/// Check if code uses a risky blanket `.edges().fillet()` pattern on complex geometry.
+/// Check if code uses a risky blanket fillet pattern on complex geometry.
 ///
-/// Returns a warning message if the code contains `.edges().fillet()` or `.edges().chamfer()`
+/// Returns a warning message if the code contains `fillet()` with `.edges()`
 /// combined with complex operations (loft, shell, or multiple booleans) that are likely to fail.
 #[allow(dead_code)]
 pub fn check_risky_fillet_pattern(code: &str) -> Option<String> {
-    let has_blanket = code.contains(".edges().fillet") || code.contains(".edges().chamfer");
+    let has_blanket = (code.contains("fillet(") && code.contains(".edges()"))
+        || (code.contains("chamfer(") && code.contains(".edges()"));
     if !has_blanket {
         return None;
     }
-    let has_complex = code.contains(".loft(")
-        || code.contains(".shell(")
+    let has_complex = code.contains("loft(")
+        || code.contains("shell(")
+        || code.contains("offset_3d(")
         || (code.contains(".union(") && code.contains(".cut("))
         || code.matches(".cut(").count() >= 3;
     if has_complex {
         Some(
-            "Code uses .edges().fillet() on complex loft/shell/boolean geometry — high failure risk"
+            "Code uses fillet() on complex loft/shell/boolean geometry — high failure risk"
                 .to_string(),
         )
     } else {
@@ -732,14 +756,14 @@ pub fn check_risky_fillet_pattern(code: &str) -> Option<String> {
     }
 }
 
-/// Validate that CadQuery code has the basic required structure.
+/// Validate that CAD code has the basic required structure.
 /// Returns Ok(()) if valid, Err with a list of problems otherwise.
 #[allow(dead_code)]
-pub fn validate_cadquery_code(code: &str) -> Result<(), Vec<String>> {
+pub fn validate_cad_code(code: &str) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
-    if !code.contains("import cadquery") && !code.contains("import cadquery as cq") {
-        errors.push("Code must import cadquery".to_string());
+    if !code.contains("from build123d import") && !code.contains("build123d") {
+        errors.push("Code must import build123d".to_string());
     }
 
     if !code.contains("result") {
@@ -767,9 +791,9 @@ mod tests {
 
     #[test]
     fn test_extract_python_code() {
-        let response = "Here is the code:\n```python\nimport cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\n```\nDone.";
+        let response = "Here is the code:\n```python\nfrom build123d import *\nresult = Box(10, 10, 10)\n```\nDone.";
         let code = extract_python_code(response).unwrap();
-        assert!(code.contains("import cadquery as cq"));
+        assert!(code.contains("from build123d import *"));
         assert!(code.contains("result"));
     }
 
@@ -781,22 +805,22 @@ mod tests {
 
     #[test]
     fn test_validate_good_code() {
-        let code = "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)";
-        assert!(validate_cadquery_code(code).is_ok());
+        let code = "from build123d import *\nresult = Box(10, 10, 10)";
+        assert!(validate_cad_code(code).is_ok());
     }
 
     #[test]
     fn test_validate_missing_import() {
         let code = "result = something()";
-        let errors = validate_cadquery_code(code).unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("import cadquery")));
+        let errors = validate_cad_code(code).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("import build123d")));
     }
 
     #[test]
     fn test_validate_forbidden_pattern() {
         let code =
-            "import cadquery as cq\nresult = cq.Workplane('XY').box(10,10,10)\nshow_object(result)";
-        let errors = validate_cadquery_code(code).unwrap_err();
+            "from build123d import *\nresult = Box(10, 10, 10)\nshow_object(result)";
+        let errors = validate_cad_code(code).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("show_object")));
     }
 
@@ -806,8 +830,8 @@ mod tests {
     fn test_parse_traceback_syntax_error() {
         let stderr = r#"Traceback (most recent call last):
   File "script.py", line 5
-    result = cq.Workplane('XY').box(10,10,10
-                                           ^
+    result = Box(10, 10, 10
+                           ^
 SyntaxError: unexpected EOF while parsing"#;
         let err = parse_traceback(stderr);
         assert_eq!(err.error_type, "SyntaxError");
@@ -821,11 +845,11 @@ SyntaxError: unexpected EOF while parsing"#;
     fn test_parse_traceback_name_error() {
         let stderr = r#"Traceback (most recent call last):
   File "script.py", line 3, in <module>
-    result = cq.Workplane('XY').bxo(10,10,10)
-NameError: name 'cq' is not defined"#;
+    result = Bxo(10,10,10)
+NameError: name 'Bxo' is not defined"#;
         let err = parse_traceback(stderr);
         assert_eq!(err.error_type, "NameError");
-        assert!(err.suggestion.unwrap().contains("'cq'"));
+        assert!(err.suggestion.unwrap().contains("'Bxo'"));
         assert_eq!(err.line_number, Some(3));
         assert_eq!(err.category, ErrorCategory::ImportRuntime);
     }
@@ -894,12 +918,12 @@ NameError: name 'cq' is not defined"#;
     }
 
     #[test]
-    fn test_classify_type_error_on_cq() {
+    fn test_classify_type_error_on_b3d() {
         assert_eq!(
             classify_error(
                 "TypeError",
                 "translate() takes 2 arguments",
-                "cq.Workplane('XY').box(10,10,10).translate((1,2))"
+                "build123d BuildPart Box(10,10,10)"
             ),
             ErrorCategory::ApiMisuse
         );
@@ -1126,8 +1150,8 @@ SyntaxError: unexpected EOF"#;
     fn test_parse_traceback_fillet_too_large() {
         let stderr = r#"Traceback (most recent call last):
   File "input.py", line 6, in <module>
-    result = cq.Workplane("XY").box(10, 10, 10).fillet(8.0)
-  File "/venv/lib/python3.10/site-packages/cadquery/cq.py", line 1234, in fillet
+    result = fillet(Box(10, 10, 10).edges(), radius=8.0)
+  File "/venv/lib/python3.10/site-packages/build123d/operations_generic.py", line 234, in fillet
     raise StdFail_NotDone
 OCP.StdFail_NotDone: BRep_API: not done"#;
         let err = parse_traceback(stderr);
@@ -1143,8 +1167,8 @@ OCP.StdFail_NotDone: BRep_API: not done"#;
     fn test_parse_traceback_shell_failure() {
         let stderr = r#"Traceback (most recent call last):
   File "input.py", line 5, in <module>
-    result = cq.Workplane("XY").box(20, 20, 20).shell(-2.0)
-  File "/venv/lib/python3.10/site-packages/cadquery/cq.py", line 987, in shell
+    result = shell(Box(20, 20, 20).faces(), thickness=-2.0)
+  File "/venv/lib/python3.10/site-packages/build123d/operations_generic.py", line 987, in shell
     raise StdFail_NotDone
 OCP.StdFail_NotDone: Shell offset not done"#;
         let err = parse_traceback(stderr);
@@ -1160,8 +1184,8 @@ OCP.StdFail_NotDone: Shell offset not done"#;
     fn test_parse_traceback_boolean_failure() {
         let stderr = r#"Traceback (most recent call last):
   File "input.py", line 8, in <module>
-    result = base.cut(cutter)
-  File "/venv/lib/python3.10/site-packages/cadquery/cq.py", line 555, in cut
+    result = base - cutter
+  File "/venv/lib/python3.10/site-packages/build123d/topology.py", line 555, in __sub__
     raise StdFail_NotDone
 OCP.StdFail_NotDone: Boolean operation (cut) failed"#;
         let err = parse_traceback(stderr);
@@ -1174,11 +1198,11 @@ OCP.StdFail_NotDone: Boolean operation (cut) failed"#;
     }
 
     #[test]
-    fn test_parse_traceback_attribute_error_cq() {
+    fn test_parse_traceback_attribute_error_cad() {
         let stderr = r#"Traceback (most recent call last):
   File "input.py", line 3, in <module>
-    result = cq.Workplane("XY").bocks(10, 10, 10)
-AttributeError: 'Workplane' object has no attribute 'bocks'"#;
+    result = Bocks(10, 10, 10)
+AttributeError: module 'build123d' has no attribute 'Bocks'"#;
         let err = parse_traceback(stderr);
         assert_eq!(err.category, ErrorCategory::ApiMisuse);
         assert_eq!(err.error_type, "AttributeError");
@@ -1188,8 +1212,8 @@ AttributeError: 'Workplane' object has no attribute 'bocks'"#;
     fn test_parse_traceback_type_error_translate() {
         let stderr = r#"Traceback (most recent call last):
   File "input.py", line 4, in <module>
-    result = cq.Workplane("XY").box(10,10,10).translate((1,2))
-TypeError: translate() requires a 3-tuple for cadquery.Workplane"#;
+    result = Box(10,10,10).translate((1,2))
+TypeError: translate() requires a 3-tuple for build123d.BuildPart"#;
         let err = parse_traceback(stderr);
         assert_eq!(err.category, ErrorCategory::ApiMisuse);
         assert_eq!(err.failing_operation, Some("translate".to_string()));
@@ -1355,16 +1379,16 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     }
 
     #[test]
-    fn test_strategy_api_misuse_planar_faces_workplane() {
+    fn test_strategy_api_misuse_planar_faces() {
         let err = make_error(
             ErrorCategory::ApiMisuse,
             "If multiple objects selected, they all must be planar faces.",
-            Some("workplane"),
+            None,
         );
         let strategy = get_retry_strategy(&err, 1, None);
         assert!(strategy
             .fix_instruction
-            .contains(".faces(selector).first().workplane"));
+            .contains("face selection returned multiple faces"));
         assert!(strategy.forbidden_operations.is_empty());
     }
 
@@ -1451,7 +1475,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "BRep_API: command not done",
             Some("fillet"),
         );
-        let code = "helmet = helmet.cut(visor)\nresult = helmet.edges().fillet(2.0)";
+        let code = "helmet = helmet.cut(visor)\nresult = fillet(helmet.edges(), radius=2.0)";
         let strategy = get_retry_strategy(&err, 1, Some(code));
         assert!(
             strategy.fix_instruction.contains("try/except"),
@@ -1475,7 +1499,7 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
             "BRep_API: not done",
             Some("fillet"),
         );
-        let code = "result = cq.Workplane('XY').box(10,10,10).edges('|Z').fillet(8.0)";
+        let code = "result = fillet(part.edge_list, radius=8.0)";
         let strategy = get_retry_strategy(&err, 1, Some(code));
         assert!(
             strategy.fix_instruction.contains("Reduce ALL"),
@@ -1491,9 +1515,15 @@ ValueError: Cannot sweep along path: expected Wire, got Edge"#;
     #[test]
     fn test_check_risky_fillet_pattern_loft_plus_fillet() {
         let code = r#"
-import cadquery as cq
-body = cq.Workplane("XY").circle(50).workplane(offset=80).circle(30).loft()
-result = body.edges().fillet(2.0)
+from build123d import *
+with BuildPart() as p:
+    with BuildSketch():
+        Circle(50)
+    with BuildSketch(Plane.XY.offset(80)):
+        Circle(30)
+    loft()
+    fillet(p.edges(), radius=2.0)
+result = p.part
 "#;
         let warning = check_risky_fillet_pattern(code);
         assert!(warning.is_some(), "should detect loft + blanket fillet");
@@ -1503,8 +1533,9 @@ result = body.edges().fillet(2.0)
     #[test]
     fn test_check_risky_fillet_pattern_simple_box_ok() {
         let code = r#"
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 10, 10).edges("|Z").fillet(1.0)
+from build123d import *
+result = Box(10, 10, 10)
+result = fillet(result.edges().filter_by(Axis.Z), radius=1.0)
 "#;
         assert!(
             check_risky_fillet_pattern(code).is_none(),
@@ -1515,12 +1546,19 @@ result = cq.Workplane("XY").box(10, 10, 10).edges("|Z").fillet(1.0)
     #[test]
     fn test_check_risky_fillet_pattern_multi_boolean() {
         let code = r#"
-import cadquery as cq
-body = cq.Workplane("XY").box(100, 100, 50)
-body = body.cut(cq.Workplane("XY").circle(10).extrude(60))
-body = body.cut(cq.Workplane("XY").center(20,0).circle(10).extrude(60))
-body = body.cut(cq.Workplane("XY").center(-20,0).circle(10).extrude(60))
-result = body.edges().fillet(2.0)
+from build123d import *
+with BuildPart() as p:
+    Box(100, 100, 50)
+    with Locations((0, 0)):
+        Cylinder(10, 60, mode=Mode.SUBTRACT)
+    with Locations((20, 0)):
+        Cylinder(10, 60, mode=Mode.SUBTRACT)
+    body = p.part
+body = body.cut(Cylinder(10, 60))
+body = body.cut(Cylinder(10, 60))
+body = body.cut(Cylinder(10, 60))
+fillet(body.edges(), radius=2.0)
+result = body
 "#;
         let warning = check_risky_fillet_pattern(code);
         assert!(

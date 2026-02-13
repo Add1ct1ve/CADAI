@@ -141,9 +141,11 @@ impl SessionMemory {
     }
 }
 
-/// Extract CadQuery operation names from Python code.
+/// Extract CAD operation names from Python code.
+/// Matches both standalone function calls (Build123d) and method-chain patterns.
 pub fn extract_operations_from_code(code: &str) -> Vec<String> {
-    let pattern = Regex::new(r"\.(\w+)\s*\(").unwrap();
+    // Match both `.operation(` (method chain) and standalone `operation(` (Build123d)
+    let pattern = Regex::new(r"(?:^|[^.\w])(\w+)\s*\(").unwrap();
     let known_ops = [
         "extrude", "revolve", "loft", "sweep", "shell", "fillet", "chamfer", "cut", "union",
         "hole", "tag",
@@ -235,14 +237,14 @@ mod tests {
     #[test]
     fn test_extract_operations_from_code() {
         let code = r#"
-import cadquery as cq
-result = (
-    cq.Workplane("XY")
-    .circle(20)
-    .revolve(360)
-    .fillet(2)
-    .shell(-1)
-)
+from build123d import *
+with BuildPart() as p:
+    with BuildSketch():
+        Circle(20)
+    revolve(axis=Axis.X)
+    fillet(p.edges(), radius=2)
+    shell(p.faces(), thickness=-1)
+result = p.part
 "#;
         let ops = extract_operations_from_code(code);
         assert!(ops.contains(&"revolve".to_string()));

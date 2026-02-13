@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 
 /**
- * CadQuery uses Z-up coordinate system, Three.js uses Y-up.
- * CadQuery (X, Y, Z) -> Three.js (X, Z, -Y)
+ * Build123d uses Z-up coordinate system, Three.js uses Y-up.
+ * CAD (X, Y, Z) -> Three.js (X, Z, -Y)
  */
 
 export function cadToThreePos(cadPos: [number, number, number]): THREE.Vector3 {
@@ -15,7 +15,7 @@ export function threeToCadPos(vec: THREE.Vector3): [number, number, number] {
 }
 
 /**
- * Convert CadQuery rotation (degrees around X, Y, Z in Z-up)
+ * Convert CAD rotation (degrees around X, Y, Z in Z-up)
  * to Three.js Euler (Y-up).
  * Remaps: cadX -> threeX, cadY -> -threeZ, cadZ -> threeY
  */
@@ -24,8 +24,8 @@ export function cadToThreeRot(cadRot: [number, number, number]): THREE.Euler {
   const deg2rad = Math.PI / 180;
   return new THREE.Euler(
     rx * deg2rad,   // X stays X
-    rz * deg2rad,   // CadQuery Z-rot -> Three.js Y-rot
-    -ry * deg2rad,  // CadQuery Y-rot -> Three.js -Z-rot
+    rz * deg2rad,   // CAD Z-rot -> Three.js Y-rot
+    -ry * deg2rad,  // CAD Y-rot -> Three.js -Z-rot
     'XYZ',
   );
 }
@@ -40,8 +40,8 @@ export function threeToCadRot(euler: THREE.Euler): [number, number, number] {
 }
 
 /**
- * Intersect a screen-space mouse event with the XZ ground plane (Y=0 in Three.js = Z=0 in CadQuery).
- * Returns the CadQuery position [x, y, z] or null if no intersection.
+ * Intersect a screen-space mouse event with the XZ ground plane (Y=0 in Three.js = Z=0 in CAD).
+ * Returns the CAD position [x, y, z] or null if no intersection.
  */
 export function raycastGroundPlane(
   event: PointerEvent,
