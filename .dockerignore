@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode
+.svelte-kit
+build
+node_modules
+.pnpm-store
+src-tauri/target
+src-tauri/.cargo
+*.log
+*.tmp
+tmp
+.DS_Store

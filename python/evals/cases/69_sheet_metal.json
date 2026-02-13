@@ -1,0 +1,5 @@
+{
+  "id": "case_69_sheet_metal",
+  "category": "sheet_metal",
+  "prompt": "Model a bent sheet-metal style cover with flanges and mounting slots, preserving bend-friendly radii. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

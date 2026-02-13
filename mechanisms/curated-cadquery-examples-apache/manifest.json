@@ -1,0 +1,55 @@
+{
+  "package_id": "curated-cadquery-examples-apache",
+  "name": "Curated CadQuery Example Patterns",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/CadQuery/cadquery",
+  "homepage": "https://github.com/CadQuery/cadquery/tree/master/examples",
+  "mechanisms": [
+    {
+      "id": "case_seam_lip_pattern",
+      "title": "Case Seam Lip Pattern",
+      "summary": "Reusable enclosure seam lip strategy from CadQuery examples.",
+      "category": "enclosure",
+      "keywords": ["enclosure", "case", "seam", "lip"],
+      "prompt_block": "Design enclosure top/bottom bodies with mating seam lip and assembly clearance. Keep wall thickness, lip depth, and seam overlap parametric.",
+      "source_url": "https://github.com/CadQuery/cadquery/blob/master/examples/Ex026_Case_Seam_Lip.py"
+    },
+    {
+      "id": "pillow_block_counterbore_pattern",
+      "title": "Pillow Block Counterbore Pattern",
+      "summary": "Pillow block profile with counterbored mounting holes.",
+      "category": "mounting",
+      "keywords": ["pillow block", "counterbore", "mount"],
+      "prompt_block": "Build a support block with central bore and counterbored fastener holes. Keep bore diameter, mounting spacing, and counterbore depth as named parameters.",
+      "source_url": "https://github.com/CadQuery/cadquery/blob/master/examples/Ex003_Pillow_Block_With_Counterbored_Holes.py"
+    },
+    {
+      "id": "loft_transition_body_pattern",
+      "title": "Loft Transition Body Pattern",
+      "summary": "Loft-based transitions between cross-sections.",
+      "category": "shape_transition",
+      "keywords": ["loft", "transition", "profile"],
+      "prompt_block": "Create smooth loft transitions between section profiles with stable section ordering. Keep profile dimensions and section spacing parametric, and add conservative fillets only after validation.",
+      "source_url": "https://github.com/CadQuery/cadquery/blob/master/examples/Ex018_Making_Lofts.py"
+    },
+    {
+      "id": "sweep_path_tube_pattern",
+      "title": "Sweep Path Tube Pattern",
+      "summary": "Sweep-based pipe/tube generation along guided path.",
+      "category": "routing",
+      "keywords": ["sweep", "tube", "path", "routing"],
+      "prompt_block": "Generate a section swept along a path with controlled orientation and optional Frenet frame. Parameterize section size, bend radii, and path waypoint coordinates.",
+      "source_url": "https://github.com/CadQuery/cadquery/blob/master/examples/Ex023_Sweep.py"
+    },
+    {
+      "id": "revolve_profile_housing_pattern",
+      "title": "Revolve Profile Housing Pattern",
+      "summary": "Axisymmetric revolve workflow for rotational components.",
+      "category": "rotational",
+      "keywords": ["revolve", "axisymmetric", "housing"],
+      "prompt_block": "Create rotational components from constrained 2D profiles and revolve axis definitions. Keep profile dimensions, angle span, and bore dimensions parameterized.",
+      "source_url": "https://github.com/CadQuery/cadquery/blob/master/examples/Ex022_Revolution.py"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+import type { PendingAssemblyPart, ViewportState } from '$lib/types';
+import type { ViewportEngine } from '$lib/services/viewport-engine';
+import type { CameraState, DisplayMode, SectionPlaneConfig } from '$lib/types/cad';
+
+let isLoading = $state(false);
+let hasModel = $state(false);
+let error = $state<string | null>(null);
+let pendingStl = $state<string | null>(null);
+let pendingAssemblyParts = $state<PendingAssemblyPart[] | null>(null);
+let pendingClear = $state(false);
+let engineRef = $state<ViewportEngine | null>(null);
+let gridVisible = $state(true);
+let axesVisible = $state(true);
+let displayMode = $state<DisplayMode>('shaded');
+let sectionPlane = $state<SectionPlaneConfig>({ enabled: false, normal: [0, 1, 0], offset: 0 });
+let gridSize = $state(100);
+let gridSpacing = $state(1);
+let explodeFactor = $state(0);
+let explodeEnabled = $state(false);
+
+export function getViewportStore() {
+  return {
+    get isLoading() {
+      return isLoading;
+    },
+    get hasModel() {
+      return hasModel;
+    },
+    get error() {
+      return error;
+    },
+    setLoading(val: boolean) {
+      isLoading = val;
+    },
+    setHasModel(val: boolean) {
+      hasModel = val;
+    },
+    setError(err: string | null) {
+      error = err;
+    },
+    get pendingStl() {
+      return pendingStl;
+    },
+    setPendingStl(base64: string | null) {
+      pendingStl = base64;
+    },
+    get pendingAssemblyParts() {
+      return pendingAssemblyParts;
+    },
+    setPendingAssemblyParts(parts: PendingAssemblyPart[] | null) {
+      pendingAssemblyParts = parts;
+    },
+    get pendingClear() {
+      return pendingClear;
+    },
+    setPendingClear(val: boolean) {
+      pendingClear = val;
+    },
+    setEngine(engine: ViewportEngine | null) {
+      engineRef = engine;
+    },
+    getCameraState(): CameraState | null {
+      return engineRef?.getCameraState() ?? null;
+    },
+    setCameraState(state: CameraState) {
+      engineRef?.setCameraState(state);
+    },
+    get gridVisible() {
+      return gridVisible;
+    },
+    get axesVisible() {
+      return axesVisible;
+    },
+    setGridVisible(val: boolean) {
+      gridVisible = val;
+      engineRef?.setGridVisible(val);
+    },
+    setAxesVisible(val: boolean) {
+      axesVisible = val;
+      engineRef?.setAxesVisible(val);
+    },
+    animateToView(view: 'top' | 'front' | 'right' | 'iso') {
+      engineRef?.animateToView(view);
+    },
+    fitAll() {
+      engineRef?.fitAll();
+    },
+    get displayMode() { return displayMode; },
+    setDisplayMode(mode: DisplayMode) {
+      displayMode = mode;
+      engineRef?.setDisplayMode(mode);
+      // Auto-toggle section plane with section mode
+      if (mode === 'section' && !sectionPlane.enabled) {
+        sectionPlane = { ...sectionPlane, enabled: true };
+        engineRef?.setSectionPlane(sectionPlane);
+      }
+      if (mode !== 'section' && sectionPlane.enabled) {
+        sectionPlane = { ...sectionPlane, enabled: false };
+        engineRef?.setSectionPlane(sectionPlane);
+      }
+    },
+    get sectionPlane() { return sectionPlane; },
+    setSectionPlane(config: SectionPlaneConfig) {
+      sectionPlane = config;
+      engineRef?.setSectionPlane(config);
+    },
+    get gridSize() { return gridSize; },
+    get gridSpacing() { return gridSpacing; },
+    setGridConfig(size: number, spacing: number) {
+      gridSize = size;
+      gridSpacing = spacing;
+      engineRef?.rebuildGrid(size, spacing);
+    },
+    setThemeColors(theme: 'dark' | 'light') {
+      engineRef?.setThemeColors(theme);
+    },
+    // ── Exploded View ──
+    get explodeFactor() { return explodeFactor; },
+    get explodeEnabled() { return explodeEnabled; },
+    setExplodeFactor(f: number) {
+      explodeFactor = Math.max(0, Math.min(1, f));
+    },
+    setExplodeEnabled(b: boolean) {
+      explodeEnabled = b;
+      if (!b) explodeFactor = 0;
+    },
+    toggleExplode() {
+      explodeEnabled = !explodeEnabled;
+      if (!explodeEnabled) explodeFactor = 0;
+    },
+
+    getState(): ViewportState {
+      return { isLoading, hasModel, error };
+    },
+  };
+}

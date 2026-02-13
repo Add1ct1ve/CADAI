@@ -1,0 +1,311 @@
+"""
+Build123d execution wrapper for CAD AI Studio.
+
+This script is invoked by the Rust backend as a subprocess.
+It executes Build123d code and exports the result as STL.
+
+Usage:
+    python runner.py <input_file> <output_file>
+
+The input file should contain valid Build123d Python code.
+The code MUST assign the final result to a variable named 'result'.
+The output file will be written as binary STL.
+"""
+
+import sys
+import os
+import traceback
+from collections.abc import Mapping
+
+
+def _is_string_like(value):
+    return isinstance(value, (str, bytes, bytearray))
+
+
+def _extract_exportables(result):
+    """
+    Flatten a user-provided `result` into Build123d-exportable objects.
+
+    Supports:
+    - a single Shape / Solid / Compound
+    - Workplane (via .vals()/.val()) for CadQuery backward compat
+    - BuildPart context manager results (via .part)
+    - BuildSketch context manager results (via .sketch)
+    - list/tuple/set of the above
+    - dict of named parts (values are inspected)
+    """
+    found = []
+    invalid = []
+    seen_ids = set()
+
+    def add_candidate(candidate):
+        if candidate is None:
+            return
+        if _is_string_like(candidate):
+            invalid.append(f"string:{str(candidate)[:40]}")
+            return
+
+        if isinstance(candidate, Mapping):
+            for value in candidate.values():
+                add_candidate(value)
+            return
+
+        if isinstance(candidate, (list, tuple, set)):
+            for value in candidate:
+                add_candidate(value)
+            return
+
+        # Workplane with multiple objects (CadQuery backward compat).
+        if hasattr(candidate, "vals") and callable(candidate.vals):
+            try:
+                values = candidate.vals()
+                if values:
+                    for value in values:
+                        add_candidate(value)
+                    return
+            except Exception:
+                pass
+
+        # Workplane with a single object (CadQuery backward compat).
+        if hasattr(candidate, "val") and callable(candidate.val):
+            try:
+                value = candidate.val()
+                if value is not None and value is not candidate:
+                    add_candidate(value)
+                    return
+            except Exception:
+                pass
+
+        # Build123d BuildPart context manager result.
+        if hasattr(candidate, "part"):
+            part = candidate.part
+            if part is not None:
+                add_candidate(part)
+                return
+
+        # Build123d BuildSketch context manager result.
+        if hasattr(candidate, "sketch"):
+            sketch = candidate.sketch
+            if sketch is not None:
+                add_candidate(sketch)
+                return
+
+        # Build123d / CadQuery shape-like object (both use .wrapped for OCCT).
+        if hasattr(candidate, "wrapped"):
+            obj_id = id(candidate)
+            if obj_id not in seen_ids:
+                seen_ids.add(obj_id)
+                found.append(candidate)
+            return
+
+        # Numbers / bools / other scalars are not exportable geometry.
+        if isinstance(candidate, (int, float, bool)):
+            invalid.append(f"scalar:{candidate}")
+            return
+
+        # Unknown object type that did not resolve to a Build123d shape.
+        invalid.append(f"type:{type(candidate).__name__}")
+
+    add_candidate(result)
+    return found, invalid
+
+
+def _count_solids(shape):
+    """Count solid sub-shapes using OCP topology explorer."""
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    wrapped = shape.wrapped if hasattr(shape, "wrapped") else shape
+    explorer = TopExp_Explorer(wrapped, TopAbs_SOLID)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    return count
+
+
+def _ensure_single_solid(normalized):
+    """
+    Verify result is a single solid body.
+    If multiple solids found, attempt OCP-level fuse.
+    Exit code 5 if unfixable.
+    """
+    try:
+        count = _count_solids(normalized)
+        if count <= 1:
+            return normalized
+
+        # Try fusing touching/overlapping solids
+        from OCP.TopAbs import TopAbs_SOLID
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+
+        wrapped = normalized.wrapped if hasattr(normalized, "wrapped") else normalized
+        explorer = TopExp_Explorer(wrapped, TopAbs_SOLID)
+        solids = []
+        while explorer.More():
+            solids.append(explorer.Current())
+            explorer.Next()
+
+        fused = solids[0]
+        for s in solids[1:]:
+            op = BRepAlgoAPI_Fuse(fused, s)
+            if op.IsDone():
+                fused = op.Shape()
+            else:
+                print(
+                    f"SPLIT_BODY: result has {count} disconnected solids (fuse failed)",
+                    file=sys.stderr,
+                )
+                sys.exit(5)
+
+        from build123d import Solid
+        fused_shape = Solid(fused)
+        if _count_solids(fused_shape) == 1:
+            print(f"FUSED: {count} solids merged into 1", file=sys.stderr)
+            return fused_shape
+
+        print(
+            f"SPLIT_BODY: result has {count} disconnected solids after fuse attempt",
+            file=sys.stderr,
+        )
+        sys.exit(5)
+    except SystemExit:
+        raise  # re-raise sys.exit
+    except Exception as e:
+        # Don't block export if the check itself errors
+        print(f"Warning: solid count check skipped: {e}", file=sys.stderr)
+        return normalized
+
+
+def _normalize_result_for_export(result):
+    exportables, invalid = _extract_exportables(result)
+    if not exportables:
+        raise ValueError(
+            "result did not contain exportable Build123d geometry. "
+            "Assign a Build123d Part/Shape or a collection of those to `result`."
+        )
+
+    if invalid:
+        examples = ", ".join(invalid[:3])
+        raise ValueError(
+            "result mixed geometry with non-geometry values "
+            f"({examples}). Assign only Build123d geometry objects to `result`."
+        )
+
+    if len(exportables) == 1:
+        return exportables[0]
+
+    # Multiple parts: export as one compound (preserves all generated solids).
+    from build123d import Compound
+    return Compound(children=exportables)
+
+
+def _indent_width(line):
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4
+        else:
+            break
+    return width
+
+
+def _is_try_header(stripped):
+    header = stripped.split("#", 1)[0].rstrip()
+    if not header.endswith(":"):
+        return False
+    head = header[:-1].strip()
+    return head == "try" or head.startswith("except") or head == "else" or head == "finally"
+
+
+def guard_fillet_chamfer(code):
+    """
+    Wrap unguarded .fillet()/.chamfer() lines in try/except blocks.
+    Line-based and indentation-aware; does not parse multi-line statements.
+    """
+    lines = code.splitlines()
+    protected = []
+    out = []
+
+    for line in lines:
+        stripped = line.lstrip()
+        indent = _indent_width(line)
+
+        if stripped:
+            while protected and indent <= protected[-1]:
+                protected.pop()
+
+        in_try = bool(protected) and indent > protected[-1]
+        has_fillet = "fillet(" in line or "chamfer(" in line
+        is_comment = stripped.startswith("#")
+        already_guarded = "auto-fillet-guard" in line
+
+        if has_fillet and not in_try and not is_comment and stripped and not already_guarded:
+            indent_str = line[: len(line) - len(stripped)]
+            out.append(f"{indent_str}# auto-fillet-guard")
+            out.append(f"{indent_str}try:")
+            out.append(f"{indent_str}    {stripped}")
+            out.append(f"{indent_str}except Exception:")
+            out.append(f"{indent_str}    pass")
+        else:
+            out.append(line)
+
+        if stripped and _is_try_header(stripped):
+            protected.append(indent)
+
+    return "\n".join(out)
+
+
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: runner.py <input_file> <output_stl_file>", file=sys.stderr)
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    if not os.path.exists(input_file):
+        print(f"Input file not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    code = guard_fillet_chamfer(code)
+
+    # Execute the Build123d code
+    namespace = {}
+    try:
+        exec(code, namespace)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(2)
+
+    # Get the result variable
+    result = namespace.get("result")
+    if result is None:
+        print("Error: Code must assign final geometry to 'result' variable.", file=sys.stderr)
+        sys.exit(3)
+
+    # Export based on file extension
+    try:
+        normalized = _normalize_result_for_export(result)
+        normalized = _ensure_single_solid(normalized)
+        from build123d import export_stl, export_step
+        ext = os.path.splitext(output_file)[1].lower()
+        if ext in ('.step', '.stp'):
+            export_step(normalized, output_file)
+        else:
+            export_stl(normalized, output_file)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(4)
+
+    print(f"Exported to {output_file}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,5 @@
+{
+  "id": "case_02_enclosure",
+  "category": "enclosure",
+  "prompt": "Design a parametric electronics enclosure with lid, corner fillets, and mounting bosses for M3 screws. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

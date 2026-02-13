@@ -1,0 +1,118 @@
+{
+  "package_id": "curated-cq-warehouse-apache",
+  "name": "Curated CQ Warehouse Patterns",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/gumyr/cq_warehouse",
+  "homepage": "https://github.com/gumyr/cq_warehouse",
+  "mechanisms": [
+    {
+      "id": "socket_head_cap_screw_mount",
+      "title": "Socket Head Cap Screw Mount",
+      "summary": "Cap screw seating with clearance and head pocket.",
+      "category": "fastening",
+      "keywords": ["screw", "cap screw", "clearance hole", "counterbore"],
+      "prompt_block": "Create a screw mounting feature with through clearance, optional counterbore for head seating, and boss support. Keep screw size, clearance class, and seat depth parametric.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/fastener.py"
+    },
+    {
+      "id": "countersunk_screw_seat",
+      "title": "Countersunk Screw Seat",
+      "summary": "90-degree countersink seating for flat-head screws.",
+      "category": "fastening",
+      "keywords": ["countersink", "flat head", "screw"],
+      "prompt_block": "Generate countersunk screw holes with top angle and seat diameter controlled by parameters. Keep pilot/clearance size and countersink depth explicit.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/fastener.py"
+    },
+    {
+      "id": "hex_nut_capture_pocket",
+      "title": "Hex Nut Capture Pocket",
+      "summary": "Hex pocket for captive nut retention.",
+      "category": "fastening",
+      "keywords": ["hex nut", "captive", "pocket"],
+      "prompt_block": "Create a hexagonal nut pocket with insertion chamfer and anti-rotation flats. Keep nut size, depth, and clearance configurable for printability.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/captive_nuts.py"
+    },
+    {
+      "id": "square_nut_capture_pocket",
+      "title": "Square Nut Capture Pocket",
+      "summary": "Square captive nut retention slot.",
+      "category": "fastening",
+      "keywords": ["square nut", "capture", "retention"],
+      "prompt_block": "Generate a square nut pocket with anti-pullout shoulder and insertion lead-in. Parameterize nut size, pocket depth, and side clearance.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/captive_nuts.py"
+    },
+    {
+      "id": "heatset_insert_receptacle",
+      "title": "Heat-Set Insert Receptacle",
+      "summary": "Thermal insert receptacle with lead-in chamfer.",
+      "category": "fastening",
+      "keywords": ["heat-set", "insert", "threaded insert"],
+      "prompt_block": "Build a receptacle for brass heat-set inserts with insertion lead, anti-crack wall thickness, and shoulder stop. Keep bore and boss geometry parametric.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/heatset_nut_parameters.csv"
+    },
+    {
+      "id": "plain_washer_landing",
+      "title": "Plain Washer Landing",
+      "summary": "Flat seating land for washer-supported joints.",
+      "category": "fastening",
+      "keywords": ["washer", "seating", "joint"],
+      "prompt_block": "Create planar washer landing pads with optional recess and chamfered transition. Keep washer OD/ID references and edge offset parametric.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/plain_washer_parameters.csv"
+    },
+    {
+      "id": "deep_groove_bearing_seat",
+      "title": "Deep Groove Bearing Seat",
+      "summary": "Press-fit/clearance seat for deep groove ball bearing.",
+      "category": "bearing",
+      "keywords": ["bearing", "seat", "press fit", "deep groove"],
+      "prompt_block": "Create bearing seat geometry with chamfered entry, shoulder stop, and fit tolerance. Parameterize seat diameter delta, depth, and shoulder width.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/bearing.py"
+    },
+    {
+      "id": "tapered_roller_bearing_seat",
+      "title": "Tapered Roller Bearing Seat",
+      "summary": "Seat stack for tapered roller bearing integration.",
+      "category": "bearing",
+      "keywords": ["bearing", "tapered roller", "seat"],
+      "prompt_block": "Build tapered roller bearing seat with axial retention shoulder and preload spacer allowance. Keep cone/cup fits and spacing as named parameters.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/src/cq_warehouse/bearing.py"
+    },
+    {
+      "id": "iso_thread_external_stub",
+      "title": "ISO External Thread Stub",
+      "summary": "Parametric external ISO thread-ready shaft stub.",
+      "category": "threads",
+      "keywords": ["thread", "iso", "external"],
+      "prompt_block": "Create an external-thread-ready stub including runout relief, lead chamfer, and thread length control. Keep major diameter, pitch, and class clearance parameterized.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/thread_examples.py"
+    },
+    {
+      "id": "iso_thread_internal_stub",
+      "title": "ISO Internal Thread Stub",
+      "summary": "Parametric internal ISO thread-ready bore.",
+      "category": "threads",
+      "keywords": ["thread", "iso", "internal"],
+      "prompt_block": "Build an internal-thread-ready bore with lead-in chamfer and tap drill guidance dimensions. Keep minor diameter, pitch, and thread depth as parameters.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/thread_examples.py"
+    },
+    {
+      "id": "acme_thread_stub",
+      "title": "ACME Thread Stub",
+      "summary": "Lead-screw compatible ACME thread stub geometry.",
+      "category": "threads",
+      "keywords": ["acme", "lead screw", "thread"],
+      "prompt_block": "Generate a thread-ready ACME screw or nut stub with flank angle assumptions and root/crest control. Keep pitch, nominal size, and engagement length parametric.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/thread_examples.py"
+    },
+    {
+      "id": "pillow_block_bearing_mount",
+      "title": "Pillow Block Bearing Mount",
+      "summary": "Bearing pocket with bolt pattern for pillow-block style supports.",
+      "category": "bearing",
+      "keywords": ["pillow block", "bearing mount", "bolt pattern"],
+      "prompt_block": "Create a pillow-block mount with bearing pocket, support walls, and bolt holes. Keep pocket diameter, base width, and bolt spacing fully parametric.",
+      "source_url": "https://github.com/gumyr/cq_warehouse/blob/master/examples/pillow_block.py"
+    }
+  ]
+}

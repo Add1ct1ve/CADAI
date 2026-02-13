@@ -1,0 +1,5 @@
+{
+  "id": "case_41_organic_approx",
+  "category": "organic_approx",
+  "prompt": "Approximate a smooth ergonomic handle using lofted profiles and keep walls printable. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}

@@ -1,0 +1,5 @@
+{
+  "id": "case_18_robotics",
+  "category": "robotics",
+  "prompt": "Make a sensor mount plate with standoffs and through holes on a defined bolt grid. Include named parameters, fully constrained sketches where relevant, and ensure result is watertight."
+}
