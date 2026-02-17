@@ -1314,6 +1314,34 @@ anti_patterns:
           pass  # graceful degradation
       result = part.part
 
+  - title: "Through-cut splitting body"
+    wrong_code: |
+      with BuildPart() as part:
+          Box(60, 40, 30)
+          # Hollow the box with 3mm walls
+          with Locations((0, 0, 3)):
+              Box(54, 34, 28, mode=Mode.SUBTRACT, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Pocket cut deeper than wall thickness - SPLITS the body!
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations([(15, 0), (-15, 0)]):
+                  Rectangle(8, 8)
+          extrude(amount=-5, mode=Mode.SUBTRACT)  # 5mm cut > 3mm wall
+      result = part.part
+    error_message: "SPLIT_BODY: result has 2 disconnected solids (fuse failed)"
+    explanation: "The pocket cut (5mm deep) exceeded the wall thickness (3mm), punching through into the hollow interior and splitting the body into disconnected pieces. Cut depth on hollowed bodies must be LESS than wall thickness (use max 80% of wall). For through-features, use holes that don't intersect the internal cavity."
+    correct_code: |
+      with BuildPart() as part:
+          Box(60, 40, 30)
+          # Hollow the box with 3mm walls
+          with Locations((0, 0, 3)):
+              Box(54, 34, 28, mode=Mode.SUBTRACT, align=(Align.CENTER, Align.CENTER, Align.MIN))
+          # Pocket cut at 80% of wall thickness - safe
+          with BuildSketch(part.faces().sort_by(Axis.Z)[-1]):
+              with Locations([(15, 0), (-15, 0)]):
+                  Rectangle(8, 8)
+          extrude(amount=-2.4, mode=Mode.SUBTRACT)  # 2.4mm = 80% of 3mm wall
+      result = part.part
+
   - title: "Too many chained booleans"
     wrong_code: |
       with BuildPart() as part:

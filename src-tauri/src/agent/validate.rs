@@ -13,6 +13,7 @@ pub enum TopologySubKind {
     SweepFailure,
     RevolveFailure,
     MissingSolid,
+    DisconnectedSolids,
     General,
 }
 
@@ -299,6 +300,24 @@ fn extract_error_context(full_stderr: &str, message: &str) -> Option<ErrorContex
 /// - Generic fallback for unknown errors
 #[allow(dead_code)]
 pub fn parse_traceback(stderr: &str) -> StructuredError {
+    // Early detection: disconnected solids (exit code 5 or SPLIT_BODY marker)
+    let lower_stderr = stderr.to_lowercase();
+    if lower_stderr.contains("disconnected solids") || stderr.contains("SPLIT_BODY") {
+        return StructuredError {
+            error_type: "DisconnectedSolids".to_string(),
+            message: stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or(stderr).trim().to_string(),
+            line_number: None,
+            suggestion: Some(
+                "A cut went through a wall and split the body into separate pieces. \
+                 Reduce cut depth below wall thickness (max 80% of wall) or increase wall thickness."
+                    .to_string(),
+            ),
+            category: ErrorCategory::Topology(TopologySubKind::DisconnectedSolids),
+            failing_operation: Some("cut".to_string()),
+            context: None,
+        };
+    }
+
     // Try to extract line number from traceback: "line X" patterns
     let line_number = {
         let line_re = Regex::new(r#"line (\d+)"#).ok();
@@ -418,6 +437,11 @@ fn generate_suggestion(
                 "Revolve failed. The profile must be entirely on one side of the rotation axis with no crossings.".to_string(),
             );
         }
+        ErrorCategory::Topology(TopologySubKind::DisconnectedSolids) => {
+            return Some(
+                "A cut went through a wall and split the body. Reduce cut depth below wall thickness (max 80% of wall) or increase wall thickness.".to_string(),
+            );
+        }
         ErrorCategory::Topology(TopologySubKind::General) => {
             return Some(
                 "A topology operation failed. Simplify the geometry or break complex operations into smaller steps.".to_string(),
@@ -513,6 +537,9 @@ fn match_anti_pattern(error: &StructuredError, code: Option<&str>) -> Option<Str
         }
         ErrorCategory::Topology(TopologySubKind::RevolveFailure) => {
             Some("Revolve profile crossing axis".to_string())
+        }
+        ErrorCategory::Topology(TopologySubKind::DisconnectedSolids) => {
+            Some("Through-cut splitting body".to_string())
         }
         ErrorCategory::ApiMisuse => {
             let msg = error.message.to_lowercase();
@@ -644,6 +671,16 @@ pub fn get_retry_strategy(
             "The revolve failed. The profile must be entirely on one side of the rotation axis \
              — all X coordinates must be >= 0 when revolving around Y. Move the profile so no \
              points cross the axis."
+                .to_string(),
+            vec![],
+        ),
+        ErrorCategory::Topology(TopologySubKind::DisconnectedSolids) => (
+            "A cut went through a wall and SPLIT the body into disconnected solids. Fix: \
+             1) Reduce cut/pocket depth to at most 80% of the wall thickness. \
+             2) On hollowed bodies, do NOT let pocket/slot cuts reach the inner cavity. \
+             3) For through-features, use holes that don't intersect internal cavities. \
+             4) union()/fuse() calls need at least 0.5mm volumetric overlap. \
+             5) The result MUST be exactly 1 connected solid."
                 .to_string(),
             vec![],
         ),
@@ -1564,6 +1601,50 @@ result = body
         assert!(
             warning.is_some(),
             "should detect multi-boolean + blanket fillet"
+        );
+    }
+
+    // ========== DisconnectedSolids detection tests ==========
+
+    #[test]
+    fn test_parse_traceback_disconnected_solids_exit_code_5() {
+        let stderr = "Result contains multiple disconnected solids — a cut likely went through a wall and split the body. Reduce cut depth or increase wall thickness.";
+        let err = parse_traceback(stderr);
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::DisconnectedSolids)
+        );
+        assert_eq!(err.error_type, "DisconnectedSolids");
+        assert!(err.suggestion.unwrap().contains("wall thickness"));
+    }
+
+    #[test]
+    fn test_parse_traceback_split_body_marker() {
+        let stderr = "SPLIT_BODY: result has 3 disconnected solids (fuse failed)";
+        let err = parse_traceback(stderr);
+        assert_eq!(
+            err.category,
+            ErrorCategory::Topology(TopologySubKind::DisconnectedSolids)
+        );
+    }
+
+    #[test]
+    fn test_strategy_disconnected_solids_attempt1() {
+        let err = make_error(
+            ErrorCategory::Topology(TopologySubKind::DisconnectedSolids),
+            "Result contains multiple disconnected solids",
+            Some("cut"),
+        );
+        let strategy = get_retry_strategy(&err, 1, None);
+        assert!(
+            strategy.fix_instruction.contains("SPLIT"),
+            "should mention split body, got: {}",
+            strategy.fix_instruction
+        );
+        assert!(strategy.fix_instruction.contains("80%"));
+        assert_eq!(
+            strategy.matching_anti_pattern.as_deref(),
+            Some("Through-cut splitting body")
         );
     }
 }
