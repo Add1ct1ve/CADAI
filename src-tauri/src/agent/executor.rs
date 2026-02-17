@@ -961,7 +961,12 @@ pub async fn validate_and_retry(
                             let mut feedback_parts: Vec<String> = Vec::new();
                             if post_report.component_count > 1 {
                                 feedback_parts.push(format!(
-                                    "Your code produced {} disconnected solids instead of 1. Ensure union() calls have volumetric overlap (0.2mm+). Fix to produce exactly 1 solid.",
+                                    "Your code produced {} disconnected solids instead of 1. \
+                                     A cut likely went through a wall and split the body. Fix: \
+                                     1) Reduce cut/pocket depth to at most 80% of wall thickness. \
+                                     2) On hollowed bodies, do NOT let cuts reach the inner cavity. \
+                                     3) union()/fuse() calls need 0.5mm+ volumetric overlap. \
+                                     Result MUST be exactly 1 connected solid.",
                                     post_report.component_count
                                 ));
                             }

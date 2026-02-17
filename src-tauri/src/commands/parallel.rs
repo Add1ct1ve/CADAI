@@ -647,6 +647,7 @@ fn build_part_prompt(
         - After each boolean, verify single body: `assert result.solids().size() == 1`\n\
         - Wrap ALL fillet/chamfer/loft in try/except with graceful fallback\n\
         - union() calls MUST have volumetric overlap (0.2mm+), not just face-touching\n\
+        - NEVER cut deeper than the wall thickness on hollowed bodies. Pocket/slot depth must be < wall thickness to avoid splitting the body into disconnected solids. For through-features, use holes that don't intersect internal cavities.\n\
         - Result MUST be a single connected solid\n\
         - Use rect().extrude() + edges(\"|Z\").fillet(R) for rounded rectangles\n\
         - For hollow frames (lips, ridges): build as outer.cut(inner), overlap with base before union\n\
