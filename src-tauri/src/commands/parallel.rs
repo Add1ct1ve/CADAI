@@ -1267,12 +1267,9 @@ async fn run_generation_pipeline(
             ]
         } else {
             let retry_instruction = format!(
-                "Your previous response could not be parsed as JSON ({:?}). Return ONLY valid compact JSON now. \
-                 Include all critical dimensions in each part description. End each part description with \
-                 'Dims: length=Xmm, width=Xmm, height=Xmm, wall=Xmm' including all mating surface dimensions. \
-                 No markdown, no prose.\n\nPrevious response:\n{}",
+                "That response could not be parsed as JSON (error: {:?}). \
+                 Start your response with the `{{` character. Return ONLY the raw JSON object, no markdown, no prose, no explanation.",
                 last_parse_err,
-                planner_response.chars().take(2500).collect::<String>()
             );
             vec![
                 ChatMessage {
@@ -1282,6 +1279,10 @@ async fn run_generation_pipeline(
                 ChatMessage {
                     role: "user".to_string(),
                     content: enhanced_message.clone(),
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: planner_response.chars().take(2500).collect::<String>(),
                 },
                 ChatMessage {
                     role: "user".to_string(),
@@ -3283,8 +3284,68 @@ fn parse_plan(json_str: &str) -> Result<GenerationPlan, String> {
                         }
                         return Ok(plan);
                     }
+                    // The outer {..} failed (e.g. prose with scattered braces).
+                    // Try to repair the candidate in case it was truncated.
+                    if let Some(repaired) = try_repair_json_fragment(candidate) {
+                        if let Ok(plan) = serde_json::from_str::<GenerationPlan>(&repaired) {
+                            if plan.mode != "single" && plan.mode != "multi" {
+                                return Err(format!("Invalid planner mode '{}'", plan.mode));
+                            }
+                            return Ok(plan);
+                        }
+                    }
                 }
             }
+
+            // Quaternary attempt: regex-locate a JSON object starting with `{"mode":`
+            // This handles prose responses where JSON is deeply embedded.
+            if let Some(m) = Regex::new(r#"\{"mode"\s*:\s*"(single|multi)""#)
+                .ok()
+                .and_then(|re| re.find(cleaned))
+            {
+                let json_start = m.start();
+                // Walk from json_start counting brace depth to find matching '}'
+                let bytes = cleaned[json_start..].as_bytes();
+                let mut depth: i32 = 0;
+                let mut in_string = false;
+                let mut escaped = false;
+                let mut json_end = None;
+                for (i, &b) in bytes.iter().enumerate() {
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if b == b'\\' && in_string {
+                        escaped = true;
+                        continue;
+                    }
+                    if b == b'"' {
+                        in_string = !in_string;
+                        continue;
+                    }
+                    if in_string {
+                        continue;
+                    }
+                    if b == b'{' {
+                        depth += 1;
+                    } else if b == b'}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            json_end = Some(json_start + i);
+                            break;
+                        }
+                    }
+                }
+                if let Some(end_pos) = json_end {
+                    let candidate = &cleaned[json_start..=end_pos];
+                    if let Ok(plan) = serde_json::from_str::<GenerationPlan>(candidate) {
+                        if plan.mode == "single" || plan.mode == "multi" {
+                            return Ok(plan);
+                        }
+                    }
+                }
+            }
+
             Err(format!("Planner JSON parse failed: {}", first_err))
         }
     }
@@ -3569,6 +3630,38 @@ That should work."#;
                 assert!(!err.trim().is_empty(), "parse error should be descriptive");
             }
         }
+    }
+
+    #[test]
+    fn parse_plan_regex_extracts_json_from_deep_prose() {
+        let prose = r#"The user wants a JSON response only. No markdown, no prose. Just valid compact JSON.
+The design has two distinct parts: 1. Base with integrated slot... 2. Back plate that snaps on.
+
+{"mode":"multi","description":"housing + plate","parts":[{"name":"housing","description":"main body","position":[0,0,0],"constraints":[]},{"name":"back_plate","description":"cover","position":[0,0,0],"constraints":[]}]}
+
+That should be the correct output."#;
+        let plan = parse_plan(prose).expect("should extract JSON via regex from deep prose");
+        assert_eq!(plan.mode, "multi");
+        assert_eq!(plan.parts.len(), 2);
+    }
+
+    #[test]
+    fn parse_plan_regex_handles_prose_with_scattered_braces() {
+        // Prose has stray braces (e.g. "design {concept}") that confuse the simple {..} strategy,
+        // but the regex-based approach finds the real JSON by its `"mode":` signature.
+        let prose = r#"Here is my analysis {concept overview}:
+The design should be split into parts. Let me create the JSON:
+{"mode":"single","description":"simple box"}
+End of response."#;
+        let plan = parse_plan(prose).expect("regex should find JSON despite stray braces");
+        assert_eq!(plan.mode, "single");
+    }
+
+    #[test]
+    fn parse_plan_fails_on_pure_prose() {
+        let prose = "The user wants a JSON response only. No markdown, no prose. Just valid compact JSON. \
+                     The design has two distinct parts: 1. Base with integrated slot... 2. Back plate.";
+        assert!(parse_plan(prose).is_err(), "pure prose with no JSON should fail");
     }
 
     #[test]
