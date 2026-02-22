@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use crate::error::AppError;
 
-const TRANSIENT_STATUSES: [u16; 4] = [429, 502, 503, 529];
+const TRANSIENT_STATUSES: [u16; 5] = [429, 500, 502, 503, 529];
 
 fn is_transient(status: reqwest::StatusCode) -> bool {
     TRANSIENT_STATUSES.contains(&status.as_u16())
 }
 
-/// Send an HTTP request with automatic retry on transient errors (429, 502, 503, 529).
+/// Send an HTTP request with automatic retry on transient errors (429, 500, 502, 503, 529).
 ///
 /// `build_request` is called fresh on each attempt because `RequestBuilder` is not cloneable.
 /// Retries use exponential backoff: 1s, 2s, 4s, ...
