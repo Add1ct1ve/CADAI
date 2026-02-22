@@ -886,13 +886,134 @@ fn run_post_geometry_checks(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Post-processing: fix common AI mistakes before execution
+// ---------------------------------------------------------------------------
+
+/// Post-process AI-generated code to fix common mistakes before execution.
+///
+/// Applies three transforms:
+/// 1. Adds `from math import *` if trig functions are used without import
+/// 2. Swaps Slot(width, height) if height > width
+/// 3. Injects a safe fillet wrapper that falls back to max_fillet on failure
+fn postprocess_generated_code(code: &str) -> String {
+    let mut result = ensure_math_import(code);
+    result = fix_slot_dimensions(&result);
+    result = inject_safe_fillet_wrapper(&result);
+    result
+}
+
+/// Add `from math import *` if trig functions or math.xxx are used without import.
+fn ensure_math_import(code: &str) -> String {
+    if code.contains("from math import") || code.contains("import math") {
+        return code.to_string();
+    }
+
+    let math_func_re =
+        Regex::new(r"\b(?:sin|cos|tan|sqrt|radians|degrees|atan2|asin|acos|atan)\s*\(")
+            .expect("valid math func regex");
+    let math_dot_re = Regex::new(r"\bmath\.\w+").expect("valid math dot regex");
+
+    if !math_func_re.is_match(code) && !math_dot_re.is_match(code) {
+        return code.to_string();
+    }
+
+    // Strip math.xxx prefix since we'll add `from math import *`
+    let mut result = code.to_string();
+    if math_dot_re.is_match(code) {
+        let strip_re = Regex::new(
+            r"\bmath\.(sin|cos|tan|sqrt|pi|radians|degrees|atan2|asin|acos|atan|ceil|floor|log)\b",
+        )
+        .expect("valid strip regex");
+        result = strip_re.replace_all(&result, "$1").to_string();
+    }
+
+    // Insert after build123d import
+    let mut lines: Vec<String> = result.lines().map(|l| l.to_string()).collect();
+    let insert_idx = lines
+        .iter()
+        .position(|l| l.contains("from build123d import"))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    lines.insert(insert_idx, "from math import *".to_string());
+    lines.join("\n")
+}
+
+/// Swap Slot(width=X, height=Y) when height > width (build123d requires width > height).
+fn fix_slot_dimensions(code: &str) -> String {
+    let re = Regex::new(
+        r"Slot\(\s*width\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*height\s*=\s*([0-9]+(?:\.[0-9]+)?)",
+    )
+    .expect("valid slot regex");
+
+    re.replace_all(code, |caps: &regex::Captures<'_>| {
+        let w: f64 = caps[1].parse().unwrap_or(1.0);
+        let h: f64 = caps[2].parse().unwrap_or(1.0);
+        if h > w {
+            format!(
+                "Slot(width={}, height={}",
+                format_decimal(h),
+                format_decimal(w)
+            )
+        } else {
+            caps[0].to_string()
+        }
+    })
+    .to_string()
+}
+
+/// Inject a safe fillet wrapper that falls back to max_fillet on failure.
+///
+/// Redefines `fillet` in the code's scope so that oversized radii are automatically
+/// capped via `max_fillet()` instead of crashing with StdFail_NotDone.
+fn inject_safe_fillet_wrapper(code: &str) -> String {
+    if !code.contains("fillet(") || code.contains("_orig_fillet") {
+        return code.to_string();
+    }
+
+    let wrapper = "\
+\n# auto-postprocess: safe fillet\n\
+_orig_fillet = fillet\n\
+def fillet(*_a, **_kw):\n\
+    try:\n\
+        return _orig_fillet(*_a, **_kw)\n\
+    except Exception:\n\
+        try:\n\
+            _e = _a[0] if _a else _kw.get('objects')\n\
+            _r = _a[1] if len(_a) > 1 else _kw.get('radius')\n\
+            if _e is not None and _r is not None:\n\
+                _sr = max_fillet(_e, _r)\n\
+                return _orig_fillet(_e, _sr)\n\
+        except Exception:\n\
+            pass\n";
+
+    let lines: Vec<&str> = code.lines().collect();
+    let mut last_import = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
+            last_import = i;
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        out.push(line.to_string());
+        if i == last_import {
+            out.push(wrapper.to_string());
+        }
+    }
+    out.join("\n")
+}
+
 /// Execute code and retry with AI fixes if execution fails.
 ///
 /// The loop runs up to `config.max_validation_attempts` times:
-/// 1. Static-validate generated code.
-/// 2. Execute via `runner.py`.
-/// 3. Post-validate geometry using mesh checks.
-/// 4. If failure, classify, build retry prompt, call AI for fix.
+/// 1. Post-process generated code to fix common mistakes.
+/// 2. Static-validate generated code.
+/// 3. Execute via `runner.py`.
+/// 4. Post-validate geometry using mesh checks.
+/// 5. If failure, classify, build retry prompt, call AI for fix.
 pub async fn validate_and_retry(
     code: String,
     ctx: &ExecutionContext,
@@ -900,7 +1021,7 @@ pub async fn validate_and_retry(
     user_request: Option<&str>,
     on_event: &(dyn Fn(ValidationEvent) + Send + Sync),
 ) -> Result<ValidationResult, AppError> {
-    let mut current_code = code;
+    let mut current_code = postprocess_generated_code(&code);
     let mut retry_usage = TokenUsage::default();
     let max_attempts = configured_max_attempts(&ctx.config);
     let mut static_findings_accum: Vec<String> = Vec::new();
@@ -1047,7 +1168,7 @@ pub async fn validate_and_retry(
 
                             match crate::agent::extract::extract_code(&ai_response) {
                                 Some(new_code) => {
-                                    current_code = new_code;
+                                    current_code = postprocess_generated_code(&new_code);
                                 }
                                 None => {
                                     return Ok(ValidationResult {
@@ -1204,7 +1325,7 @@ pub async fn validate_and_retry(
 
                 match crate::agent::extract::extract_code(&ai_response) {
                     Some(new_code) => {
-                        current_code = new_code;
+                        current_code = postprocess_generated_code(&new_code);
                     }
                     None => {
                         return Ok(ValidationResult {
@@ -1562,5 +1683,75 @@ result = body"#;
         assert!(repaired
             .0
             .contains(r#"body.faces(">Z").first().workplane(offset=1.0)"#));
+    }
+
+    // ---- Post-processing tests ----
+
+    #[test]
+    fn test_ensure_math_import_adds_when_needed() {
+        let code = "from build123d import *\nx = sin(0.5)\n";
+        let result = ensure_math_import(code);
+        assert!(result.contains("from math import *"));
+        assert!(result.contains("from build123d import *\nfrom math import *"));
+    }
+
+    #[test]
+    fn test_ensure_math_import_skips_when_present() {
+        let code = "from build123d import *\nfrom math import pi, sin\nx = sin(0.5)\n";
+        let result = ensure_math_import(code);
+        assert_eq!(result, code);
+    }
+
+    #[test]
+    fn test_ensure_math_import_strips_math_prefix() {
+        let code = "from build123d import *\nx = math.sin(math.pi / 2)\n";
+        let result = ensure_math_import(code);
+        assert!(result.contains("from math import *"));
+        assert!(result.contains("x = sin(pi / 2)"));
+        assert!(!result.contains("math.sin"));
+    }
+
+    #[test]
+    fn test_ensure_math_import_no_trig_no_change() {
+        let code = "from build123d import *\nBox(10, 10, 10)\n";
+        let result = ensure_math_import(code);
+        assert!(!result.contains("from math import"));
+    }
+
+    #[test]
+    fn test_fix_slot_dimensions_swaps() {
+        let code = "Slot(width=5.0, height=10.0)\n";
+        let result = fix_slot_dimensions(code);
+        assert!(result.contains("Slot(width=10.0, height=5.0"));
+    }
+
+    #[test]
+    fn test_fix_slot_dimensions_no_swap_when_correct() {
+        let code = "Slot(width=10.0, height=5.0)\n";
+        let result = fix_slot_dimensions(code);
+        assert!(result.contains("Slot(width=10.0, height=5.0"));
+    }
+
+    #[test]
+    fn test_inject_safe_fillet_wrapper() {
+        let code = "from build123d import *\nwith BuildPart() as part:\n    Box(10,10,10)\n    fillet(part.edges(), radius=3.0)\nresult = part.part\n";
+        let result = inject_safe_fillet_wrapper(code);
+        assert!(result.contains("_orig_fillet = fillet"));
+        assert!(result.contains("max_fillet"));
+    }
+
+    #[test]
+    fn test_inject_safe_fillet_no_fillet_no_change() {
+        let code = "from build123d import *\nBox(10,10,10)\n";
+        let result = inject_safe_fillet_wrapper(code);
+        assert!(!result.contains("_orig_fillet"));
+    }
+
+    #[test]
+    fn test_postprocess_idempotent() {
+        let code = "from build123d import *\nx = sin(0.5)\nSlot(width=5.0, height=10.0)\nfillet(e, radius=3)\nresult = part.part\n";
+        let pass1 = postprocess_generated_code(code);
+        let pass2 = postprocess_generated_code(&pass1);
+        assert_eq!(pass1, pass2);
     }
 }

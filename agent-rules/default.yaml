@@ -95,6 +95,37 @@ code_requirements:
     - "Do NOT read/write files"
 
 # =============================================================================
+# CRITICAL API RULES (common model mistakes)
+# =============================================================================
+critical_api_rules:
+  fillet_safety:
+    - "NEVER hardcode large fillet radii — use max_fillet() to find the safe maximum"
+    - "Pattern: fillet(edges, radius=max_fillet(edges, desired_radius))"
+    - "max_fillet(edges, target) returns the largest radius that won't crash, capped at target"
+    - "This prevents StdFail_NotDone errors from oversized fillet radii"
+
+  slot_dimensions:
+    - "Slot(width, height) requires width > height — width is the LONG dimension"
+    - "If your slot is taller than it is wide, swap the values"
+
+  rotation_syntax:
+    - "Use Rot(rx, ry, rz) for rotation — NOT rotate()"
+    - "rotate() is NOT a valid build123d function"
+    - "Rot() creates a rotation applied via Locations or multiplication"
+    - "Example: with Locations((0, 0, 0) * Rot(0, 0, 45)):  # rotate 45 deg around Z"
+    - "For Cylinder/Box rotation parameter, use rotation=(rx, ry, rz) tuple"
+
+  math_imports:
+    - "When using sin(), cos(), tan(), sqrt(), radians(), degrees(), or pi — ALWAYS add: from math import *"
+    - "Place the math import AFTER the build123d import"
+    - "build123d does NOT export math functions — you must import them separately"
+
+  code_compactness:
+    - "Keep code under 200 lines"
+    - "Use loops and Locations patterns instead of repeating geometry operations"
+    - "Define dimension constants at the top, reference them throughout"
+
+# =============================================================================
 # VALIDATION CHECKS
 # =============================================================================
 validation:
