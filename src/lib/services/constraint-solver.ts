@@ -62,6 +62,12 @@ export function getPointCoords(entity: SketchEntity, pointIndex: number): Point2
         case 2: return entity.end;
         default: return entity.start;
       }
+    case 'spline':
+    case 'bezier':
+      if (entity.points.length === 0) return [0, 0];
+      if (pointIndex === 0) return entity.points[0];
+      if (pointIndex === 1) return entity.points[entity.points.length - 1];
+      return entity.points[Math.min(pointIndex, entity.points.length - 1)];
   }
 }
 
@@ -132,6 +138,19 @@ function buildEntityPrimitives(entity: SketchEntity): SketchPrimitive[] {
         },
         { id: `${eid}_arules`, type: 'arc_rules', a_id: `${eid}_a` } as SketchPrimitive,
       );
+      break;
+    }
+    case 'spline':
+    case 'bezier': {
+      // Expose first and last points for coincident constraints
+      if (entity.points.length >= 2) {
+        const first = entity.points[0];
+        const last = entity.points[entity.points.length - 1];
+        primitives.push(
+          { id: `${eid}_p0`, type: 'point', x: first[0], y: first[1], fixed: false },
+          { id: `${eid}_p1`, type: 'point', x: last[0], y: last[1], fixed: false },
+        );
+      }
       break;
     }
   }
@@ -234,6 +253,77 @@ function buildConstraintPrimitives(
       const angleRad = (constraint.value * Math.PI) / 180;
       return [{ id: constraint.id, type: 'l2l_angle_ll', l1_id: l1, l2_id: l2, angle: angleRad } as SketchPrimitive];
     }
+    case 'tangent': {
+      const e1 = entityMap.get(constraint.entityId1);
+      const e2 = entityMap.get(constraint.entityId2);
+      if (!e1 || !e2) return [];
+      // Determine tangent type by entity types
+      if (e1.type === 'line' && e2.type === 'circle') {
+        return [{ id: constraint.id, type: 'tangent_lc', l_id: `${e1.id}_l`, c_id: `${e2.id}_c` } as SketchPrimitive];
+      }
+      if (e1.type === 'circle' && e2.type === 'line') {
+        return [{ id: constraint.id, type: 'tangent_lc', l_id: `${e2.id}_l`, c_id: `${e1.id}_c` } as SketchPrimitive];
+      }
+      if (e1.type === 'line' && e2.type === 'arc') {
+        return [{ id: constraint.id, type: 'tangent_la', l_id: `${e1.id}_l`, a_id: `${e2.id}_a` } as SketchPrimitive];
+      }
+      if (e1.type === 'arc' && e2.type === 'line') {
+        return [{ id: constraint.id, type: 'tangent_la', l_id: `${e2.id}_l`, a_id: `${e1.id}_a` } as SketchPrimitive];
+      }
+      if (e1.type === 'circle' && e2.type === 'circle') {
+        return [{ id: constraint.id, type: 'tangent_cc', c1_id: `${e1.id}_c`, c2_id: `${e2.id}_c` } as SketchPrimitive];
+      }
+      if (e1.type === 'arc' && e2.type === 'arc') {
+        return [{ id: constraint.id, type: 'tangent_aa', a1_id: `${e1.id}_a`, a2_id: `${e2.id}_a` } as SketchPrimitive];
+      }
+      if ((e1.type === 'circle' && e2.type === 'arc') || (e1.type === 'arc' && e2.type === 'circle')) {
+        const cId = e1.type === 'circle' ? `${e1.id}_c` : `${e2.id}_c`;
+        const aId = e1.type === 'arc' ? `${e1.id}_a` : `${e2.id}_a`;
+        return [{ id: constraint.id, type: 'tangent_ca', c_id: cId, a_id: aId } as SketchPrimitive];
+      }
+      return [];
+    }
+    case 'fix': {
+      // Fix a point: set it as fixed in the entity primitives
+      const pId = `${constraint.entityId}_p${constraint.pointIndex}`;
+      return [
+        { id: `${constraint.id}_fx`, type: 'p2p_coincident', p1_id: pId, p2_id: pId } as SketchPrimitive,
+      ];
+    }
+    case 'midpoint': {
+      // Point on midpoint of line
+      const lineEntity = entityMap.get(constraint.lineEntityId);
+      if (!lineEntity || lineEntity.type !== 'line') return [];
+      const pId = `${constraint.pointEntityId}_p0`;
+      return [{
+        id: constraint.id, type: 'midpoint_on_line_pppp' as any,
+        p_id: pId,
+        lp1_id: `${constraint.lineEntityId}_p0`,
+        lp2_id: `${constraint.lineEntityId}_p1`,
+      } as SketchPrimitive];
+    }
+    case 'symmetric': {
+      const axisEntity = entityMap.get(constraint.axisEntityId);
+      if (!axisEntity || axisEntity.type !== 'line') return [];
+      const p1Id = `${constraint.entityId1}_p0`;
+      const p2Id = `${constraint.entityId2}_p0`;
+      return [{
+        id: constraint.id, type: 'p2p_symmetric_ppl' as any,
+        p1_id: p1Id,
+        p2_id: p2Id,
+        l_id: `${constraint.axisEntityId}_l`,
+      } as SketchPrimitive];
+    }
+    case 'collinear': {
+      // Both endpoints of line2 must lie on line1
+      const e1 = entityMap.get(constraint.entityId1);
+      const e2 = entityMap.get(constraint.entityId2);
+      if (!e1 || !e2 || e1.type !== 'line' || e2.type !== 'line') return [];
+      return [
+        { id: `${constraint.id}_0`, type: 'point_on_line_pl' as any, p_id: `${e2.id}_p0`, l_id: `${e1.id}_l` } as SketchPrimitive,
+        { id: `${constraint.id}_1`, type: 'point_on_line_pl' as any, p_id: `${e2.id}_p1`, l_id: `${e1.id}_l` } as SketchPrimitive,
+      ];
+    }
   }
 }
 
@@ -258,6 +348,9 @@ function calcEntityDof(entity: SketchEntity): number {
     case 'rectangle': return 4; // effectively 2 corner points (other 2 determined by rectangle shape)
     case 'circle': return 3;    // center (2) + radius (1)
     case 'arc': return 5;       // center (2) + radius (1) + 2 angles
+    case 'spline':
+    case 'bezier':
+      return entity.points.length * 2; // each point has 2 coords
   }
 }
 
@@ -272,6 +365,11 @@ function calcConstraintReduction(constraint: SketchConstraint): number {
     case 'distance': return 1;
     case 'radius': return 1;
     case 'angle': return 1;
+    case 'tangent': return 1;
+    case 'fix': return 2;
+    case 'midpoint': return 2;
+    case 'symmetric': return 2;
+    case 'collinear': return 2;
   }
 }
 
@@ -392,6 +490,21 @@ function readBackEntity(entity: SketchEntity): SketchEntity {
           mid,
           end: [endPt.x, endPt.y],
         };
+      }
+      return entity;
+    }
+    case 'spline':
+    case 'bezier': {
+      // Only update first and last points from solver
+      if (entity.points.length >= 2) {
+        const p0 = idx.get_primitive(`${eid}_p0`);
+        const p1 = idx.get_primitive(`${eid}_p1`);
+        if (p0?.type === 'point' && p1?.type === 'point') {
+          const newPoints = [...entity.points];
+          newPoints[0] = [p0.x, p0.y];
+          newPoints[newPoints.length - 1] = [p1.x, p1.y];
+          return { ...entity, points: newPoints };
+        }
       }
       return entity;
     }

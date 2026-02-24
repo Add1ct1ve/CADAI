@@ -230,6 +230,33 @@ export class SketchRenderer {
         break;
       }
 
+      case 'sketch-spline': {
+        if (drawingPoints.length >= 1) {
+          const allPts = [...drawingPoints, preview].map(p => sketchToThreePos(p, this.planeInfo!));
+          if (allPts.length >= 2) {
+            const curve = new THREE.CatmullRomCurve3(allPts, false, 'catmullrom', 0.5);
+            points = curve.getPoints(Math.max(allPts.length * 16, 50));
+          }
+        }
+        break;
+      }
+      case 'sketch-bezier': {
+        if (drawingPoints.length >= 1) {
+          const allPts = [...drawingPoints, preview].map(p => sketchToThreePos(p, this.planeInfo!));
+          if (allPts.length === 3) {
+            const curve = new THREE.QuadraticBezierCurve3(allPts[0], allPts[1], allPts[2]);
+            points = curve.getPoints(50);
+          } else if (allPts.length === 4) {
+            const curve = new THREE.CubicBezierCurve3(allPts[0], allPts[1], allPts[2], allPts[3]);
+            points = curve.getPoints(50);
+          } else if (allPts.length >= 2) {
+            const curve = new THREE.CatmullRomCurve3(allPts, false);
+            points = curve.getPoints(50);
+          }
+        }
+        break;
+      }
+
       // ── Operation previews ──
       case 'sketch-op-trim': {
         // Highlight the hovered entity in red to show which segment would be removed
@@ -500,6 +527,8 @@ export class SketchRenderer {
         const pos = sketchToThreePos(between, this.planeInfo);
         return this.makeIconSprite(`${constraint.value.toFixed(1)}\u00B0`, pos, DIMENSION_TEXT_COLOR, 0.6);
       }
+      default:
+        return null;
     }
   }
 
@@ -590,6 +619,31 @@ export class SketchRenderer {
         const arcPts = computeArcPoints(entity.start, entity.mid, entity.end);
         if (arcPts) {
           points = arcPts.map((p) => sketchToThreePos(p, pi));
+        }
+        break;
+      }
+      case 'spline': {
+        if (entity.points.length >= 2) {
+          const curvePoints = entity.points.map(p => sketchToThreePos([p[0], p[1]], pi));
+          const curve = new THREE.CatmullRomCurve3(curvePoints, false, 'catmullrom', 0.5);
+          points = curve.getPoints(Math.max(entity.points.length * 16, 50));
+        }
+        break;
+      }
+      case 'bezier': {
+        if (entity.points.length >= 2) {
+          const pts = entity.points.map(p => sketchToThreePos([p[0], p[1]], pi));
+          if (pts.length === 3) {
+            const curve = new THREE.QuadraticBezierCurve3(pts[0], pts[1], pts[2]);
+            points = curve.getPoints(50);
+          } else if (pts.length === 4) {
+            const curve = new THREE.CubicBezierCurve3(pts[0], pts[1], pts[2], pts[3]);
+            points = curve.getPoints(50);
+          } else {
+            // Fallback: use CatmullRom for arbitrary number of points
+            const curve = new THREE.CatmullRomCurve3(pts, false);
+            points = curve.getPoints(50);
+          }
         }
         break;
       }
@@ -830,6 +884,15 @@ function entityDistance(point: Point2D, entity: SketchEntity): number {
       }
       return minDist;
     }
+    case 'spline':
+    case 'bezier': {
+      if (entity.points.length < 2) return Infinity;
+      let minDist = Infinity;
+      for (let i = 0; i < entity.points.length - 1; i++) {
+        minDist = Math.min(minDist, pointToSegmentDist(point, entity.points[i], entity.points[i + 1]));
+      }
+      return minDist;
+    }
   }
 }
 
@@ -869,5 +932,11 @@ function getEntityMidpoint(entity: SketchEntity): Point2D {
       return entity.center;
     case 'arc':
       return entity.mid;
+    case 'spline':
+    case 'bezier': {
+      if (entity.points.length === 0) return [0, 0];
+      const midIdx = Math.floor(entity.points.length / 2);
+      return entity.points[midIdx];
+    }
   }
 }

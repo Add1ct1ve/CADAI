@@ -23,6 +23,7 @@ fn get_rates_per_million(provider: &str, model: &str) -> Option<(f64, f64)> {
         ("kimi", _) => Some((0.70, 2.80)),
         ("gemini", m) if m.contains("pro") => Some((1.25, 10.0)),
         ("gemini", m) if m.contains("flash") => Some((0.15, 0.60)),
+        ("runpod", _) => Some((0.0, 0.0)),
         ("ollama", _) => Some((0.0, 0.0)),
         _ => None,
     }

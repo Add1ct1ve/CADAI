@@ -115,6 +115,19 @@ pub fn get_provider_registry() -> Vec<ProviderInfo> {
             allows_custom_model: false,
         },
         ProviderInfo {
+            id: "runpod".to_string(),
+            display_name: "RunPod (Caiden2)".to_string(),
+            requires_api_key: true,
+            base_url: Some(
+                "https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1".to_string(),
+            ),
+            models: vec![ModelInfo {
+                id: "Add1ct1ve/caiden2-build123d-32b".to_string(),
+                display_name: "Caiden2 Build123d 32B".to_string(),
+            }],
+            allows_custom_model: false,
+        },
+        ProviderInfo {
             id: "ollama".to_string(),
             display_name: "Ollama".to_string(),
             requires_api_key: false,

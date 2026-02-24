@@ -629,3 +629,47 @@ export async function showOpenDialog(extension: string): Promise<string | null> 
     return null;
   }
 }
+
+// ── STEP/IGES Import ──
+
+export interface ImportCadResult {
+  stl_base64?: string;
+  metadata?: {
+    file_path: string;
+    format: string;
+    bbox_min: [number, number, number];
+    bbox_max: [number, number, number];
+  };
+  error?: string;
+}
+
+/**
+ * Import a STEP or IGES file via the Python importer backend.
+ * Returns STL data (base64) and metadata, or an error.
+ */
+export async function importCadFile(filePath: string): Promise<ImportCadResult> {
+  try {
+    const resultStr = await invoke<string>('import_cad_file', { filePath });
+    return JSON.parse(resultStr);
+  } catch (err) {
+    console.error('import_cad_file failed:', err);
+    return { error: String(err) };
+  }
+}
+
+/**
+ * Show a native open file dialog filtered to CAD files (STEP/IGES).
+ */
+export async function showImportCadDialog(): Promise<string | null> {
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [
+        { name: 'CAD Files', extensions: ['step', 'stp', 'iges', 'igs'] },
+      ],
+    });
+    return typeof path === 'string' ? path : null;
+  } catch {
+    return null;
+  }
+}

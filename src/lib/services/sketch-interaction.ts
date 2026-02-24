@@ -90,6 +90,14 @@ export function handleSketchClick(
       return { type: 'create', entity, chainPoints: [] };
     }
 
+    case 'sketch-spline':
+    case 'sketch-bezier': {
+      // Multi-click: each click adds a control point
+      // Drawing is finished via Enter key or double-click (handled externally)
+      // We just accumulate points here
+      return { type: 'advance', points: [...drawingPoints, clickPoint] };
+    }
+
     default:
       return { type: 'none' };
   }

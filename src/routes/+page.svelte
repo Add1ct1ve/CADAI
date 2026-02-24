@@ -46,6 +46,7 @@
 
   let settingsOpen = $state(false);
   let shortcutsOpen = $state(false);
+  let clipboardIds: string[] = [];
 
   onMount(() => {
     settings.load().then(() => {
@@ -194,6 +195,41 @@
       return;
     }
 
+    // Duplicate selected (Ctrl+D)
+    if (ctrl && e.key === 'd' && scene.codeMode === 'parametric' && !sketchStore.isInSketchMode) {
+      e.preventDefault();
+      if (scene.selectedIds.length > 0) {
+        history.pushSnapshot(captureFullSnapshot());
+        scene.duplicateSelected();
+        triggerPipeline(100);
+      }
+      return;
+    }
+    // Copy (Ctrl+C) — store selected IDs for paste
+    if (ctrl && e.key === 'c' && scene.codeMode === 'parametric' && !sketchStore.isInSketchMode) {
+      e.preventDefault();
+      clipboardIds = [...scene.selectedIds];
+      return;
+    }
+    // Paste (Ctrl+V) — duplicate clipboard objects
+    if (ctrl && e.key === 'v' && scene.codeMode === 'parametric' && !sketchStore.isInSketchMode) {
+      e.preventDefault();
+      if (clipboardIds.length > 0) {
+        history.pushSnapshot(captureFullSnapshot());
+        const newObjs: any[] = [];
+        for (const id of clipboardIds) {
+          const dup = scene.duplicateObject(id);
+          if (dup) newObjs.push(dup);
+        }
+        if (newObjs.length > 0) {
+          scene.clearSelection();
+          for (const o of newObjs) scene.select(o.id, true);
+        }
+        triggerPipeline(100);
+      }
+      return;
+    }
+
     // Undo/Redo (always active, parametric mode only)
     if (ctrl && e.key === 'z' && !e.shiftKey && scene.codeMode === 'parametric') {
       e.preventDefault();
@@ -278,6 +314,23 @@
         return;
       }
 
+      // Enter: finish spline/bezier drawing
+      if (e.key === 'Enter' && (sketchStore.activeSketchTool === 'sketch-spline' || sketchStore.activeSketchTool === 'sketch-bezier')) {
+        e.preventDefault();
+        if (sketchStore.drawingPoints.length >= 2) {
+          history.pushSnapshot(captureFullSnapshot());
+          const entityType = sketchStore.activeSketchTool === 'sketch-spline' ? 'spline' : 'bezier';
+          sketchStore.addEntity({
+            type: entityType,
+            id: sketchStore.newEntityId(),
+            points: [...sketchStore.drawingPoints],
+          } as any);
+          sketchStore.clearDrawingState();
+          triggerPipeline(100);
+        }
+        return;
+      }
+
       // Sketch tool shortcuts
       const sketchToolMap: Record<string, SketchToolId> = {
         v: 'sketch-select',
@@ -285,6 +338,7 @@
         r: 'sketch-rect',
         c: 'sketch-circle',
         a: 'sketch-arc',
+        s: 'sketch-spline',
         o: 'sketch-constraint-coincident',
         h: 'sketch-constraint-horizontal',
         i: 'sketch-constraint-vertical',
@@ -300,6 +354,11 @@
         m: 'sketch-op-mirror',
         g: 'sketch-op-fillet',
         j: 'sketch-op-chamfer',
+        b: 'sketch-constraint-tangent',
+        k: 'sketch-constraint-fix',
+        z: 'sketch-constraint-midpoint',
+        y: 'sketch-constraint-symmetric',
+        u: 'sketch-constraint-collinear',
       };
       const sketchTool = sketchToolMap[e.key.toLowerCase()];
       if (sketchTool) {

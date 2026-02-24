@@ -84,6 +84,10 @@
 
   <div class="measure-hint">{activeHint}</div>
 
+  {#if measureStore.feedbackMessage}
+    <div class="measure-feedback">{measureStore.feedbackMessage}</div>
+  {/if}
+
   {#if pendingCount > 0}
     <div class="pending-info">
       {pendingCount} point{pendingCount !== 1 ? 's' : ''} placed
@@ -212,6 +216,16 @@
   .measure-hint {
     font-size: 10px;
     color: var(--text-muted);
+    line-height: 1.3;
+  }
+
+  .measure-feedback {
+    font-size: 10px;
+    color: #f38ba8;
+    background: rgba(243, 139, 168, 0.1);
+    border: 1px solid rgba(243, 139, 168, 0.25);
+    border-radius: 3px;
+    padding: 3px 6px;
     line-height: 1.3;
   }
 

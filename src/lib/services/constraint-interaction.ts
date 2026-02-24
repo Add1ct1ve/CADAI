@@ -43,6 +43,16 @@ export function handleConstraintSelection(
       return handleRadius(selected, newId);
     case 'sketch-constraint-angle':
       return handleAngle(selected, newId);
+    case 'sketch-constraint-tangent':
+      return handleTangent(selected, newId);
+    case 'sketch-constraint-fix':
+      return handleFix(selected, newId);
+    case 'sketch-constraint-midpoint':
+      return handleMidpoint(selected, newId);
+    case 'sketch-constraint-symmetric':
+      return handleSymmetric(selected, newId);
+    case 'sketch-constraint-collinear':
+      return handleCollinear(selected, newId);
     default:
       return { type: 'invalid', message: 'Unknown constraint tool' };
   }
@@ -193,6 +203,86 @@ function handleAngle(selected: SketchEntity[], newId: () => string): ConstraintA
   };
 }
 
+// ── Tangent ──
+
+function handleTangent(selected: SketchEntity[], newId: () => string): ConstraintAction {
+  if (selected.length < 2) return { type: 'need-more', message: 'Select 2 entities for tangent constraint (line+circle/arc or 2 circles/arcs)' };
+  const e1 = selected[0];
+  const e2 = selected[1];
+  const valid = (
+    (e1.type === 'line' && (e2.type === 'circle' || e2.type === 'arc')) ||
+    (e2.type === 'line' && (e1.type === 'circle' || e1.type === 'arc')) ||
+    ((e1.type === 'circle' || e1.type === 'arc') && (e2.type === 'circle' || e2.type === 'arc'))
+  );
+  if (!valid) return { type: 'invalid', message: 'Tangent requires line+circle/arc or two circles/arcs' };
+  return {
+    type: 'create',
+    constraint: { type: 'tangent', id: newId(), entityId1: e1.id, entityId2: e2.id },
+  };
+}
+
+// ── Fix ──
+
+function handleFix(selected: SketchEntity[], newId: () => string): ConstraintAction {
+  if (selected.length < 1) return { type: 'need-more', message: 'Select an entity to fix its first endpoint' };
+  const e = selected[0];
+  return {
+    type: 'create',
+    constraint: { type: 'fix', id: newId(), entityId: e.id, pointIndex: 0 },
+  };
+}
+
+// ── Midpoint ──
+
+function handleMidpoint(selected: SketchEntity[], newId: () => string): ConstraintAction {
+  if (selected.length < 2) return { type: 'need-more', message: 'Select a point entity and a line for midpoint constraint' };
+  const e1 = selected[0];
+  const e2 = selected[1];
+  // One must have a point (endpoint) and other must be a line
+  if (e2.type === 'line') {
+    return {
+      type: 'create',
+      constraint: { type: 'midpoint', id: newId(), pointEntityId: e1.id, lineEntityId: e2.id },
+    };
+  }
+  if (e1.type === 'line') {
+    return {
+      type: 'create',
+      constraint: { type: 'midpoint', id: newId(), pointEntityId: e2.id, lineEntityId: e1.id },
+    };
+  }
+  return { type: 'invalid', message: 'Midpoint constraint requires one line and one point entity' };
+}
+
+// ── Symmetric ──
+
+function handleSymmetric(selected: SketchEntity[], newId: () => string): ConstraintAction {
+  if (selected.length < 3) return { type: 'need-more', message: 'Select 2 entities and an axis line for symmetric constraint' };
+  const e1 = selected[0];
+  const e2 = selected[1];
+  const axis = selected[2];
+  if (axis.type !== 'line') return { type: 'invalid', message: 'The third selected entity must be a line (axis of symmetry)' };
+  return {
+    type: 'create',
+    constraint: { type: 'symmetric', id: newId(), entityId1: e1.id, entityId2: e2.id, axisEntityId: axis.id },
+  };
+}
+
+// ── Collinear ──
+
+function handleCollinear(selected: SketchEntity[], newId: () => string): ConstraintAction {
+  if (selected.length < 2) return { type: 'need-more', message: 'Select 2 lines for collinear constraint' };
+  const e1 = selected[0];
+  const e2 = selected[1];
+  if (e1.type !== 'line' || e2.type !== 'line') {
+    return { type: 'invalid', message: 'Collinear constraint requires two lines' };
+  }
+  return {
+    type: 'create',
+    constraint: { type: 'collinear', id: newId(), entityId1: e1.id, entityId2: e2.id },
+  };
+}
+
 // ── Helpers ──
 
 function getClosestEndpoints(e1: SketchEntity, e2: SketchEntity): [PointRef, PointRef] {
@@ -234,6 +324,12 @@ function getEntityEndpoints(entity: SketchEntity): PointRef[] {
       return [
         { entityId: entity.id, pointIndex: 0 },
         { entityId: entity.id, pointIndex: 2 },
+      ];
+    case 'spline':
+    case 'bezier':
+      return [
+        { entityId: entity.id, pointIndex: 0 },
+        { entityId: entity.id, pointIndex: 1 },
       ];
   }
 }

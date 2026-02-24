@@ -14,6 +14,9 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Ctrl+Y', action: 'Redo', category: 'global' },
   { key: 'Escape', action: 'Cancel / Deselect', category: 'global' },
   { key: 'Delete', action: 'Delete selected', category: 'global' },
+  { key: 'Ctrl+D', action: 'Duplicate selected', category: 'global' },
+  { key: 'Ctrl+C', action: 'Copy', category: 'global' },
+  { key: 'Ctrl+V', action: 'Paste', category: 'global' },
   { key: '?', action: 'Keyboard shortcuts', category: 'global' },
 
   // View
@@ -69,6 +72,12 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'M', action: 'Mirror', category: 'sketch', context: 'sketch' },
   { key: 'G', action: 'Fillet', category: 'sketch', context: 'sketch' },
   { key: 'J', action: 'Chamfer', category: 'sketch', context: 'sketch' },
+  { key: 'B', action: 'Tangent', category: 'sketch', context: 'sketch' },
+  { key: 'K', action: 'Fix', category: 'sketch', context: 'sketch' },
+  { key: 'Z', action: 'Midpoint', category: 'sketch', context: 'sketch' },
+  { key: 'Y', action: 'Symmetric', category: 'sketch', context: 'sketch' },
+  { key: 'U', action: 'Collinear', category: 'sketch', context: 'sketch' },
+  { key: 'S', action: 'Spline', category: 'sketch', context: 'sketch' },
 ];
 
 export const CATEGORY_LABELS: Record<string, string> = {

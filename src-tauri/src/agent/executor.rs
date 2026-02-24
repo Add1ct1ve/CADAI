@@ -899,7 +899,9 @@ fn run_post_geometry_checks(
 fn postprocess_generated_code(code: &str) -> String {
     let mut result = ensure_math_import(code);
     result = fix_slot_dimensions(&result);
+    result = fix_rotate_calls(&result);
     result = inject_safe_fillet_wrapper(&result);
+    result = inject_safe_chamfer_wrapper(&result);
     result
 }
 
@@ -962,6 +964,30 @@ fn fix_slot_dimensions(code: &str) -> String {
     .to_string()
 }
 
+/// Rewrite bare `rotate(...)` calls to `Rot(...)` and `Rotate(...)` to `Rotation(...)`.
+///
+/// Many fine-tuned models emit `rotate(angle)` (CadQuery habit) instead of `Rot(0, 0, angle)`.
+/// `Rotate(...)` is a common misspelling of the Build123d `Rotation(...)` class.
+fn fix_rotate_calls(code: &str) -> String {
+    // rotate(angle) -> Rot(0, 0, angle)   (single numeric arg)
+    let rotate_re = Regex::new(
+        r"\brotate\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)",
+    )
+    .expect("valid rotate regex");
+    let result = rotate_re.replace_all(code, "Rot(0, 0, $1)").to_string();
+
+    // rotate(x, y, z) -> Rot(x, y, z)     (three args)
+    let rotate3_re = Regex::new(
+        r"\brotate\(\s*([^,)]+),\s*([^,)]+),\s*([^,)]+)\s*\)",
+    )
+    .expect("valid rotate3 regex");
+    let result = rotate3_re.replace_all(&result, "Rot($1, $2, $3)").to_string();
+
+    // Rotate(...) -> Rotation(...)
+    let rotate_class_re = Regex::new(r"\bRotate\(").expect("valid Rotate regex");
+    rotate_class_re.replace_all(&result, "Rotation(").to_string()
+}
+
 /// Inject a safe fillet wrapper that falls back to max_fillet on failure.
 ///
 /// Redefines `fillet` in the code's scope so that oversized radii are automatically
@@ -984,6 +1010,50 @@ def fillet(*_a, **_kw):\n\
             if _e is not None and _r is not None:\n\
                 _sr = max_fillet(_e, _r)\n\
                 return _orig_fillet(_e, _sr)\n\
+        except Exception:\n\
+            pass\n";
+
+    let lines: Vec<&str> = code.lines().collect();
+    let mut last_import = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
+            last_import = i;
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        out.push(line.to_string());
+        if i == last_import {
+            out.push(wrapper.to_string());
+        }
+    }
+    out.join("\n")
+}
+
+/// Inject a safe chamfer wrapper that catches oversized chamfers.
+///
+/// Same pattern as the fillet wrapper — tries the original call, then falls
+/// back to a reduced length on failure.
+fn inject_safe_chamfer_wrapper(code: &str) -> String {
+    if !code.contains("chamfer(") || code.contains("_orig_chamfer") {
+        return code.to_string();
+    }
+
+    let wrapper = "\
+\n# auto-postprocess: safe chamfer\n\
+_orig_chamfer = chamfer\n\
+def chamfer(*_a, **_kw):\n\
+    try:\n\
+        return _orig_chamfer(*_a, **_kw)\n\
+    except Exception:\n\
+        try:\n\
+            _e = _a[0] if _a else _kw.get('objects')\n\
+            _l = _a[1] if len(_a) > 1 else _kw.get('length')\n\
+            if _e is not None and _l is not None:\n\
+                _sl = _l * 0.5\n\
+                return _orig_chamfer(_e, _sl)\n\
         except Exception:\n\
             pass\n";
 

@@ -306,6 +306,45 @@ export function getSceneStore() {
       return objects.find((o) => o.id === id);
     },
 
+    duplicateObject(id: ObjectId, offset?: [number, number, number]): SceneObject | null {
+      const source = objects.find((o) => o.id === id);
+      if (!source) return null;
+      const newId = nanoid(10);
+      const off = offset ?? [5, 0, 0];
+      const cloned: SceneObject = {
+        ...structuredClone($state.snapshot(source)),
+        id: newId,
+        name: nextName(source.params.type),
+        transform: {
+          ...source.transform,
+          position: [
+            source.transform.position[0] + off[0],
+            source.transform.position[1] + off[1],
+            source.transform.position[2] + off[2],
+          ],
+        },
+        booleanOp: undefined,
+        splitOp: undefined,
+        patternOp: undefined,
+      };
+      objects = [...objects, cloned];
+      getFeatureTreeStore().registerFeature(newId);
+      return cloned;
+    },
+
+    duplicateSelected(): SceneObject[] {
+      const ids = [...selectedIds];
+      const newObjects: SceneObject[] = [];
+      for (const id of ids) {
+        const dup = this.duplicateObject(id);
+        if (dup) newObjects.push(dup);
+      }
+      if (newObjects.length > 0) {
+        selectedIds = newObjects.map((o) => o.id);
+      }
+      return newObjects;
+    },
+
     snapshot(): { objects: SceneObject[]; selectedIds: ObjectId[] } {
       return {
         objects: $state.snapshot(objects) as SceneObject[],

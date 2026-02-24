@@ -189,9 +189,17 @@ export function getSketchStore() {
       const id = nanoid(10);
       sketchNameCounter++;
 
-      // Resolve origin for datum planes
+      // Resolve origin for datum planes and face references
       let origin: [number, number, number] = [0, 0, 0];
-      if (plane !== 'XY' && plane !== 'XZ' && plane !== 'YZ') {
+      if (plane.startsWith('face:')) {
+        // Face reference plane: face:objectId:faceId:nx:ny:nz
+        // Origin will be set from face data externally or defaults to [0,0,0]
+        const parts = plane.split(':');
+        if (parts.length >= 9) {
+          // Extended format: face:objectId:faceId:nx:ny:nz:ox:oy:oz
+          origin = [parseFloat(parts[6]), parseFloat(parts[7]), parseFloat(parts[8])];
+        }
+      } else if (plane !== 'XY' && plane !== 'XZ' && plane !== 'YZ') {
         const datumPlane = getDatumStore().getDatumPlaneById(plane);
         if (datumPlane) {
           if (datumPlane.definition.type === 'offset') {
@@ -481,6 +489,16 @@ function constraintReferencesEntity(c: SketchConstraint, entityId: string): bool
       return c.point1.entityId === entityId || c.point2.entityId === entityId;
     case 'radius':
       return c.entityId === entityId;
+    case 'tangent':
+      return c.entityId1 === entityId || c.entityId2 === entityId;
+    case 'fix':
+      return c.entityId === entityId;
+    case 'midpoint':
+      return c.pointEntityId === entityId || c.lineEntityId === entityId;
+    case 'symmetric':
+      return c.entityId1 === entityId || c.entityId2 === entityId || c.axisEntityId === entityId;
+    case 'collinear':
+      return c.entityId1 === entityId || c.entityId2 === entityId;
   }
 }
 
@@ -500,5 +518,15 @@ function constraintReferencesAny(c: SketchConstraint, ids: Set<string>): boolean
       return ids.has(c.point1.entityId) || ids.has(c.point2.entityId);
     case 'radius':
       return ids.has(c.entityId);
+    case 'tangent':
+      return ids.has(c.entityId1) || ids.has(c.entityId2);
+    case 'fix':
+      return ids.has(c.entityId);
+    case 'midpoint':
+      return ids.has(c.pointEntityId) || ids.has(c.lineEntityId);
+    case 'symmetric':
+      return ids.has(c.entityId1) || ids.has(c.entityId2) || ids.has(c.axisEntityId);
+    case 'collinear':
+      return ids.has(c.entityId1) || ids.has(c.entityId2);
   }
 }

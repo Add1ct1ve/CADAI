@@ -1227,7 +1227,8 @@
             { label: 'Edit Properties', action: () => { scene.select(hitId); window.dispatchEvent(new CustomEvent('feature-tree:edit')); } },
             { separator: true, label: '', action: () => {} },
             { label: 'Zoom to Selection', action: () => { scene.select(hitId); viewportStore.fitSelection([hitId]); } },
-            { label: 'Hide', action: () => { /* TODO: implement per-object visibility */ }, disabled: true },
+            { label: obj?.visible === false ? 'Show' : 'Hide', action: () => { scene.updateObject(hitId, { visible: !(obj?.visible ?? true) }); triggerPipeline(100); } },
+            { label: 'Duplicate', action: () => { scene.duplicateObject(hitId); triggerPipeline(100); } },
             { separator: true, label: '', action: () => {} },
             { label: 'Delete', action: () => { scene.select(hitId); scene.deleteSelected(); } },
           ]);

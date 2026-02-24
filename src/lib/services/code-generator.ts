@@ -92,6 +92,10 @@ function fmt(n: number): string {
 }
 
 function edgeSelectorExpr(name: string, selector: EdgeSelector): string {
+  if (selector.startsWith('edge:')) {
+    const id = parseInt(selector.split(':')[1], 10);
+    return `${name}.edges()[${id}]`;
+  }
   switch (selector) {
     case 'all':
       return `${name}.edges()`;
@@ -101,6 +105,8 @@ function edgeSelectorExpr(name: string, selector: EdgeSelector): string {
       return `${name}.edges().sort_by(Axis.Z)[:1]`;
     case 'vertical':
       return `${name}.edges().filter_by(Axis.Z)`;
+    default:
+      return `${name}.edges()`;
   }
 }
 
@@ -119,16 +125,25 @@ function generateFilletChamfer(name: string, fillet?: FilletParams, chamfer?: Ch
 
 function generateShell(name: string, shell?: ShellParams): string[] {
   if (!shell) return [];
-  // Build123d face selection
-  const faceMap: Record<string, string> = {
-    '>Z': `${name}.faces().sort_by(Axis.Z)[-1]`,
-    '<Z': `${name}.faces().sort_by(Axis.Z)[0]`,
-    '>Y': `${name}.faces().sort_by(Axis.Y)[-1]`,
-    '<Y': `${name}.faces().sort_by(Axis.Y)[0]`,
-    '>X': `${name}.faces().sort_by(Axis.X)[-1]`,
-    '<X': `${name}.faces().sort_by(Axis.X)[0]`,
-  };
-  const faceExpr = faceMap[shell.face] || `${name}.faces().sort_by(Axis.Z)[-1]`;
+
+  let faceExpr: string;
+
+  if (shell.face.startsWith('face:')) {
+    const id = parseInt(shell.face.split(':')[1], 10);
+    faceExpr = `${name}.faces()[${id}]`;
+  } else {
+    // Build123d face selection
+    const faceMap: Record<string, string> = {
+      '>Z': `${name}.faces().sort_by(Axis.Z)[-1]`,
+      '<Z': `${name}.faces().sort_by(Axis.Z)[0]`,
+      '>Y': `${name}.faces().sort_by(Axis.Y)[-1]`,
+      '<Y': `${name}.faces().sort_by(Axis.Y)[0]`,
+      '>X': `${name}.faces().sort_by(Axis.X)[-1]`,
+      '<X': `${name}.faces().sort_by(Axis.X)[0]`,
+    };
+    faceExpr = faceMap[shell.face] || `${name}.faces().sort_by(Axis.Z)[-1]`;
+  }
+
   return [`${name} = offset_3d(${name}, openings=${faceExpr}, amount=${fmt(-Math.abs(shell.thickness))})`];
 }
 
@@ -211,6 +226,20 @@ function generateSketchEntity(entity: SketchEntity): string[] {
     case 'arc':
       lines.push(`        ThreePointArc((${fmt(entity.start[0])}, ${fmt(entity.start[1])}), (${fmt(entity.mid[0])}, ${fmt(entity.mid[1])}), (${fmt(entity.end[0])}, ${fmt(entity.end[1])}))`);
       break;
+    case 'spline': {
+      if (entity.points.length >= 2) {
+        const ptsStr = entity.points.map(p => `(${fmt(p[0])}, ${fmt(p[1])})`).join(', ');
+        lines.push(`        Spline(${ptsStr})`);
+      }
+      break;
+    }
+    case 'bezier': {
+      if (entity.points.length >= 2) {
+        const ptsStr = entity.points.map(p => `(${fmt(p[0])}, ${fmt(p[1])})`).join(', ');
+        lines.push(`        Bezier(${ptsStr})`);
+      }
+      break;
+    }
   }
   return lines;
 }
@@ -221,6 +250,17 @@ function generateSketchEntity(entity: SketchEntity): string[] {
 function planeString(plane: SketchPlane, origin: [number, number, number]): string {
   if (plane === 'XY' || plane === 'XZ' || plane === 'YZ') {
     return `Plane.${plane}`;
+  }
+
+  // Handle face-derived planes: face:objectId:faceId:nx:ny:nz
+  if (plane.startsWith('face:')) {
+    const parts = plane.split(':');
+    if (parts.length >= 6) {
+      const nx = parseFloat(parts[3]);
+      const ny = parseFloat(parts[4]);
+      const nz = parseFloat(parts[5]);
+      return `Plane(origin=(${fmt(origin[0])}, ${fmt(origin[1])}, ${fmt(origin[2])}), z_dir=(${fmt(nx)}, ${fmt(ny)}, ${fmt(nz)}))`;
+    }
   }
 
   const datumPlane = getDatumStore().getDatumPlaneById(plane);
@@ -243,7 +283,52 @@ function planeString(plane: SketchPlane, origin: [number, number, number]): stri
   return `Plane(origin=(${fmt(p1[0])}, ${fmt(p1[1])}, ${fmt(p1[2])}), z_dir=(${fmt(normal[0])}, ${fmt(normal[1])}, ${fmt(normal[2])}))`;
 }
 
+function generateLoftBase(sketch: Sketch, symbolMap: SymbolMap, allSketches: Sketch[]): string[] {
+  const lines: string[] = [];
+  const op = sketch.operation;
+  if (op?.type !== 'loft') return lines;
+
+  const baseVarName = symbolForFeature(symbolMap, sketch.id, 'sketch');
+  const varName = op.mode === 'cut' ? sketchCutterSymbol(symbolMap, sketch.id) : baseVarName;
+
+  lines.push(`# --- ${sketch.name} (Loft) ---`);
+
+  // Gather all profile sketches: the base sketch + additional profile sketch IDs
+  const profileSketches = [sketch, ...op.profileSketchIds
+    .map(id => allSketches.find(s => s.id === id))
+    .filter(Boolean) as Sketch[]];
+
+  lines.push(`with BuildPart() as _${varName}_builder:`);
+  for (let i = 0; i < profileSketches.length; i++) {
+    const ps = profileSketches[i];
+    const plane = planeString(ps.plane, ps.origin);
+    lines.push(`    with BuildSketch(${plane}) as _loft_sk${i}:`);
+    for (const entity of ps.entities) {
+      lines.push(...generateSketchEntity(entity));
+    }
+  }
+
+  const ruledArg = op.ruled ? ', ruled=True' : '';
+  const sections = profileSketches.map((_, i) => `_loft_sk${i}.sketch`).join(', ');
+  lines.push(`    loft([${sections}]${ruledArg})`);
+  lines.push(`${varName} = _${varName}_builder.part`);
+
+  // Post-processing
+  if (op) {
+    lines.push(...generateFilletChamfer(varName, sketch.fillet, sketch.chamfer));
+    lines.push(...generateShell(varName, sketch.shell));
+    lines.push(...generateHoles(varName, sketch.holes));
+  }
+
+  lines.push('');
+  return lines;
+}
+
 function generateSketchBase(sketch: Sketch, symbolMap: SymbolMap, allSketches?: Sketch[]): string[] {
+  if (sketch.operation?.type === 'loft') {
+    return generateLoftBase(sketch, symbolMap, allSketches ?? []);
+  }
+
   const lines: string[] = [];
   const constraintCount = (sketch.constraints ?? []).length;
   const constraintInfo = constraintCount > 0 ? ` [${constraintCount} constraint${constraintCount !== 1 ? 's' : ''}]` : '';

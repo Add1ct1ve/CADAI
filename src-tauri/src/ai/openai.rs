@@ -22,11 +22,22 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(api_key: String, model: String, base_url: Option<String>) -> Self {
+        let url = base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        // RunPod serverless has a cold start of ~3-4 min while the model loads;
+        // use a generous timeout so the first request doesn't abort prematurely.
+        let timeout = if url.contains("runpod.ai") {
+            std::time::Duration::from_secs(300)
+        } else {
+            std::time::Duration::from_secs(60)
+        };
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(timeout)
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             api_key,
             model,
-            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            base_url: url,
             temperature: None,
         }
     }

@@ -14,8 +14,16 @@ The output file will be written as binary STL.
 
 import sys
 import os
+import ast
+import json
+import builtins
 import traceback
+import faulthandler
 from collections.abc import Mapping
+
+# Enable faulthandler so OCP/OpenCascade segfaults produce a traceback
+# instead of a silent crash.
+faulthandler.enable()
 
 
 def _is_string_like(value):
@@ -201,6 +209,73 @@ def _normalize_result_for_export(result):
     return Compound(children=exportables)
 
 
+def _extract_topology(shape):
+    """Extract face/edge topology from a Build123d shape."""
+    try:
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+
+        wrapped = shape.wrapped if hasattr(shape, "wrapped") else shape
+
+        faces = []
+        face_explorer = TopExp_Explorer(wrapped, TopAbs_FACE)
+        face_id = 0
+        while face_explorer.More():
+            face = face_explorer.Current()
+
+            # Compute face area
+            props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(face, props)
+            area = props.Mass()
+
+            # Get face normal (approximate from surface at midpoint)
+            normal = [0, 0, 1]
+            try:
+                from OCP.BRepAdaptor import BRepAdaptor_Surface
+                from OCP.gp import gp_Pnt, gp_Vec
+                surf = BRepAdaptor_Surface(face)
+                u_mid = (surf.FirstUParameter() + surf.LastUParameter()) / 2
+                v_mid = (surf.FirstVParameter() + surf.LastVParameter()) / 2
+                pnt = gp_Pnt()
+                d1u = gp_Vec()
+                d1v = gp_Vec()
+                surf.D1(u_mid, v_mid, pnt, d1u, d1v)
+                normal_vec = d1u.Crossed(d1v)
+                if normal_vec.Magnitude() > 1e-10:
+                    normal_vec.Normalize()
+                    normal = [normal_vec.X(), normal_vec.Y(), normal_vec.Z()]
+            except Exception:
+                pass
+
+            faces.append({
+                "id": face_id,
+                "normal": normal,
+                "area": area,
+                "triangleIndices": [],  # Would need mesh correlation
+            })
+            face_id += 1
+            face_explorer.Next()
+
+        edges = []
+        edge_explorer = TopExp_Explorer(wrapped, TopAbs_EDGE)
+        edge_id = 0
+        while edge_explorer.More():
+            edge = edge_explorer.Current()
+            edges.append({
+                "id": edge_id,
+                "vertexPairs": [],  # Simplified for now
+            })
+            edge_id += 1
+            edge_explorer.Next()
+
+        return {"faces": faces, "edges": edges}
+    except Exception as e:
+        return {"faces": [], "edges": [], "error": str(e)}
+
+
 def _indent_width(line):
     width = 0
     for ch in line:
@@ -219,6 +294,137 @@ def _is_try_header(stripped):
         return False
     head = header[:-1].strip()
     return head == "try" or head.startswith("except") or head == "else" or head == "finally"
+
+
+_VALID_NAMES_CACHE = None
+
+
+def _get_valid_names():
+    """Build set of valid callable names from build123d + builtins + math."""
+    global _VALID_NAMES_CACHE
+    if _VALID_NAMES_CACHE is not None:
+        return _VALID_NAMES_CACHE
+
+    names = set()
+
+    # Python builtins (print, range, len, dict, list, type, ...)
+    names.update(dir(builtins))
+
+    # math module
+    import math
+    names.update(dir(math))
+
+    # Common stdlib names used in generated code
+    names.update([
+        "deepcopy", "copy", "partial", "reduce",
+        "pi", "tau", "e", "inf",
+    ])
+
+    # build123d — the main namespace
+    try:
+        import build123d
+        names.update(dir(build123d))
+        # Also grab names from star-import (what `from build123d import *` gives)
+        if hasattr(build123d, "__all__"):
+            names.update(build123d.__all__)
+    except ImportError:
+        pass
+
+    # OCP names that appear in valid build123d code
+    names.update([
+        "TopAbs_SOLID", "TopAbs_FACE", "TopAbs_EDGE", "TopAbs_WIRE",
+        "TopExp_Explorer", "BRepAlgoAPI_Fuse",
+        "gp_Pnt", "gp_Vec", "gp_Dir", "gp_Ax1", "gp_Ax2",
+    ])
+
+    # Names injected by the Rust postprocess wrappers (executor.rs)
+    names.update([
+        "_orig_fillet", "_orig_chamfer", "max_fillet",
+    ])
+
+    _VALID_NAMES_CACHE = names
+    return names
+
+
+def _collect_code_defined_names(tree):
+    """Collect all names defined within the code's own AST.
+
+    Covers: def, class, assignments, imports, for-loop targets,
+    with-as targets, and comprehension variables.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+                elif isinstance(target, ast.Tuple):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            names.add(elt.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.asname if alias.asname else alias.name.split(".")[0])
+        elif isinstance(node, ast.For):
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+            elif isinstance(node.target, ast.Tuple):
+                for elt in node.target.elts:
+                    if isinstance(elt, ast.Name):
+                        names.add(elt.id)
+        elif isinstance(node, ast.withitem) and isinstance(node.optional_vars, ast.Name):
+            names.add(node.optional_vars.id)
+    return names
+
+
+def strip_unknown_calls(code):
+    """
+    Parse code AST, find bare function calls to names that are not in the
+    build123d/builtins namespace AND not defined within the code itself,
+    and replace those lines with `pass`.
+    Returns (cleaned_code, removed_names).
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+
+    valid = _get_valid_names()
+    code_defined = _collect_code_defined_names(tree)
+
+    # Collect line numbers and the unknown name for lines that call unknown functions.
+    # We only flag bare Name(...) calls, not attribute calls like obj.method().
+    bad_lines = {}  # line_number -> name
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        # Bare call: SomeFunction(...)
+        if isinstance(func, ast.Name):
+            if func.id not in valid and func.id not in code_defined:
+                bad_lines[node.lineno] = func.id
+
+    if not bad_lines:
+        return code, []
+
+    lines = code.splitlines()
+    removed = []
+    for lineno, name in sorted(bad_lines.items()):
+        idx = lineno - 1  # ast is 1-indexed
+        if 0 <= idx < len(lines):
+            original = lines[idx]
+            indent = original[: len(original) - len(original.lstrip())]
+            lines[idx] = f"{indent}pass  # stripped unknown: {name}"
+            removed.append(name)
+            print(f"[validator] Stripped unknown call on line {lineno}: {name}", file=sys.stderr)
+
+    return "\n".join(lines), removed
 
 
 def guard_fillet_chamfer(code):
@@ -274,10 +480,20 @@ def main():
     with open(input_file, "r", encoding="utf-8") as f:
         code = f.read()
 
+    code, _stripped = strip_unknown_calls(code)
     code = guard_fillet_chamfer(code)
 
     # Execute the Build123d code
-    namespace = {}
+    # Inject noop shims for CadQuery/OCP viewer functions that AI models
+    # sometimes emit.  Without these the code would crash with NameError.
+    def _noop(*args, **kwargs):
+        pass
+
+    namespace = {
+        "show_object": _noop,
+        "show": _noop,
+        "cq_show": _noop,
+    }
     try:
         exec(code, namespace)
     except Exception:
@@ -303,6 +519,16 @@ def main():
     except Exception:
         traceback.print_exc()
         sys.exit(4)
+
+    # Extract topology data and write as sidecar JSON
+    try:
+        topology = _extract_topology(normalized)
+        topology_file = output_file + ".topology.json"
+        with open(topology_file, "w", encoding="utf-8") as tf:
+            json.dump(topology, tf)
+        print(f"TOPOLOGY:{topology_file}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: topology extraction failed: {e}", file=sys.stderr)
 
     print(f"Exported to {output_file}")
 

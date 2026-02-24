@@ -279,6 +279,27 @@
     triggerAndRun();
   }
 
+  function addSketchLoft() {
+    const sketch = sketchStore.selectedSketch;
+    if (!sketch) return;
+    captureOnce();
+    const otherSketches = sketchStore.sketches.filter(s => s.id !== sketch.id && s.entities.length > 0 && !s.operation);
+    sketchStore.setOperation(sketch.id, { type: 'loft', mode: 'add', profileSketchIds: otherSketches.length > 0 ? [otherSketches[0].id] : [], ruled: false });
+    triggerAndRun();
+  }
+
+  function getLoftProfileSketches() {
+    const sketch = sketchStore.selectedSketch;
+    const profiles: { id: string; name: string }[] = [];
+    for (const s of sketchStore.sketches) {
+      if (s.id === sketch?.id) continue;
+      if (s.entities.length > 0) {
+        profiles.push({ id: s.id, name: s.name });
+      }
+    }
+    return profiles;
+  }
+
   function updateSketchOperation(partial: Partial<SketchOperation>) {
     const sketch = sketchStore.selectedSketch;
     if (!sketch || !sketch.operation) return;
@@ -669,6 +690,11 @@
       case 'distance': return `Distance: ${c.value}`;
       case 'radius': return `Radius: ${c.value}`;
       case 'angle': return `Angle: ${c.value}\u00B0`;
+      case 'tangent': return 'Tangent';
+      case 'fix': return 'Fix';
+      case 'midpoint': return 'Midpoint';
+      case 'symmetric': return 'Symmetric';
+      case 'collinear': return 'Collinear';
     }
   }
 
@@ -1453,6 +1479,7 @@
           <button class="apply-btn full-width" onclick={addSketchExtrude}>Extrude</button>
           <button class="apply-btn full-width" onclick={addSketchRevolve}>Revolve</button>
           <button class="apply-btn full-width" onclick={addSketchSweep}>Sweep</button>
+          <button class="apply-btn full-width" onclick={addSketchLoft}>Loft</button>
         </div>
       {:else if sketch.operation.type === 'extrude'}
         <div class="prop-row">
@@ -1558,6 +1585,71 @@
           </div>
         {/if}
         <button class="remove-btn" onclick={removeSketchOperation}>Remove Sweep</button>
+      {:else if sketch.operation.type === 'loft'}
+        <div class="prop-row">
+          <span class="prop-label">Profiles</span>
+          <span class="prop-value">{sketch.operation.profileSketchIds.length} sketch(es)</span>
+        </div>
+        {#each sketch.operation.profileSketchIds as profileId, idx}
+          <div class="prop-row">
+            <span class="prop-label">Profile {idx + 1}</span>
+            <select class="prop-select" value={profileId}
+              onchange={(e) => {
+                const op = sketch.operation;
+                if (op?.type !== 'loft') return;
+                const newIds = [...op.profileSketchIds];
+                newIds[idx] = (e.target as HTMLSelectElement).value;
+                updateSketchOperationImmediate({ profileSketchIds: newIds });
+              }}>
+              <option value="">Select sketch...</option>
+              {#each getLoftProfileSketches() as ps}
+                <option value={ps.id}>{ps.name}</option>
+              {/each}
+            </select>
+          </div>
+        {/each}
+        <div class="prop-row">
+          <button class="apply-btn" onclick={() => {
+            const op = sketch.operation;
+            if (op?.type !== 'loft') return;
+            const available = getLoftProfileSketches().filter(ps => !op.profileSketchIds.includes(ps.id));
+            if (available.length > 0) {
+              updateSketchOperationImmediate({ profileSketchIds: [...op.profileSketchIds, available[0].id] });
+            }
+          }}>+ Add Profile</button>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Ruled</span>
+          <button class="toggle-btn" class:active={sketch.operation.ruled}
+            onclick={() => {
+              const op = sketch.operation;
+              if (op?.type !== 'loft') return;
+              updateSketchOperationImmediate({ ruled: !op.ruled });
+            }}>
+            {sketch.operation.ruled ? 'Yes' : 'No'}
+          </button>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Mode</span>
+          <select class="prop-select" value={sketch.operation.mode}
+            onchange={(e) => updateSketchOperationImmediate({ mode: (e.target as HTMLSelectElement).value as 'add' | 'cut' })}>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
+          </select>
+        </div>
+        {#if sketch.operation.mode === 'cut'}
+          <div class="prop-row">
+            <span class="prop-label">Target</span>
+            <select class="prop-select" value={sketch.operation.cutTargetId ?? ''}
+              onchange={(e) => updateSketchOperationImmediate({ cutTargetId: (e.target as HTMLSelectElement).value || undefined })}>
+              <option value="">None</option>
+              {#each getCutTargets() as target}
+                <option value={target.id}>{target.name}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        <button class="remove-btn" onclick={removeSketchOperation}>Remove Loft</button>
       {/if}
     </div>
 

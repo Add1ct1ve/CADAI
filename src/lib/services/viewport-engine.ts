@@ -236,6 +236,34 @@ export class ViewportEngine {
 
     // Start render loop
     this.animate();
+
+    // PBR environment map for realistic metallic reflections
+    this.initEnvironment();
+  }
+
+  /** Build a lightweight PBR environment map so MeshStandardMaterial metalness actually reflects something. */
+  initEnvironment(): void {
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      pmrem.compileEquirectangularShader();
+      // Create a minimal environment scene with coloured point lights
+      const envScene = new THREE.Scene();
+      envScene.background = new THREE.Color(0x404060);
+      const light1 = new THREE.PointLight(0xffffff, 100, 0);
+      light1.position.set(10, 10, 10);
+      envScene.add(light1);
+      const light2 = new THREE.PointLight(0x8888ff, 50, 0);
+      light2.position.set(-10, 5, -10);
+      envScene.add(light2);
+      const light3 = new THREE.PointLight(0xffffff, 80, 0);
+      light3.position.set(0, -5, 10);
+      envScene.add(light3);
+      this.scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+      pmrem.dispose();
+      envScene.clear();
+    } catch (e) {
+      console.warn('Failed to init PBR environment:', e);
+    }
   }
 
   private animate = (): void => {
@@ -716,6 +744,41 @@ export class ViewportEngine {
         }
       }
     });
+  }
+
+  // ─── Public API: Face/Edge Highlighting ──────────
+
+  highlightFace(objectId: ObjectId, faceIndex: number, _topology?: any): void {
+    // Highlight the entire object with a distinct emissive color to indicate face selection.
+    // Full triangle-level highlighting would require topology.triangleIndices mapping.
+    const group = this.objectMeshes.get(objectId);
+    if (!group) return;
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        child.material.emissive.setHex(0x225533);
+        child.material.emissiveIntensity = 0.5;
+      }
+    });
+  }
+
+  clearFaceHighlight(objectId: ObjectId): void {
+    this.updateMeshVisuals(objectId);
+  }
+
+  highlightEdge(objectId: ObjectId, edgeIndex: number, _topology?: any): void {
+    // Highlight the entire object with a distinct emissive color to indicate edge selection.
+    const group = this.objectMeshes.get(objectId);
+    if (!group) return;
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        child.material.emissive.setHex(0x335522);
+        child.material.emissiveIntensity = 0.5;
+      }
+    });
+  }
+
+  clearEdgeHighlight(objectId: ObjectId): void {
+    this.updateMeshVisuals(objectId);
   }
 
   // ─── Public API: Raycasting ──────────────────────

@@ -82,7 +82,7 @@ def tessellate_result(result, tolerance=0.1):
         shape = shape_from_result(result)
         vertices, faces = shape.tessellate(tolerance)
         # Convert Build123d Vector objects to tuples
-        verts = [(v.x, v.y, v.z) for v in vertices]
+        verts = [(v.X, v.Y, v.Z) for v in vertices]
         # Faces are already tuples of indices
         tris = [tuple(f) for f in faces]
         return verts, tris

@@ -280,6 +280,8 @@ function offsetEntity(entity: SketchEntity, distance: number, newId: () => strin
         corner2: [maxX + distance, maxY + distance],
       };
     }
+    default:
+      return null;
   }
 }
 
@@ -351,6 +353,13 @@ function mirrorEntity2D(
         id: newId(),
         corner1: reflect(entity.corner1),
         corner2: reflect(entity.corner2),
+      };
+    case 'spline':
+    case 'bezier':
+      return {
+        ...entity,
+        id: newId(),
+        points: entity.points.map(reflect),
       };
   }
 }

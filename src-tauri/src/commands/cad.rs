@@ -8,6 +8,8 @@ use crate::error::AppError;
 use crate::python::{detector, installer, runner, venv};
 use crate::state::AppState;
 
+const IMPORT_TIMEOUT_MS: u64 = 60_000;
+
 const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30_000;
 const MIN_EXECUTION_TIMEOUT_MS: u64 = 1_000;
 const MAX_EXECUTION_TIMEOUT_MS: u64 = 120_000;
@@ -274,4 +276,56 @@ pub async fn setup_python(state: State<'_, AppState>) -> Result<String, AppError
         "Python {} environment ready with Build123d {}",
         info.version, b3d_ver_str
     ))
+}
+
+#[tauri::command]
+pub async fn import_cad_file(
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    let venv_path = state
+        .venv_path
+        .lock()
+        .map_err(|_| AppError::ConfigError("Failed to access Python environment state".into()))?
+        .clone();
+
+    let venv_dir = match venv_path {
+        Some(p) => p,
+        None => {
+            return Err(AppError::CadError(
+                "Python environment not set up. Click 'Setup Python' in settings.".into(),
+            ));
+        }
+    };
+
+    let importer_script = super::find_python_script("importer.py")?;
+    let file_path_owned = file_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        runner::execute_python_script_with_timeout(
+            &venv_dir,
+            &importer_script,
+            &[&file_path_owned],
+            IMPORT_TIMEOUT_MS,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(script_result)) => {
+            if script_result.exit_code != 0 {
+                Err(AppError::CadError(format!(
+                    "Import failed (exit {}): {}",
+                    script_result.exit_code, script_result.stderr
+                )))
+            } else {
+                Ok(script_result.stdout)
+            }
+        }
+        Ok(Err(e)) => Err(e),
+        Err(join_err) => Err(AppError::CadError(format!(
+            "Import task panicked: {}",
+            join_err
+        ))),
+    }
 }

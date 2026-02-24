@@ -17,6 +17,8 @@ import {
   sheetMetalUnfold,
   showSaveDialog,
   showOpenDialog,
+  importCadFile,
+  showImportCadDialog,
 } from '$lib/services/tauri';
 import type { MeshCheckResult, OrientResult, ColorInfo } from '$lib/services/tauri';
 import { getHistoryStore } from '$lib/stores/history.svelte';
@@ -409,4 +411,32 @@ export async function projectSheetMetalUnfold(): Promise<string> {
 
   const result = await sheetMetalUnfold(project.code, path);
   return `Flat pattern exported (${result.face_count} faces, ${result.bend_count} bends, ${result.flat_width}x${result.flat_height}mm)`;
+}
+
+// ── STEP/IGES Import ──
+
+export async function projectImportStep(): Promise<string> {
+  const filePath = await showImportCadDialog();
+  if (!filePath) return '';
+
+  const scene = getSceneStore();
+  const result = await importCadFile(filePath);
+
+  if (result.error) {
+    console.error('STEP/IGES import failed:', result.error);
+    return `Import failed: ${result.error}`;
+  }
+
+  if (result.stl_base64 && result.metadata) {
+    const fileName = filePath.split(/[/\\]/).pop() ?? 'imported';
+    scene.upsertImportedMeshObject(
+      `import_${fileName}`,
+      fileName.replace(/\.[^.]+$/, ''),
+      result.stl_base64,
+      [0, 0, 0],
+    );
+    return `Imported: ${fileName}`;
+  }
+
+  return 'Import completed but no geometry was returned';
 }

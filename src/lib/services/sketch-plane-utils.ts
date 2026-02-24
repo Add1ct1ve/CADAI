@@ -56,6 +56,25 @@ export function getSketchPlaneInfo(
       v = new THREE.Vector3(0, 1, 0);
       break;
     default: {
+      // Face-derived plane: face:objectId:faceId:nx:ny:nz[:ox:oy:oz]
+      if (plane.startsWith('face:')) {
+        const parts = plane.split(':');
+        if (parts.length >= 6) {
+          const nx = parseFloat(parts[3]);
+          const ny = parseFloat(parts[4]);
+          const nz = parseFloat(parts[5]);
+          // Normal is in CAD Z-up coords; convert to Three.js Y-up: (x, y, z) -> (x, z, -y)
+          normal = new THREE.Vector3(nx, nz, -ny).normalize();
+          const up = Math.abs(normal.y) > 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+          u = new THREE.Vector3().crossVectors(up, normal).normalize();
+          v = new THREE.Vector3().crossVectors(normal, u).normalize();
+
+          const threePlane = new THREE.Plane();
+          threePlane.setFromNormalAndCoplanarPoint(normal, threeOrigin);
+          return { plane: threePlane, normal, u, v, origin: threeOrigin };
+        }
+      }
+
       // Datum plane ID — resolve from store
       const datumPlane = getDatumStore().getDatumPlaneById(plane);
       if (datumPlane) return computeDatumPlaneInfo(datumPlane);

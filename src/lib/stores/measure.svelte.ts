@@ -14,6 +14,8 @@ let measurements = $state<Measurement[]>([]);
 let pendingPoints = $state<MeasurePoint[]>([]);
 let massPropertiesFor = $state<ObjectId | null>(null);
 let massProperties = $state<MassProperties | null>(null);
+let feedbackMessage = $state<string | null>(null);
+let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ─── Store ──────────────────────────────────────
 export function getMeasureStore() {
@@ -32,6 +34,18 @@ export function getMeasureStore() {
     },
     get massProperties() {
       return massProperties;
+    },
+    get feedbackMessage() {
+      return feedbackMessage;
+    },
+
+    showFeedback(msg: string, duration = 2500) {
+      if (feedbackTimer) clearTimeout(feedbackTimer);
+      feedbackMessage = msg;
+      feedbackTimer = setTimeout(() => {
+        feedbackMessage = null;
+        feedbackTimer = null;
+      }, duration);
     },
 
     setMeasureTool(tool: MeasureToolId | null) {
@@ -52,6 +66,11 @@ export function getMeasureStore() {
             const dy = p2.worldPos[1] - p1.worldPos[1];
             const dz = p2.worldPos[2] - p1.worldPos[2];
             const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance < 0.001) {
+              this.showFeedback('Points too close together');
+              pendingPoints = [];
+              break;
+            }
             const m: Measurement = {
               type: 'distance',
               id: nanoid(10),
@@ -83,7 +102,12 @@ export function getMeasureStore() {
             const dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
             const mag1 = Math.sqrt(v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]);
             const mag2 = Math.sqrt(v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]);
-            const cosAngle = mag1 > 0 && mag2 > 0 ? dot / (mag1 * mag2) : 0;
+            if (mag1 < 0.001 || mag2 < 0.001) {
+              this.showFeedback('Points too close for angle');
+              pendingPoints = [];
+              break;
+            }
+            const cosAngle = dot / (mag1 * mag2);
             const angleDeg = Math.acos(Math.max(-1, Math.min(1, cosAngle))) * (180 / Math.PI);
             const m: Measurement = {
               type: 'angle',

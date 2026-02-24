@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep, projectInsertComponent, projectExport3mf, projectMeshCheck, projectOrientForPrint, projectSheetMetalUnfold } from '$lib/services/project-actions';
+  import { projectNew, projectOpen, projectSave, projectExportStl, projectExportStep, projectInsertComponent, projectExport3mf, projectMeshCheck, projectOrientForPrint, projectSheetMetalUnfold, projectImportStep } from '$lib/services/project-actions';
   import type { MeshCheckResult, OrientResult } from '$lib/services/tauri';
   import MeshCheckPanel from './MeshCheckPanel.svelte';
   import OrientationPanel from './OrientationPanel.svelte';
@@ -125,6 +125,20 @@
       if (result) showStatus(result);
     } catch (err) {
       showStatus(`Export failed: ${err}`);
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  async function handleImportStep() {
+    closeDropdowns();
+    try {
+      isBusy = true;
+      showStatus('Importing CAD file...');
+      const result = await projectImportStep();
+      if (result) showStatus(result);
+    } catch (err) {
+      showStatus(`Import failed: ${err}`);
     } finally {
       isBusy = false;
     }
@@ -642,6 +656,8 @@
     { id: 'sketch-rect', label: 'Rect', shortcut: 'R' },
     { id: 'sketch-circle', label: 'Circle', shortcut: 'C' },
     { id: 'sketch-arc', label: 'Arc', shortcut: 'A' },
+    { id: 'sketch-spline' as SketchToolId, label: 'Spline', shortcut: 'S' },
+    { id: 'sketch-bezier' as SketchToolId, label: 'Bezier', shortcut: '' },
   ];
 
   const constraintToolButtons: { id: SketchToolId; label: string; shortcut: string }[] = [
@@ -654,6 +670,11 @@
     { id: 'sketch-constraint-distance',      label: 'Distance',      shortcut: 'D' },
     { id: 'sketch-constraint-radius',        label: 'Radius',        shortcut: 'Q' },
     { id: 'sketch-constraint-angle',         label: 'Angle',         shortcut: 'N' },
+    { id: 'sketch-constraint-tangent',     label: 'Tangent',       shortcut: 'B' },
+    { id: 'sketch-constraint-fix',         label: 'Fix',           shortcut: 'K' },
+    { id: 'sketch-constraint-midpoint',    label: 'Midpoint',      shortcut: 'Z' },
+    { id: 'sketch-constraint-symmetric',   label: 'Symmetric',     shortcut: 'Y' },
+    { id: 'sketch-constraint-collinear',   label: 'Collinear',     shortcut: 'U' },
   ];
 
   const operationToolButtons: { id: SketchToolId; label: string; shortcut: string }[] = [
@@ -791,6 +812,10 @@
           </button>
           <button class="dropdown-item" onclick={handleSave} disabled={isBusy}>
             <span>Save</span><kbd>Ctrl+S</kbd>
+          </button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-item" onclick={handleImportStep} disabled={isBusy}>
+            <span>Import STEP/IGES</span>
           </button>
           <div class="dropdown-divider"></div>
           <button class="dropdown-item" onclick={handleExportStl} disabled={isBusy}>

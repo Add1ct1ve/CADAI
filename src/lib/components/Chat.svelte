@@ -32,6 +32,7 @@
 
   let inputText = $state('');
   let messagesContainer = $state<HTMLElement | null>(null);
+  let userHasScrolledUp = $state(false);
   let isRetrying = $state(false);
   let partProgress = $state<PartProgress[]>([]);
   let isMultiPart = $state(false);
@@ -1317,6 +1318,8 @@
     let text = inputText.trim();
     if (!text || chatStore.isStreaming) return;
 
+    userHasScrolledUp = false;
+
     // If we're awaiting clarification, combine original prompt with user's answers
     if (awaitingClarification && clarificationOriginalPrompt) {
       text = `${clarificationOriginalPrompt}\n\nUser clarifications:\n${text}`;
@@ -2000,16 +2003,22 @@
     }
   }
 
-  // Auto-scroll to bottom when messages change
+  function handleMessagesScroll() {
+    if (!messagesContainer) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+    userHasScrolledUp = scrollHeight - scrollTop - clientHeight > 80;
+  }
+
+  // Auto-scroll to bottom when messages change (unless user scrolled up)
   $effect(() => {
     const _ = chatStore.messages.length;
     // Also track last message content for streaming scroll
     const lastMsg = chatStore.messages[chatStore.messages.length - 1];
     const __ = lastMsg?.content;
-    if (messagesContainer) {
+    if (messagesContainer && !userHasScrolledUp) {
       // Use setTimeout to wait for DOM update
       setTimeout(() => {
-        if (messagesContainer) {
+        if (messagesContainer && !userHasScrolledUp) {
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
       }, 0);
@@ -2067,7 +2076,7 @@
     </button>
   </div>
 
-  <div class="messages-list" bind:this={messagesContainer}>
+  <div class="messages-list" bind:this={messagesContainer} onscroll={handleMessagesScroll}>
     {#each chatStore.messages as message (message.id)}
       <ChatMessageComponent
         {message}

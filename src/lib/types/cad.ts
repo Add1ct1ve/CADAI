@@ -46,7 +46,19 @@ export interface SketchArc {
   end: Point2D;
 }
 
-export type SketchEntity = SketchLine | SketchRectangle | SketchCircle | SketchArc;
+export interface SketchSpline {
+  type: 'spline';
+  id: SketchEntityId;
+  points: Point2D[];
+}
+
+export interface SketchBezier {
+  type: 'bezier';
+  id: SketchEntityId;
+  points: Point2D[];
+}
+
+export type SketchEntity = SketchLine | SketchRectangle | SketchCircle | SketchArc | SketchSpline | SketchBezier;
 
 // ─── Sketch constraint types ─────────────────────
 export type SketchConstraintId = string;
@@ -69,12 +81,17 @@ export type SketchConstraint =
   | { type: 'equal';          id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId }
   | { type: 'distance';       id: SketchConstraintId; point1: PointRef; point2: PointRef; value: number }
   | { type: 'radius';         id: SketchConstraintId; entityId: SketchEntityId; value: number }
-  | { type: 'angle';          id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId; value: number };
+  | { type: 'angle';          id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId; value: number }
+  | { type: 'tangent';    id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId }
+  | { type: 'fix';        id: SketchConstraintId; entityId: SketchEntityId; pointIndex: number }
+  | { type: 'midpoint';   id: SketchConstraintId; pointEntityId: SketchEntityId; lineEntityId: SketchEntityId }
+  | { type: 'symmetric';  id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId; axisEntityId: SketchEntityId }
+  | { type: 'collinear';  id: SketchConstraintId; entityId1: SketchEntityId; entityId2: SketchEntityId };
 
 export type ConstraintState = 'under-constrained' | 'well-constrained' | 'over-constrained';
 
-export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical';
-export type FaceSelector = '>Z' | '<Z' | '>X' | '<X' | '>Y' | '<Y' | '%Cylinder';
+export type EdgeSelector = 'all' | 'top' | 'bottom' | 'vertical' | `edge:${number}`;
+export type FaceSelector = '>Z' | '<Z' | '>X' | '<X' | '>Y' | '<Y' | '%Cylinder' | `face:${number}`;
 
 export interface ExtrudeParams {
   type: 'extrude';
@@ -100,7 +117,15 @@ export interface SweepParams {
   pathSketchId: string;       // reference to path sketch
 }
 
-export type SketchOperation = ExtrudeParams | RevolveParams | SweepParams;
+export interface LoftParams {
+  type: 'loft';
+  mode: 'add' | 'cut';
+  cutTargetId?: string;
+  profileSketchIds: string[];
+  ruled?: boolean;
+}
+
+export type SketchOperation = ExtrudeParams | RevolveParams | SweepParams | LoftParams;
 
 export interface FilletParams {
   radius: number;
@@ -225,8 +250,11 @@ export type SketchToolId =
   | 'sketch-constraint-coincident' | 'sketch-constraint-horizontal' | 'sketch-constraint-vertical'
   | 'sketch-constraint-parallel'   | 'sketch-constraint-perpendicular' | 'sketch-constraint-equal'
   | 'sketch-constraint-distance'   | 'sketch-constraint-radius'    | 'sketch-constraint-angle'
+  | 'sketch-constraint-tangent' | 'sketch-constraint-fix' | 'sketch-constraint-midpoint'
+  | 'sketch-constraint-symmetric' | 'sketch-constraint-collinear'
   | 'sketch-op-trim' | 'sketch-op-extend' | 'sketch-op-offset'
-  | 'sketch-op-mirror' | 'sketch-op-fillet' | 'sketch-op-chamfer';
+  | 'sketch-op-mirror' | 'sketch-op-fillet' | 'sketch-op-chamfer'
+  | 'sketch-spline' | 'sketch-bezier';
 
 export interface BoxParams {
   type: 'box';
@@ -441,6 +469,24 @@ export interface MassProperties {
   centerOfMass: [number, number, number]; // CAD Z-up
   density?: number;    // g/cm³
   mass?: number;       // density × volume
+}
+
+// ─── Topology types (for edge/face selection) ──
+export interface TopologyFace {
+  id: number;
+  triangleIndices: number[];
+  normal: [number, number, number];
+  area: number;
+}
+
+export interface TopologyEdge {
+  id: number;
+  vertexPairs: [number, number][];
+}
+
+export interface TopologyData {
+  faces: TopologyFace[];
+  edges: TopologyEdge[];
 }
 
 export function getDefaultParams(type: PrimitiveType): PrimitiveParams {

@@ -168,6 +168,16 @@
     contextMenu.show(e.clientX, e.clientY, menuItems);
   }
 
+  function handleToggleObjectVisibility(e: MouseEvent, item: FeatureItem) {
+    e.stopPropagation();
+    pushUndo();
+    const obj = scene.getObjectById(item.id);
+    if (obj) {
+      scene.updateObject(item.id, { visible: !obj.visible });
+      triggerPipeline(100);
+    }
+  }
+
   function handleToggleVisibility(e: MouseEvent, item: FeatureItem) {
     e.stopPropagation();
     if (item.kind === 'component') {
@@ -372,6 +382,16 @@
                   onclick={(e) => handleToggleGrounded(e, item)}
                 >
                   {componentStore.getComponentById(item.id)?.grounded ? '\u{1F4CC}' : '\u{1F4CC}'}
+                </button>
+              {/if}
+              {#if item.kind === 'primitive'}
+                <button
+                  class="action-btn visibility-btn"
+                  class:hidden-eye={!scene.getObjectById(item.id)?.visible}
+                  title={scene.getObjectById(item.id)?.visible ? 'Hide' : 'Show'}
+                  onclick={(e) => handleToggleObjectVisibility(e, item)}
+                >
+                  {scene.getObjectById(item.id)?.visible !== false ? '\u{1F441}' : '\u{1F441}\u{FE0E}'}
                 </button>
               {/if}
               {#if item.kind !== 'component'}
