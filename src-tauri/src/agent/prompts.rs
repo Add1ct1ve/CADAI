@@ -743,6 +743,69 @@ pub fn build_default_system_prompt() -> String {
     build_system_prompt_for_preset(None, None)
 }
 
+// ---------------------------------------------------------------------------
+// Fine-tuned provider helpers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when the provider hosts a fine-tuned model that was trained
+/// on plain user/assistant pairs and should NOT receive the full YAML-based
+/// system prompt or retrieval context.
+pub fn is_finetuned_provider(provider: &str) -> bool {
+    provider.eq_ignore_ascii_case("runpod")
+}
+
+/// Minimal system prompt for the fine-tuned RunPod model.
+///
+/// The model was trained on 347K build123d examples with no system message.
+/// We give it a short instruction plus a handful of few-shot examples that
+/// target the failure modes observed in production (boolean ops, hollowing,
+/// cutouts). Every assistant response uses markdown fences so `extract.rs`
+/// can find the code.
+pub fn build_finetuned_system_prompt() -> String {
+    let mut p = String::with_capacity(3000);
+
+    p.push_str("You are a Build123d code generator.\n");
+    p.push_str("Always `from build123d import *`.\n");
+    p.push_str("Assign the final solid to a variable named `result`.\n");
+    p.push_str("Wrap your code in a ```python code fence.\n\n");
+
+    // -- Example 1: hollow box (algebra mode) --------------------------------
+    p.push_str("### Example – Hollow box (algebra mode)\n");
+    p.push_str("User: Create a hollow box 60x40x30mm, 3mm walls, open top.\n");
+    p.push_str("Assistant:\n```python\n");
+    p.push_str("from build123d import *\n");
+    p.push_str("outer = Box(60, 40, 30)\n");
+    p.push_str("inner = Pos(0, 0, 3) * Box(54, 34, 30)\n");
+    p.push_str("result = outer - inner\n");
+    p.push_str("```\n\n");
+
+    // -- Example 2: plate with holes (builder mode) --------------------------
+    p.push_str("### Example – Plate with corner holes (builder mode)\n");
+    p.push_str("User: A plate 80x60x5mm with four 6mm holes near the corners.\n");
+    p.push_str("Assistant:\n```python\n");
+    p.push_str("from build123d import *\n");
+    p.push_str("with BuildPart() as p:\n");
+    p.push_str("    Box(80, 60, 5)\n");
+    p.push_str("    with Locations([(30, 20), (-30, 20), (30, -20), (-30, -20)]):\n");
+    p.push_str("        Hole(3, 5)\n");
+    p.push_str("result = p.part\n");
+    p.push_str("```\n\n");
+
+    // -- Example 3: enclosure with cutout (combined) -------------------------
+    p.push_str("### Example – Enclosure with rectangular cutout\n");
+    p.push_str("User: A box 50x40x30mm, 2mm walls, with a 20x10mm cutout on the front face.\n");
+    p.push_str("Assistant:\n```python\n");
+    p.push_str("from build123d import *\n");
+    p.push_str("outer = Box(50, 40, 30)\n");
+    p.push_str("inner = Pos(0, 0, 2) * Box(46, 36, 30)\n");
+    p.push_str("shell = outer - inner\n");
+    p.push_str("cutout = Pos(0, -20, 0) * Box(20, 2.1, 10)\n");
+    p.push_str("result = shell - cutout\n");
+    p.push_str("```\n\n");
+
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

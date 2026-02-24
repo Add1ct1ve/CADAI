@@ -974,6 +974,14 @@ async fn build_system_prompt_with_retrieval(
     on_event: &Channel<MultiPartEvent>,
     compact: bool,
 ) -> (String, retrieval::RetrievalResult) {
+    // Fine-tuned provider: skip retrieval entirely and use a minimal prompt.
+    if prompts::is_finetuned_provider(&config.ai_provider) {
+        return (
+            prompts::build_finetuned_system_prompt(),
+            retrieval::RetrievalResult::empty(),
+        );
+    }
+
     let base = if compact {
         prompts::build_compact_system_prompt_for_preset(
             config.agent_rules_preset.as_deref(),
@@ -2705,8 +2713,14 @@ pub async fn generate_parallel(
 
         let old_code = existing_code.as_deref().unwrap_or("");
 
-        // Build modification-specific system prompt and user message
-        let mod_system_prompt = format!("{}\n{}", system_prompt, modify::MODIFICATION_INSTRUCTIONS);
+        // Build modification-specific system prompt and user message.
+        // For fine-tuned providers the base prompt is already minimal — don't
+        // append the lengthy MODIFICATION_INSTRUCTIONS block.
+        let mod_system_prompt = if prompts::is_finetuned_provider(&config.ai_provider) {
+            system_prompt.clone()
+        } else {
+            format!("{}\n{}", system_prompt, modify::MODIFICATION_INSTRUCTIONS)
+        };
         let modification_message = modify::build_modification_message(old_code, &message);
 
         let provider = create_provider(&config)?;
@@ -3848,22 +3862,28 @@ pub async fn retry_skipped_steps(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.build123d_version.lock().unwrap().clone();
-    let mut system_prompt = crate::agent::prompts::build_system_prompt_for_preset(
-        config.agent_rules_preset.as_deref(),
-        cq_version.as_deref(),
-    );
-    let retrieval_query = format!("{}\n\n{}", user_request, design_plan_text);
-    let retrieval_result = retrieval::retrieve_context(
-        &retrieval_query,
-        &config,
-        config.agent_rules_preset.as_deref(),
-        cq_version.as_deref(),
-    )
-    .await;
-    if !retrieval_result.context_markdown.is_empty() {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&retrieval_result.context_markdown);
-    }
+
+    let system_prompt = if prompts::is_finetuned_provider(&config.ai_provider) {
+        prompts::build_finetuned_system_prompt()
+    } else {
+        let mut sp = crate::agent::prompts::build_system_prompt_for_preset(
+            config.agent_rules_preset.as_deref(),
+            cq_version.as_deref(),
+        );
+        let retrieval_query = format!("{}\n\n{}", user_request, design_plan_text);
+        let retrieval_result = retrieval::retrieve_context(
+            &retrieval_query,
+            &config,
+            config.agent_rules_preset.as_deref(),
+            cq_version.as_deref(),
+        )
+        .await;
+        if !retrieval_result.context_markdown.is_empty() {
+            sp.push_str("\n\n");
+            sp.push_str(&retrieval_result.context_markdown);
+        }
+        sp
+    };
 
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
@@ -4016,27 +4036,33 @@ pub async fn retry_part(
 ) -> Result<String, AppError> {
     let config = state.config.lock().unwrap().clone();
     let cq_version = state.build123d_version.lock().unwrap().clone();
-    // Use compact prompt for part retries (multi-part context)
-    let mut system_prompt = prompts::build_compact_system_prompt_for_preset(
-        config.agent_rules_preset.as_deref(),
-        cq_version.as_deref(),
-    );
+
+    let system_prompt = if prompts::is_finetuned_provider(&config.ai_provider) {
+        prompts::build_finetuned_system_prompt()
+    } else {
+        // Use compact prompt for part retries (multi-part context)
+        let mut sp = prompts::build_compact_system_prompt_for_preset(
+            config.agent_rules_preset.as_deref(),
+            cq_version.as_deref(),
+        );
+        let retrieval_query = format!("{}\n\n{}", design_plan_text, part_spec.description);
+        let retrieval_result = retrieval::retrieve_context(
+            &retrieval_query,
+            &config,
+            config.agent_rules_preset.as_deref(),
+            cq_version.as_deref(),
+        )
+        .await;
+        if !retrieval_result.context_markdown.is_empty() {
+            sp.push_str("\n\n");
+            sp.push_str(&retrieval_result.context_markdown);
+        }
+        sp
+    };
+
     let provider_id = config.ai_provider.clone();
     let model_id = config.model.clone();
     let mut total_usage = TokenUsage::default();
-
-    let retrieval_query = format!("{}\n\n{}", design_plan_text, part_spec.description);
-    let retrieval_result = retrieval::retrieve_context(
-        &retrieval_query,
-        &config,
-        config.agent_rules_preset.as_deref(),
-        cq_version.as_deref(),
-    )
-    .await;
-    if !retrieval_result.context_markdown.is_empty() {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&retrieval_result.context_markdown);
-    }
 
     // Build part prompt
     let part_prompt = build_part_prompt(&system_prompt, &part_spec, &design_plan_text, &config, "");
