@@ -22,6 +22,11 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Numpad 1', action: 'Front view', category: 'view' },
   { key: 'Numpad 3', action: 'Right view', category: 'view' },
   { key: 'Numpad 0', action: 'Isometric view', category: 'view' },
+  { key: 'Ctrl+Numpad 7', action: 'Bottom view', category: 'view' },
+  { key: 'Ctrl+Numpad 1', action: 'Back view', category: 'view' },
+  { key: 'Ctrl+Numpad 3', action: 'Left view', category: 'view' },
+  { key: 'F', action: 'Zoom to selection', category: 'view' },
+  { key: 'Numpad 5', action: 'Toggle perspective/orthographic', category: 'view' },
 
   // Tools (parametric mode)
   { key: 'V', action: 'Select tool', category: 'tools' },

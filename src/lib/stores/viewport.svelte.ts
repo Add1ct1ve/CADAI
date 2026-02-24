@@ -17,6 +17,7 @@ let gridSize = $state(100);
 let gridSpacing = $state(1);
 let explodeFactor = $state(0);
 let explodeEnabled = $state(false);
+let cursorWorldPos = $state<[number, number, number] | null>(null);
 
 export function getViewportStore() {
   return {
@@ -79,11 +80,26 @@ export function getViewportStore() {
       axesVisible = val;
       engineRef?.setAxesVisible(val);
     },
-    animateToView(view: 'top' | 'front' | 'right' | 'iso') {
+    animateToView(view: 'top' | 'bottom' | 'front' | 'back' | 'right' | 'left' | 'iso') {
       engineRef?.animateToView(view);
     },
     fitAll() {
       engineRef?.fitAll();
+    },
+    get cursorWorldPos() {
+      return cursorWorldPos;
+    },
+    setCursorWorldPos(pos: [number, number, number] | null) {
+      cursorWorldPos = pos;
+    },
+    fitSelection(ids: string[]) {
+      engineRef?.fitSelection(ids);
+    },
+    get isOrthographic() {
+      return engineRef?.isOrthographic ?? false;
+    },
+    toggleProjection() {
+      engineRef?.toggleProjection();
     },
     get displayMode() { return displayMode; },
     setDisplayMode(mode: DisplayMode) {

@@ -23,6 +23,8 @@ export type AddPlacement = { cadPosition: [number, number, number]; source: 'sur
 export class ViewportEngine {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
+  private orthoCamera: THREE.OrthographicCamera;
+  private _isOrthographic = false;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private container: HTMLElement;
@@ -30,6 +32,7 @@ export class ViewportEngine {
   private resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper;
   private axes: THREE.AxesHelper;
+  private originLines!: THREE.Group;
   private viewHelper: ConfigurableViewHelper;
   private viewHelperHealthy = true;
   private clock: THREE.Clock;
@@ -94,6 +97,19 @@ export class ViewportEngine {
     this.camera = new THREE.PerspectiveCamera(50, w / h || 1, 0.1, 50000);
     this.camera.position.set(8, 6, 8);
     this.camera.lookAt(0, 0, 0);
+
+
+    // Orthographic camera (starts inactive)
+    const aspect = w / h || 1;
+    const frustumSize = 20;
+    this.orthoCamera = new THREE.OrthographicCamera(
+      -frustumSize * aspect / 2, frustumSize * aspect / 2,
+      frustumSize / 2, -frustumSize / 2,
+      0.1, 50000,
+    );
+    this.orthoCamera.position.copy(this.camera.position);
+    this.orthoCamera.quaternion.copy(this.camera.quaternion);
+    this.orthoCamera.zoom = 1;
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({
@@ -177,6 +193,9 @@ export class ViewportEngine {
     }
     this.scene.add(this.axes);
 
+    // Permanent origin indicator lines
+    this.rebuildOriginLines();
+
     // ViewHelper (interactive axis gizmo in bottom-right corner)
     this.viewHelper = new ConfigurableViewHelper(this.camera, this.renderer.domElement, {
       dimension: 148,
@@ -232,7 +251,7 @@ export class ViewportEngine {
       this.updateAxesScale();
       this.recenterGridToTarget();
       this.sketchRenderer.updatePlaneVisuals(this.camera, this.controls.target);
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, this.getActiveCamera());
       this.renderer.autoClear = false;
 
       if (this.viewHelperHealthy) {
@@ -262,6 +281,47 @@ export class ViewportEngine {
 
   getCamera(): THREE.PerspectiveCamera {
     return this.camera;
+  }
+
+  getActiveCamera(): THREE.Camera {
+    return this._isOrthographic ? this.orthoCamera : this.camera;
+  }
+
+  get isOrthographic(): boolean {
+    return this._isOrthographic;
+  }
+
+  toggleProjection(): void {
+    if (this._isOrthographic) {
+      // Switch to perspective
+      this.camera.position.copy(this.orthoCamera.position);
+      this.camera.quaternion.copy(this.orthoCamera.quaternion);
+      this._isOrthographic = false;
+    } else {
+      // Switch to orthographic - compute frustum from perspective
+      const distance = this.camera.position.distanceTo(this.controls.target);
+      const halfHeight = distance * Math.tan((this.camera.fov * Math.PI / 180) / 2);
+      const halfWidth = halfHeight * this.camera.aspect;
+      this.orthoCamera.left = -halfWidth;
+      this.orthoCamera.right = halfWidth;
+      this.orthoCamera.top = halfHeight;
+      this.orthoCamera.bottom = -halfHeight;
+      this.orthoCamera.position.copy(this.camera.position);
+      this.orthoCamera.quaternion.copy(this.camera.quaternion);
+      this.orthoCamera.zoom = 1;
+      this.orthoCamera.updateProjectionMatrix();
+      this._isOrthographic = true;
+    }
+    // Rebind controls and transform controls to active camera
+    this.controls.object = this.getActiveCamera();
+    this.transformControls.camera = this.getActiveCamera() as THREE.PerspectiveCamera;
+    // Update ViewHelper camera reference
+    this.viewHelper = new ConfigurableViewHelper(this.getActiveCamera() as THREE.PerspectiveCamera, this.renderer.domElement, {
+      dimension: 148,
+      axisScale: 1.12,
+    });
+    this.viewHelper.center = this.controls.target;
+    this.controls.update();
   }
 
   getContainer(): HTMLElement {
@@ -665,7 +725,7 @@ export class ViewportEngine {
    */
   raycastObjects(event: PointerEvent): ObjectId | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     // Collect all meshes from object groups
     const meshes: THREE.Mesh[] = [];
@@ -692,7 +752,7 @@ export class ViewportEngine {
    */
   getGridIntersection(event: PointerEvent): [number, number, number] | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const intersection = new THREE.Vector3();
@@ -710,6 +770,24 @@ export class ViewportEngine {
 
     // Convert to CAD coords: Three.js (x, 0, z) -> CAD (x, -z, 0)
     return [snapped.x, -snapped.z, 0];
+  }
+
+  /**
+   * Raycast to Y=0 ground plane and return unsnapped CAD coordinates.
+   * Returns null when ray is parallel to ground plane.
+   */
+  getGroundPlanePosition(event: PointerEvent): [number, number, number] | null {
+    this.updateNdc(event);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
+
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const intersection = new THREE.Vector3();
+    const hit = this.raycaster.ray.intersectPlane(groundPlane, intersection);
+
+    if (!hit) return null;
+
+    // Convert to CAD coords: Three.js (x, 0, z) -> CAD (x, -z, 0)
+    return threeToCadPos(intersection);
   }
 
   /**
@@ -806,7 +884,7 @@ export class ViewportEngine {
   /**
    * Animate camera to a standard view preset.
    */
-  animateToView(view: 'top' | 'front' | 'right' | 'iso'): void {
+  animateToView(view: 'top' | 'bottom' | 'front' | 'back' | 'right' | 'left' | 'iso'): void {
     const target = this.controls.target.clone();
     const distance = this.camera.position.distanceTo(target);
 
@@ -821,9 +899,25 @@ export class ViewportEngine {
       case 'right':
         direction = new THREE.Vector3(1, 0, 0);
         break;
+      case 'bottom':
+        direction = new THREE.Vector3(0, -1, 0);
+        break;
+      case 'back':
+        direction = new THREE.Vector3(0, 0, -1);
+        break;
+      case 'left':
+        direction = new THREE.Vector3(-1, 0, 0);
+        break;
       case 'iso':
         direction = new THREE.Vector3(1, 0.75, 1).normalize();
         break;
+    }
+
+    // Auto-switch projection: ortho for standard views, persp for iso
+    if (view === 'iso') {
+      if (this._isOrthographic) this.toggleProjection();
+    } else {
+      if (!this._isOrthographic) this.toggleProjection();
     }
 
     const targetPos = target.clone().add(direction.multiplyScalar(distance));
@@ -903,6 +997,60 @@ export class ViewportEngine {
     const targetPos = center.clone().add(direction.multiplyScalar(cameraDistance));
 
     this.animateCameraTo(targetPos, center);
+    // Update ortho zoom if in ortho mode
+    if (this._isOrthographic) {
+      const aspect = this.container.clientWidth / this.container.clientHeight || 1;
+      this.orthoCamera.top = maxDim;
+      this.orthoCamera.bottom = -maxDim;
+      this.orthoCamera.left = -maxDim * aspect;
+      this.orthoCamera.right = maxDim * aspect;
+      this.orthoCamera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * Fit selected objects in view, preserving camera direction.
+   */
+  fitSelection(ids: ObjectId[]): void {
+    if (ids.length === 0) return;
+
+    const box = new THREE.Box3();
+    let hasContent = false;
+
+    for (const id of ids) {
+      const group = this.objectMeshes.get(id);
+      if (group) {
+        box.expandByObject(group);
+        hasContent = true;
+      }
+    }
+
+    if (!hasContent) return;
+
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = this.camera.fov * (Math.PI / 180);
+    let cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+    cameraDistance = Math.max(cameraDistance * 1.8, 1);
+
+    // Preserve current viewing direction
+    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    const targetPos = center.clone().add(direction.multiplyScalar(cameraDistance));
+
+    this.animateCameraTo(targetPos, center);
+    // Update ortho zoom if in ortho mode
+    if (this._isOrthographic) {
+      const aspect = this.container.clientWidth / this.container.clientHeight || 1;
+      this.orthoCamera.top = maxDim;
+      this.orthoCamera.bottom = -maxDim;
+      this.orthoCamera.left = -maxDim * aspect;
+      this.orthoCamera.right = maxDim * aspect;
+      this.orthoCamera.updateProjectionMatrix();
+    }
   }
 
   /**
@@ -917,6 +1065,9 @@ export class ViewportEngine {
    */
   setAxesVisible(visible: boolean): void {
     this.axes.visible = visible;
+    if (this.originLines) {
+      this.originLines.visible = visible;
+    }
   }
 
   /**
@@ -937,7 +1088,62 @@ export class ViewportEngine {
     this.gridCellSize = spacing;
     this.gridSize = size;
     this.recenterGridToTarget();
+    this.rebuildOriginLines();
     this.autoScaleViewport(size / 2);
+  }
+
+  /**
+   * Rebuild permanent origin indicator lines (red X, blue Z) spanning the grid.
+   */
+  private rebuildOriginLines(): void {
+    if (this.originLines) {
+      this.originLines.traverse((child) => {
+        if (child instanceof THREE.Line) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.scene.remove(this.originLines);
+    }
+
+    this.originLines = new THREE.Group();
+
+    const s = this.gridSize;
+
+    // Red line along X axis through origin
+    const xGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-s, 0, 0),
+      new THREE.Vector3(s, 0, 0),
+    ]);
+    const xMat = new THREE.LineBasicMaterial({
+      color: 0xff3333,
+      transparent: true,
+      opacity: 0.5,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const xLine = new THREE.Line(xGeo, xMat);
+    xLine.renderOrder = 1;
+    this.originLines.add(xLine);
+
+    // Blue line along Z axis through origin
+    const zGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, -s),
+      new THREE.Vector3(0, 0, s),
+    ]);
+    const zMat = new THREE.LineBasicMaterial({
+      color: 0x3333ff,
+      transparent: true,
+      opacity: 0.5,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const zLine = new THREE.Line(zGeo, zMat);
+    zLine.renderOrder = 1;
+    this.originLines.add(zLine);
+
+    this.originLines.visible = this.axes.visible;
+    this.scene.add(this.originLines);
   }
 
   /**
@@ -1116,7 +1322,7 @@ export class ViewportEngine {
    */
   getSketchPlaneIntersection(event: PointerEvent, sketch: Sketch): Point2D | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     const planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
     const intersection = new THREE.Vector3();
@@ -1132,7 +1338,7 @@ export class ViewportEngine {
    */
   raycastInactiveSketches(event: PointerEvent): SketchId | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     const inactiveMeshes = this.sketchRenderer.getInactiveMeshes();
     const allLines: THREE.Line[] = [];
@@ -1180,7 +1386,7 @@ export class ViewportEngine {
    */
   raycastSketchEntities(event: PointerEvent, sketch: Sketch, threshold = 0.5): SketchEntityId | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     const planeInfo = getSketchPlaneInfo(sketch.plane, sketch.origin);
     const intersection = new THREE.Vector3();
@@ -1330,7 +1536,7 @@ export class ViewportEngine {
    */
   raycastSurface(event: PointerEvent): { point: THREE.Vector3; objectId: ObjectId | null; normal: THREE.Vector3 | null } | null {
     this.updateNdc(event);
-    this.raycaster.setFromCamera(this.ndcMouse, this.camera);
+    this.raycaster.setFromCamera(this.ndcMouse, this.getActiveCamera());
 
     const meshes: THREE.Mesh[] = [];
     for (const [, group] of this.objectMeshes) {
@@ -1419,8 +1625,18 @@ export class ViewportEngine {
 
     // Short arm lines from vertex
     const armLen = 2.0;
-    const dir1 = new THREE.Vector3().subVectors(arm1Pos, vertex).normalize();
-    const dir2 = new THREE.Vector3().subVectors(arm2Pos, vertex).normalize();
+    const dir1 = new THREE.Vector3().subVectors(arm1Pos, vertex);
+    const dir2 = new THREE.Vector3().subVectors(arm2Pos, vertex);
+
+    // Guard against degenerate vectors
+    if (dir1.lengthSq() < 1e-10 || dir2.lengthSq() < 1e-10) {
+      this.measurementMeshes.set(id, group);
+      this.measurementGroup.add(group);
+      return;
+    }
+    dir1.normalize();
+    dir2.normalize();
+
     const end1 = vertex.clone().addScaledVector(dir1, armLen);
     const end2 = vertex.clone().addScaledVector(dir2, armLen);
 
@@ -1447,10 +1663,11 @@ export class ViewportEngine {
     const segments = 24;
 
     // Build rotation basis: from dir1 toward dir2
-    const normal = new THREE.Vector3().crossVectors(dir1, dir2).normalize();
-    if (normal.length() < 0.001) {
-      // Degenerate (parallel), skip arc
+    const crossVec = new THREE.Vector3().crossVectors(dir1, dir2);
+    if (crossVec.lengthSq() < 1e-10) {
+      // Degenerate (parallel arms), skip arc
     } else {
+      const normal = crossVec.normalize();
       for (let i = 0; i <= segments; i++) {
         const t = (i / segments) * angleRad;
         const p = dir1.clone().applyAxisAngle(normal, t).multiplyScalar(arcRadius).add(vertex);
@@ -1463,8 +1680,12 @@ export class ViewportEngine {
     }
 
     // Degree label
-    const labelDir = dir1.clone().add(dir2).normalize();
-    if (labelDir.length() < 0.001) labelDir.copy(dir1);
+    const labelDir = dir1.clone().add(dir2);
+    if (labelDir.lengthSq() < 1e-10) {
+      labelDir.copy(dir1);
+    } else {
+      labelDir.normalize();
+    }
     const labelPos = vertex.clone().addScaledVector(labelDir, arcRadius + 0.5);
     const label = this.makeTextSprite(`${angleDeg.toFixed(1)}\u00B0`, labelPos, '#94e2d5', 1.0);
     group.add(label);
@@ -2028,6 +2249,17 @@ export class ViewportEngine {
 
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Also resize ortho camera frustum
+    if (this._isOrthographic) {
+      const distance = this.orthoCamera.position.distanceTo(this.controls.target);
+      const halfHeight = distance * Math.tan((this.camera.fov * Math.PI / 180) / 2);
+      const halfWidth = halfHeight * (w / h);
+      this.orthoCamera.left = -halfWidth;
+      this.orthoCamera.right = halfWidth;
+      this.orthoCamera.top = halfHeight;
+      this.orthoCamera.bottom = -halfHeight;
+      this.orthoCamera.updateProjectionMatrix();
+    }
     this.renderer.setSize(w, h);
   }
 
@@ -2073,6 +2305,15 @@ export class ViewportEngine {
     this.viewHelper.dispose();
     this.controls.dispose();
     this.clearGhost();
+    if (this.originLines) {
+      this.originLines.traverse((child) => {
+        if (child instanceof THREE.Line) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.scene.remove(this.originLines);
+    }
     this.clearAllMeasurements();
     this.clearPendingMarker();
     this.sketchRenderer.dispose();

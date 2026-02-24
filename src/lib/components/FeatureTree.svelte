@@ -6,6 +6,7 @@
   import { getComponentStore } from '$lib/stores/component.svelte';
   import { getMateStore } from '$lib/stores/mate.svelte';
   import { getHistoryStore } from '$lib/stores/history.svelte';
+  import { getContextMenuStore } from '$lib/stores/context-menu.svelte';
   import { triggerPipeline, runPythonExecution } from '$lib/services/execution-pipeline';
   import type { FeatureItem, ComponentId } from '$lib/types/cad';
 
@@ -16,6 +17,7 @@
   const componentStore = getComponentStore();
   const mateStore = getMateStore();
   const history = getHistoryStore();
+  const contextMenu = getContextMenuStore();
 
   let dragIndex = $state<number | null>(null);
   let dropIndex = $state<number | null>(null);
@@ -135,6 +137,35 @@
     }
     triggerPipeline(100);
     runPythonExecution();
+  }
+
+  function handleContextMenu(e: MouseEvent, item: FeatureItem) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const menuItems = [];
+
+    if (item.kind !== 'component') {
+      menuItems.push({
+        label: 'Edit Properties',
+        action: () => { handleClick(item); window.dispatchEvent(new CustomEvent('feature-tree:edit')); },
+      });
+    }
+
+    if (item.kind !== 'component' && item.kind !== 'mate') {
+      menuItems.push({
+        label: item.suppressed ? 'Unsuppress' : 'Suppress',
+        action: () => { pushUndo(); featureTree.toggleSuppressed(item.id); triggerPipeline(100); runPythonExecution(); },
+      });
+    }
+
+    menuItems.push({ separator: true, label: '', action: () => {} });
+    menuItems.push({
+      label: item.kind === 'component' ? 'Dissolve Component' : 'Delete',
+      action: () => { handleDelete({ stopPropagation: () => {} } as MouseEvent, item); },
+    });
+
+    contextMenu.show(e.clientX, e.clientY, menuItems);
   }
 
   function handleToggleVisibility(e: MouseEvent, item: FeatureItem) {
@@ -303,6 +334,7 @@
             draggable={item.depth === 0 ? 'true' : 'false'}
             onclick={() => handleClick(item)}
             ondblclick={() => handleDoubleClick(item)}
+            oncontextmenu={(e) => handleContextMenu(e, item)}
             ondragstart={(e) => item.depth === 0 ? handleDragStart(e, index) : null}
             ondragover={(e) => item.depth === 0 ? handleDragOver(e, index) : null}
             ondragleave={item.depth === 0 ? handleDragLeave : undefined}

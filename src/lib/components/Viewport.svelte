@@ -22,6 +22,7 @@
   import DimensionInput from '$lib/components/DimensionInput.svelte';
   import MeasurePanel from '$lib/components/MeasurePanel.svelte';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
+  import { getContextMenuStore } from '$lib/stores/context-menu.svelte';
   import { getMeasureStore } from '$lib/stores/measure.svelte';
   import { computeMassProperties } from '$lib/services/mass-properties';
   import { nanoid } from 'nanoid';
@@ -43,6 +44,7 @@
   const settingsStore = getSettingsStore();
   const componentStore = getComponentStore();
   const mateStore = getMateStore();
+  const contextMenu = getContextMenuStore();
 
   // Tracking for diff-based preview mesh sync
   type ObjectFingerprint = {
@@ -76,6 +78,13 @@
   let pendingConstraint = $state<Partial<SketchConstraint> | null>(null);
   let pendingSketchOp = $state<PendingSketchOp | null>(null);
   let constraintStatusMessage = $state('');
+  let rightClickStart = $state<{ x: number; y: number } | null>(null);
+
+  // Box selection state
+  let boxSelectStart = $state<{ x: number; y: number } | null>(null);
+  let boxSelectCurrent = $state<{ x: number; y: number } | null>(null);
+  let isBoxSelecting = $state(false);
+  let leftClickStart = $state<{ x: number; y: number } | null>(null);
 
   // ── Full snapshot helpers (scene + sketch + datum + mate) ──
   function normalizePartKey(name: string): string {
@@ -766,6 +775,26 @@
   function handlePointerMove(e: PointerEvent) {
     if (!engine) return;
 
+    // Update cursor world position for status bar readout
+    const rawPos = engine.getGroundPlanePosition(e);
+    viewportStore.setCursorWorldPos(rawPos);
+
+    // Box selection tracking
+    if (leftClickStart && e.buttons === 1 && !isBoxSelecting) {
+      const dx = e.clientX - leftClickStart.x;
+      const dy = e.clientY - leftClickStart.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 5) {
+        // Only start box select if select tool active, not in sketch/measure/mate mode, no gizmo drag
+        if (tools.activeTool === 'select' && !sketchStore.isInSketchMode && !mateStore.mateCreationMode && !engine.isTransformDragging()) {
+          isBoxSelecting = true;
+          boxSelectStart = leftClickStart;
+        }
+      }
+    }
+    if (isBoxSelecting && e.buttons === 1) {
+      boxSelectCurrent = { x: e.clientX, y: e.clientY };
+    }
+
     // ── Sketch mode pointer move ──
     if (sketchStore.isInSketchMode) {
       const sketch = sketchStore.activeSketch;
@@ -865,6 +894,12 @@
 
     // Let the axis gizmo consume the click if it was hit
     if (engine.handleViewHelperClick(e)) return;
+
+    // Track right-click start for context menu
+    if (e.button === 2) {
+      rightClickStart = { x: e.clientX, y: e.clientY };
+      return;
+    }
 
     // Only handle left-click
     if (e.button !== 0) return;
@@ -1042,7 +1077,10 @@
         objectId = surfaceHit.objectId ?? undefined;
       } else {
         const gridPos = engine.getGridIntersection(e);
-        if (!gridPos) return;
+        if (!gridPos) {
+          measureStore.showFeedback('Click on an object or the grid');
+          return;
+        }
         // Grid returns CAD coords; convert to Three.js Y-up for worldPos
         worldPos = [gridPos[0], 0, -gridPos[1]];
       }
@@ -1057,7 +1095,10 @@
 
         case 'measure-radius': {
           // Single click on object: read radius from params
-          if (!objectId) return;
+          if (!objectId) {
+            measureStore.showFeedback('Click on a cylinder or sphere');
+            return;
+          }
           const obj = scene.getObjectById(objectId);
           if (!obj) return;
           if (obj.params.type === 'cylinder') {
@@ -1076,12 +1117,17 @@
               objectId,
               radius: obj.params.radius,
             });
+          } else {
+            measureStore.showFeedback('Object is not a cylinder or sphere');
           }
           break;
         }
 
         case 'measure-bbox': {
-          if (!objectId) return;
+          if (!objectId) {
+            measureStore.showFeedback('Click on an object to measure bounding box');
+            return;
+          }
           const bbox = engine.getObjectBBox(objectId);
           if (!bbox) return;
           const size = new THREE.Vector3();
@@ -1123,6 +1169,9 @@
       return;
     }
 
+    // Record start for potential box select
+    leftClickStart = { x: e.clientX, y: e.clientY };
+
     // Selection
     if (activeTool === 'select' || activeTool === 'translate' || activeTool === 'rotate' || activeTool === 'scale') {
       const hitId = engine.raycastObjects(e);
@@ -1139,6 +1188,143 @@
           scene.clearSelection();
           sketchStore.selectSketch(null);
         }
+      }
+    }
+  }
+
+  function handlePointerUp(e: PointerEvent) {
+    if (!engine) return;
+
+    // Box selection completion
+    if (e.button === 0) {
+      if (isBoxSelecting && boxSelectStart && boxSelectCurrent) {
+        performBoxSelect(e.shiftKey);
+      }
+      isBoxSelecting = false;
+      boxSelectStart = null;
+      boxSelectCurrent = null;
+      leftClickStart = null;
+    }
+
+    // Right-click context menu (only if mouse didn't move much - not a pan)
+    if (e.button === 2 && rightClickStart) {
+      const dx = e.clientX - rightClickStart.x;
+      const dy = e.clientY - rightClickStart.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      rightClickStart = null;
+
+      if (dist < 3) {
+        // Right-click without drag = context menu
+        if (sketchStore.isInSketchMode) return; // No context menu in sketch mode
+
+        const hitId = engine.raycastObjects(e);
+        if (hitId) {
+          // Context menu on object
+          const obj = scene.getObjectById(hitId);
+          const name = obj?.name ?? hitId;
+          contextMenu.show(e.clientX, e.clientY, [
+            { label: `Select "${name}"`, action: () => { scene.select(hitId); } },
+            { label: 'Edit Properties', action: () => { scene.select(hitId); window.dispatchEvent(new CustomEvent('feature-tree:edit')); } },
+            { separator: true, label: '', action: () => {} },
+            { label: 'Zoom to Selection', action: () => { scene.select(hitId); viewportStore.fitSelection([hitId]); } },
+            { label: 'Hide', action: () => { /* TODO: implement per-object visibility */ }, disabled: true },
+            { separator: true, label: '', action: () => {} },
+            { label: 'Delete', action: () => { scene.select(hitId); scene.deleteSelected(); } },
+          ]);
+        } else {
+          // Context menu on empty space
+          contextMenu.show(e.clientX, e.clientY, [
+            { label: 'Fit All', icon: '⤢', action: () => { viewportStore.fitAll(); } },
+            { separator: true, label: '', action: () => {} },
+            { label: 'Top View', action: () => { viewportStore.animateToView('top'); } },
+            { label: 'Front View', action: () => { viewportStore.animateToView('front'); } },
+            { label: 'Right View', action: () => { viewportStore.animateToView('right'); } },
+            { label: 'Isometric View', action: () => { viewportStore.animateToView('iso'); } },
+            { separator: true, label: '', action: () => {} },
+            { label: viewportStore.gridVisible ? 'Hide Grid' : 'Show Grid', action: () => { viewportStore.setGridVisible(!viewportStore.gridVisible); } },
+          ]);
+        }
+      }
+    }
+  }
+
+  function performBoxSelect(additive: boolean) {
+    if (!engine || !boxSelectStart || !boxSelectCurrent || !containerRef) return;
+
+    const camera = engine.getActiveCamera();
+    const rect = containerRef.getBoundingClientRect();
+
+    // Compute selection rectangle in screen space (relative to container)
+    const sx1 = boxSelectStart.x - rect.left;
+    const sy1 = boxSelectStart.y - rect.top;
+    const sx2 = boxSelectCurrent.x - rect.left;
+    const sy2 = boxSelectCurrent.y - rect.top;
+
+    const selLeft = Math.min(sx1, sx2);
+    const selRight = Math.max(sx1, sx2);
+    const selTop = Math.min(sy1, sy2);
+    const selBottom = Math.max(sy1, sy2);
+
+    // Left-to-right = window (fully enclosed), right-to-left = crossing (overlap)
+    const isWindowMode = sx2 > sx1;
+
+    const matchedIds: ObjectId[] = [];
+
+    for (const obj of scene.objects) {
+      const bbox = engine.getObjectBBox(obj.id);
+      if (!bbox) continue;
+
+      // Project 8 corners of bounding box to screen space
+      const corners = [
+        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.min.z),
+        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.min.z),
+        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.min.z),
+        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.min.z),
+        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.max.z),
+        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.max.z),
+        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.max.z),
+        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.max.z),
+      ];
+
+      // Compute screen-space AABB of the projected corners
+      let objLeft = Infinity, objRight = -Infinity;
+      let objTop = Infinity, objBottom = -Infinity;
+
+      for (const corner of corners) {
+        const projected = corner.clone().project(camera);
+        // Convert NDC (-1..1) to screen pixels
+        const screenX = (projected.x + 1) / 2 * rect.width;
+        const screenY = (-projected.y + 1) / 2 * rect.height;
+        objLeft = Math.min(objLeft, screenX);
+        objRight = Math.max(objRight, screenX);
+        objTop = Math.min(objTop, screenY);
+        objBottom = Math.max(objBottom, screenY);
+      }
+
+      let match = false;
+      if (isWindowMode) {
+        // Window: object must be fully inside selection rect
+        match = objLeft >= selLeft && objRight <= selRight && objTop >= selTop && objBottom <= selBottom;
+      } else {
+        // Crossing: any overlap
+        match = objRight >= selLeft && objLeft <= selRight && objBottom >= selTop && objTop <= selBottom;
+      }
+
+      if (match) {
+        matchedIds.push(obj.id);
+      }
+    }
+
+    if (additive) {
+      // Add to existing selection
+      for (const id of matchedIds) {
+        scene.select(id, true);
+      }
+    } else {
+      // Replace selection
+      scene.clearSelection();
+      for (const id of matchedIds) {
+        scene.select(id, true);
       }
     }
   }
@@ -1254,6 +1440,8 @@
   bind:this={containerRef}
   onpointermove={handlePointerMove}
   onpointerdown={handlePointerDown}
+  onpointerup={handlePointerUp}
+  oncontextmenu={(e) => e.preventDefault()}
 >
   {#if viewportStore.isLoading}
     <div class="viewport-overlay">
@@ -1342,6 +1530,25 @@
       onSubmit={handleMateDimSubmit}
       onCancel={handleMateDimCancel}
     />
+  {/if}
+
+  <!-- Box selection rubber band -->
+  {#if isBoxSelecting && boxSelectStart && boxSelectCurrent && containerRef}
+    {@const rect = containerRef.getBoundingClientRect()}
+    {@const sx1 = boxSelectStart.x - rect.left}
+    {@const sy1 = boxSelectStart.y - rect.top}
+    {@const sx2 = boxSelectCurrent.x - rect.left}
+    {@const sy2 = boxSelectCurrent.y - rect.top}
+    {@const isWindow = sx2 > sx1}
+    <div
+      class="box-select-overlay"
+      class:window-mode={isWindow}
+      class:crossing-mode={!isWindow}
+      style:left="{Math.min(sx1, sx2)}px"
+      style:top="{Math.min(sy1, sy2)}px"
+      style:width="{Math.abs(sx2 - sx1)}px"
+      style:height="{Math.abs(sy2 - sy1)}px"
+    ></div>
   {/if}
 </div>
 
@@ -1507,5 +1714,21 @@
 
   .cancel-mate-btn:hover {
     background: rgba(243, 139, 168, 0.25);
+  }
+
+  .box-select-overlay {
+    position: absolute;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  .box-select-overlay.window-mode {
+    border: 1.5px solid var(--accent, #89b4fa);
+    background: rgba(137, 180, 250, 0.08);
+  }
+
+  .box-select-overlay.crossing-mode {
+    border: 1.5px dashed var(--success, #a6e3a1);
+    background: rgba(166, 227, 161, 0.06);
   }
 </style>

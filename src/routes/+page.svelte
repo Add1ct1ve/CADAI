@@ -9,6 +9,8 @@
   import RightPanel from '$lib/components/RightPanel.svelte';
   import Settings from '$lib/components/Settings.svelte';
   import ShortcutsPanel from '$lib/components/ShortcutsPanel.svelte';
+  import Toast from '$lib/components/Toast.svelte';
+  import ContextMenu from '$lib/components/ContextMenu.svelte';
   import { getSettingsStore } from '$lib/stores/settings.svelte';
   import { applyTheme } from '$lib/services/theme';
   import { getProjectStore } from '$lib/stores/project.svelte';
@@ -316,6 +318,21 @@
       viewport.fitAll();
       return;
     }
+    if (ctrl && e.code === 'Numpad7') {
+      e.preventDefault();
+      viewport.animateToView('bottom');
+      return;
+    }
+    if (ctrl && e.code === 'Numpad1') {
+      e.preventDefault();
+      viewport.animateToView('back');
+      return;
+    }
+    if (ctrl && e.code === 'Numpad3') {
+      e.preventDefault();
+      viewport.animateToView('left');
+      return;
+    }
     if (e.code === 'Numpad7') {
       e.preventDefault();
       viewport.animateToView('top');
@@ -334,6 +351,17 @@
     if (e.code === 'Numpad0') {
       e.preventDefault();
       viewport.animateToView('iso');
+      return;
+    }
+    if (e.code === 'Numpad5') {
+      e.preventDefault();
+      viewport.toggleProjection();
+      return;
+    }
+
+    if (e.key.toLowerCase() === 'f' && !sketchStore.isInSketchMode && scene.selectedIds.length > 0) {
+      e.preventDefault();
+      viewport.fitSelection(scene.selectedIds);
       return;
     }
 
@@ -451,6 +479,8 @@
   <StatusBar />
   <Settings open={settingsOpen} onClose={() => { settingsOpen = false; }} />
   <ShortcutsPanel open={shortcutsOpen} onClose={() => { shortcutsOpen = false; }} />
+  <Toast />
+  <ContextMenu />
 </div>
 
 <style>

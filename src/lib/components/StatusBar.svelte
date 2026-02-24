@@ -47,6 +47,12 @@
     return `${sel.length} objects selected`;
   });
 
+  let coordText = $derived(() => {
+    const pos = viewport.cursorWorldPos;
+    if (!pos) return '';
+    return `X: ${pos[0].toFixed(2)}  Y: ${pos[1].toFixed(2)}  Z: ${pos[2].toFixed(2)}`;
+  });
+
   onMount(async () => {
     try {
       pythonInfo = await checkPython();
@@ -62,6 +68,10 @@
     {#if selectionText()}
       <span class="status-separator">|</span>
       <span class="status-item selection-text">{selectionText()}</span>
+    {/if}
+    {#if coordText()}
+      <span class="status-separator">|</span>
+      <span class="status-item coord-text">{coordText()}</span>
     {/if}
   </div>
   <div class="status-right">
@@ -108,5 +118,12 @@
 
   .selection-text {
     color: var(--accent);
+  }
+
+  .coord-text {
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: -0.3px;
   }
 </style>

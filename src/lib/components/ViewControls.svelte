@@ -50,6 +50,21 @@
   >R</button>
   <button
     class="view-btn"
+    title="Bottom View (Ctrl+Numpad 7)"
+    onclick={() => viewport.animateToView('bottom')}
+  >Bo</button>
+  <button
+    class="view-btn"
+    title="Back View (Ctrl+Numpad 1)"
+    onclick={() => viewport.animateToView('back')}
+  >Bk</button>
+  <button
+    class="view-btn"
+    title="Left View (Ctrl+Numpad 3)"
+    onclick={() => viewport.animateToView('left')}
+  >L</button>
+  <button
+    class="view-btn"
     title="Isometric View (Numpad 0)"
     onclick={() => viewport.animateToView('iso')}
   >3D</button>
@@ -67,6 +82,12 @@
     title="Toggle Grid"
     onclick={toggleGrid}
   >#</button>
+  <button
+    class="view-btn"
+    class:active={viewport.isOrthographic}
+    title="Toggle Perspective/Orthographic (Numpad 5)"
+    onclick={() => viewport.toggleProjection()}
+  >{viewport.isOrthographic ? 'O' : 'P'}</button>
 
   <div class="separator"></div>
 
