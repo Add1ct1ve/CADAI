@@ -9,6 +9,7 @@ const defaultConfig: AppConfig = {
   theme: 'dark',
   ollama_base_url: null,
   openai_base_url: null,
+  runpod_base_url: null,
   agent_rules_preset: null,
   enable_code_review: true,
   display_units: 'mm',

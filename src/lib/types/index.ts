@@ -20,6 +20,7 @@ export interface AppConfig {
   theme: string;
   ollama_base_url: string | null;
   openai_base_url: string | null;
+  runpod_base_url: string | null;
   agent_rules_preset: string | null;
   enable_code_review: boolean;
   display_units: 'mm' | 'inch';

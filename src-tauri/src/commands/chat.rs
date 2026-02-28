@@ -107,10 +107,13 @@ pub(crate) fn create_provider(config: &AppConfig) -> Result<Box<dyn AiProvider>,
                 .api_key
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("RunPod API key not set".into()))?;
+            let base_url = config.runpod_base_url.clone().ok_or_else(|| {
+                AppError::AiProviderError("RunPod base URL not set. Configure it in Settings.".into())
+            })?;
             Ok(Box::new(OpenAiProvider::new(
                 api_key,
                 config.model.clone(),
-                Some("https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1".to_string()),
+                Some(base_url),
             )))
         }
         "ollama" => Ok(Box::new(OllamaProvider::new(
@@ -205,11 +208,14 @@ pub(crate) fn create_provider_with_temp(
                 .api_key
                 .clone()
                 .ok_or_else(|| AppError::AiProviderError("RunPod API key not set".into()))?;
+            let base_url = config.runpod_base_url.clone().ok_or_else(|| {
+                AppError::AiProviderError("RunPod base URL not set. Configure it in Settings.".into())
+            })?;
             Ok(Box::new(
                 OpenAiProvider::new(
                     api_key,
                     config.model.clone(),
-                    Some("https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1".to_string()),
+                    Some(base_url),
                 )
                 .with_temperature(temperature),
             ))

@@ -11,3 +11,11 @@ vite.config.ts.timestamp-*
 .pnpm-store
 playwright-report
 test-results
+.playwright-mcp/
+
+# Test/debug artifacts
+*.png
+multipart_debug.log
+test_*.mjs
+test_*.py
+nul

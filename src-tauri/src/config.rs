@@ -54,6 +54,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub openai_base_url: Option<String>,
     #[serde(default)]
+    pub runpod_base_url: Option<String>,
+    #[serde(default)]
     pub agent_rules_preset: Option<String>,
     #[serde(default = "default_true")]
     pub enable_code_review: bool,
@@ -171,6 +173,7 @@ impl Default for AppConfig {
             theme: "dark".to_string(),
             ollama_base_url: None,
             openai_base_url: None,
+            runpod_base_url: None,
             agent_rules_preset: None,
             enable_code_review: true,
             display_units: "mm".to_string(),

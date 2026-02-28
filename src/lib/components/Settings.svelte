@@ -30,6 +30,7 @@
   let apiKey = $state('');
   let baseUrl = $state('');
   let ollamaUrl = $state('http://localhost:11434');
+  let runpodUrl = $state('');
   let agentPreset = $state('default');
   let enableCodeReview = $state(true);
   let enableConsensus = $state(false);
@@ -67,6 +68,7 @@
       apiKey = settings.config.api_key || '';
       baseUrl = settings.config.openai_base_url || '';
       ollamaUrl = settings.config.ollama_base_url || 'http://localhost:11434';
+      runpodUrl = settings.config.runpod_base_url || '';
       agentPreset = settings.config.agent_rules_preset || 'default';
       enableCodeReview = settings.config.enable_code_review ?? true;
       enableConsensus = settings.config.enable_consensus ?? false;
@@ -140,6 +142,7 @@
       api_key: apiKey || null,
       openai_base_url: baseUrl || null,
       ollama_base_url: ollamaUrl || null,
+      runpod_base_url: runpodUrl || null,
       agent_rules_preset: agentPreset === 'default' ? null : agentPreset,
       enable_code_review: enableCodeReview,
       enable_consensus: enableConsensus,
@@ -383,6 +386,20 @@
               bind:value={baseUrl}
               placeholder="https://api.openai.com/v1"
             />
+          </div>
+        {/if}
+
+        {#if provider === 'runpod'}
+          <div class="form-group">
+            <label class="form-label" for="runpod-url-input">RunPod Endpoint URL</label>
+            <input
+              id="runpod-url-input"
+              class="form-input"
+              type="text"
+              bind:value={runpodUrl}
+              placeholder="https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1"
+            />
+            <span class="form-hint">Your RunPod serverless endpoint URL (OpenAI-compatible).</span>
           </div>
         {/if}
 
